@@ -12,49 +12,61 @@
 
 ---
 
-## A. Project Overview
+## 1. Project Status & Working Features
 
-**ShiftBoard** is a specialized service-industry scheduling and dispatch platform designed to modernize how hospitality venues (cocktail lounges, banquet halls, restaurants, caterers) staff flexible shifts. Functioning as a high-velocity **community call board**, ShiftBoard enables venue operators to publish shifts with custom role requirements, while qualified workers (bartenders, servers, barbacks, AV techs) can discover, claim, and work shifts with transparent pay rates.
+### Operational Features
 
-### Core Value Proposition
-* **Instant Auto-Confirm Engine**: Workers with high ratings or active venue whitelist status can bypass manual review queues and get instantly booked for shifts.
-* **Geofenced Presence Verification**: Integrated GPS verification ensures shift check-ins and check-outs only occur within physical venue perimeters.
-* **Frictionless Onboarding**: Dual-authentication model supports fast email/password access and Google/Firebase OAuth.
+* **Authentication System**:
+  * Dual-mode authentication supporting local email/password login and configurable Firebase OAuth.
+  * Robust password security using `passlib[bcrypt]` salted hashes with defense-in-depth verification.
+  * Standard HS256 JWT tokens generated using `python-jose` encoding claims for subject UUID (`sub`), role (`role`), and venue assignments (`venue_id`).
+  * Global Axios HTTP interceptors that inject Bearer tokens, automatically handle 401 unauthorized errors, and normalize cross-origin proxy paths.
 
-### Mobile Evolution & Roadmap
-ShiftBoard is currently deployed as a responsive, mobile-first **Progressive Web App (PWA)** built with Vite and Nginx, featuring offline caching and homescreen installation. As the platform matures, ShiftBoard is architected to transition toward **native mobile applications** published to the Apple App Store and Google Play Store using React Native / Capacitor wrappers with native push notifications, biometrics, and background geolocation services.
+* **Database Integrity**:
+  * High-performance asynchronous PostgreSQL integration powered by SQLAlchemy 2.0 and `asyncpg`.
+  * URL-safe dynamic connection strings that properly parse special characters and prevent password authentication failures across containerized environments.
+  * Resilient schema design: uses standard `VARCHAR(50)` columns for role attributes to bypass restrictive async driver ENUM casting errors while enforcing strict application-level validation via Pydantic models.
+
+* **Role-Based Access Control (RBAC)**:
+  * Client-side session parsing with `jwt-decode` extracts user claims directly on token acquisition.
+  * Declarative `<ProtectedRoute allowedRoles={[...]}>` route wrappers prevent unauthorized access across application areas.
+  * Isolated, dedicated user dashboards for **Platform Admin** (`/admin`), **Venue Manager** (`/venue`), and **Worker** (`/worker`).
+
+* **Automated Seeding**:
+  * Lifecycle startup hook (`seed_initial_data`) verifies and provisions the database on initial launch.
+  * Injects pre-configured, bcrypt-hashed demo accounts (Admin, Venue Manager, Worker), realistic venue locations with geofence radii, active shifts, and whitelist records for instant end-to-end testing.
 
 ---
 
-## B. Tech Stack & Architecture
+## 2. Technical Stack & Architecture
 
-ShiftBoard utilizes a decoupled, containerized client-server architecture built for low latency, high throughput, and simple on-premise or cloud deployment.
+ShiftBoard utilizes a decoupled, containerized client-server architecture built for low latency, high throughput, and developer ergonomics.
 
 ```mermaid
 flowchart TD
-    subgraph Ingress ["Public Ingress & Security"]
+    subgraph Ingress ["Public Ingress & Reverse Proxy"]
         CF["Cloudflare Tunnel (Zero-Trust)"]
-        R2["Cloudflare R2 (Assets & CDN)"]
+        NGINX["Nginx (Reverse Proxy & Static Server)"]
     end
 
     subgraph Client ["Client Layer"]
-        PWA["React PWA (Vite + Tailwind CSS)"]
+        PWA["React 18 + Vite (Tailwind CSS, Axios, React Router)"]
     end
 
     subgraph API ["Application Layer"]
         FastAPI["FastAPI Backend (Python 3.11)"]
-        Auth["Auth Engine (Bcrypt + Jose JWT + Firebase)"]
+        Auth["Auth Engine (Bcrypt + Jose JWT)"]
         AutoEngine["Auto-Confirm Engine"]
     end
 
     subgraph Persistence ["Persistence Layer"]
-        PG[("PostgreSQL 16 (Relational DB)")]
+        PG[("PostgreSQL 16 (asyncpg + SQLAlchemy)")]
         Redis[("Redis 7 (Cache & Queues)")]
     end
 
-    CF --> PWA
+    CF --> NGINX
+    NGINX --> PWA
     PWA -->|REST API / JWT| FastAPI
-    PWA -.->|Static Media| R2
     FastAPI --> Auth
     FastAPI --> AutoEngine
     FastAPI --> PG
@@ -64,36 +76,33 @@ flowchart TD
 ### Component Details
 
 * **Frontend**:
-  * **React 18 & Vite**: Fast single-page application with modular role-based views.
-  * **Tailwind CSS**: Dark-themed, mobile-first hospitality UI with responsive navigation.
-  * **PWA & Service Worker**: Nginx-served progressive web application with client-side caching.
-  * **Client Security**: Axios interceptor attaching JWT bearer tokens, `jwt-decode` session parser, and role-guarded route barriers.
+  * **React 18 (Vite)**: High-speed single-page application with hot module replacement (HMR).
+  * **Tailwind CSS**: Modern dark-themed, mobile-first hospitality interface with responsive typography.
+  * **React Router DOM**: Client-side declarative routing and protected route boundaries.
+  * **Axios & jwt-decode**: Authenticated HTTP client with token injection and dynamic payload decoding.
+
 * **Backend**:
-  * **Python 3.11 & FastAPI**: Asynchronous REST API utilizing native async/await for all routes.
-  * **SQLAlchemy 2.0 & asyncpg**: Fully asynchronous ORM database layer connected to PostgreSQL.
-  * **Pydantic v2**: Strict request/response validation, data serialization, and credential filtering.
-* **Authentication**:
-  * **Dual Authentication System**:
-    1. **Local Email / Password**: Passwords hashed securely using `passlib[bcrypt]`, verified on login, and signed into standard HS256 JWTs using `python-jose[cryptography]`.
-    2. **Mock / Real Firebase OAuth**: Configurable via `USE_MOCK_FIREBASE=true` for local zero-dependency development, or connected to live Google Identity Toolkit service credentials in production.
+  * **Python 3.11 & FastAPI**: Asynchronous REST framework utilizing native `async`/`await` endpoints.
+  * **SQLAlchemy 2.0**: Asynchronous ORM utilizing `asyncpg` connection pooling and declarative models.
+  * **passlib[bcrypt] & python-jose**: Industry-standard cryptographic hashing and JWT lifecycle management.
+  * **Pydantic v2**: Type enforcement, input sanitization, and output schema filtering (excluding sensitive credentials).
+
 * **Infrastructure**:
-  * **Docker Compose**: Orchestration for bare-metal hosts and cloud VMs running database, cache, backend, and frontend containers.
-  * **PostgreSQL 16**: ACID-compliant transactional persistence with UUID primary keys and geofencing coordinates.
-  * **Redis 7**: Caching layer and background queue coordinator with password protection.
-  * **Cloudflare Tunnels (`cloudflared`)**: Zero-trust inbound ingress routing external traffic to the stack without opening firewall ports.
-  * **Cloudflare R2**: S3-compatible cloud storage for avatars, venue logos, and event attachments.
+  * **Docker Compose (Bare-Metal Host Network)**: Synchronized container orchestration for development and production environments.
+  * **Nginx**: Production web server and API reverse proxy forwarding `/api/` endpoints to the backend.
+  * **PostgreSQL 16**: Relational database with UUID primary keys and transactional integrity.
+  * **Redis 7**: In-memory key-value cache and background task queue.
+  * **Cloudflare Tunnel (`cloudflared`)**: Zero-trust inbound ingress routing external traffic to the stack without opening inbound ports.
 
 ---
 
-## C. Role & Permission Matrix
+## 3. Role & Permission Matrix
 
-ShiftBoard implements strict Role-Based Access Control (RBAC). The platform defines three distinct user personas:
+ShiftBoard implements strict multi-tenant Role-Based Access Control (RBAC):
 
-1. **Platform Admin (`platform_admin`)**: System-wide administrative oversight, venue provisioning, tenant lifecycle management, and global platform metrics.
-2. **Venue Manager (`venue_manager`)**: Business operators managing one or more venues, publishing shifts with dynamic role breakdowns, reviewing applicant queues, approving/denying workers, and managing trusted worker whitelists.
-3. **Worker (`worker`)**: Service industry talent discovering open shifts, submitting shift claims, tracking scheduled shifts, conducting GPS-verified check-in/out, and initiating shift swaps.
-
-### Capabilities Matrix
+1. **Platform Admin (`platform_admin`)**: System-wide administrative oversight, venue creation, tenant management, and platform analytics.
+2. **Venue Manager (`venue_manager`)**: Operations lead managing venues, publishing shifts, reviewing applicant queues, approving/denying workers, and managing trusted whitelists.
+3. **Worker (`worker`)**: Hospitality talent discovering open shifts, submitting shift claims, tracking scheduled shifts, conducting GPS check-ins, and trading shifts.
 
 | Capability | Worker | Venue Manager | Platform Admin |
 | :--- | :---: | :---: | :---: |
@@ -105,7 +114,7 @@ ShiftBoard implements strict Role-Based Access Control (RBAC). The platform defi
 | **View Personal Work Schedule** | ✅ | ❌ | ❌ |
 | **Create & Publish Venue Shifts** | ❌ | ✅ | ✅ |
 | **Configure Dynamic Role Requirements** | ❌ | ✅ | ✅ |
-| **Manage Shift Approval Queue (Approve/Deny)**| ❌ | ✅ | ✅ |
+| **Manage Shift Approval Queue (Approve/Deny)** | ❌ | ✅ | ✅ |
 | **Add / Remove Workers from Venue Whitelist** | ❌ | ✅ | ✅ |
 | **Configure Venue Auto-Approve Thresholds** | ❌ | ✅ | ✅ |
 | **Create / Provision New Venues** | ❌ | ❌ | ✅ |
@@ -115,9 +124,9 @@ ShiftBoard implements strict Role-Based Access Control (RBAC). The platform defi
 
 ---
 
-## D. Local Development Setup
+## 4. Developer Setup & Quick-Start Guide
 
-Follow these step-by-step instructions to get the complete ShiftBoard stack running on your local machine.
+Follow this frictionless guide to launch the complete ShiftBoard stack locally.
 
 ### Prerequisites
 * [Docker Desktop](https://www.docker.com/products/docker-desktop/) (v24.0+) with Docker Compose v2.
@@ -129,108 +138,99 @@ git clone https://github.com/your-org/shift-scheduler.git
 cd shift-scheduler
 ```
 
-### Step 2: Environment & Secrets Configuration
-ShiftBoard uses environment files to configure database credentials, authentication keys, and service settings.
-
-1. **Root Application Configuration**:
-   ```bash
-   # Copy root environment template
-   cp .env.template .env
-   ```
-
-2. **Docker Secrets Configuration**:
-   ```bash
-   # Copy secrets template into .secrets directory
-   cp .secrets/.secrets.env.template .secrets/.secrets.env
-   ```
-
-3. **Backend & Frontend Environments (Optional Overrides)**:
-   ```bash
-   # Backend local env
-   cp backend/.env.template backend/.env
-
-   # Frontend local env
-   cp frontend/.env.template frontend/.env
-   ```
-
-> [!NOTE]
-> The default templates are pre-configured with safe local development values and `USE_MOCK_FIREBASE=true` enabled, allowing immediate startup without external cloud dependencies.
-
-### Step 3: Start the Stack with Docker Compose
-Run the following command in the repository root to build and launch all services:
+### Step 2: Configure Environment & Secrets
+ShiftBoard utilizes synchronized environment files across Docker services. Initialize your local configuration files:
 
 ```bash
-docker compose up --build
+# 1. Copy the root environment file
+cp .env.template .env
+
+# 2. Copy the secrets configuration into .secrets
+cp .secrets/.secrets.env.template .secrets/.secrets.env
+
+# 3. (Optional) Copy backend and frontend environment templates
+cp backend/.env.template backend/.env
+cp frontend/.env.template frontend/.env
 ```
 
-To run in detached background mode:
+> [!NOTE]
+> The default templates are pre-configured with safe local development values and `USE_MOCK_FIREBASE=true` enabled, allowing immediate zero-dependency startup.
+
+### Step 3: Clean Build & Launch Stack
+To guarantee a fresh database schema and execute initial data seeding cleanly, run the destructive rebuild commands:
+
 ```bash
+# Tear down existing containers and delete persistent volumes
+docker compose down -v
+
+# Rebuild images and start all services in detached background mode
 docker compose up -d --build
 ```
 
 ### Step 4: Verify Service Health
-Ensure all containers are healthy and running:
+Check the container status and health checks:
 ```bash
 docker compose ps
 ```
 
-| Service | Local URL | Description |
+| Service | Address | Description |
 | :--- | :--- | :--- |
-| **Frontend PWA** | `http://localhost:5173` | React application (with hot-reload) |
-| **Backend API** | `http://localhost:8000` | FastAPI application server |
-| **Interactive API Docs** | `http://localhost:8000/docs` | Swagger UI documentation |
-| **Alternative API Docs** | `http://localhost:8000/redoc` | ReDoc API specifications |
-| **PostgreSQL Database** | `localhost:5432` | Relational database instance |
-| **Redis Cache** | `localhost:6379` | Cache and message broker |
+| **Frontend Application** | [http://localhost:5173](http://localhost:5173) | Vite dev server / React SPA |
+| **Backend REST API** | [http://localhost:8000](http://localhost:8000) | FastAPI application server |
+| **Interactive API Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) | Swagger UI interactive documentation |
+| **Alternative API Docs** | [http://localhost:8000/redoc](http://localhost:8000/redoc) | ReDoc API specifications |
+| **PostgreSQL Database** | `localhost:5432` | Relational database (shiftboard) |
+| **Redis Cache** | `localhost:6379` | In-memory cache & background broker |
 
 ---
 
-## E. Pre-Seeded Default Accounts
+## 5. Demo Accounts
 
-The database seeds automatically on initial startup with realistic mock venues, shifts, and three role-specific demo user accounts:
+The backend automatically provisions the database on initial launch with pre-hashed accounts, realistic venues, and test shifts. Use these credentials to test the UI immediately:
 
-| Role | Email Address | Password | Default Dashboard |
-| :--- | :--- | :--- | :--- |
-| **Platform Admin** | `demo_admin@shiftboard.com` | `SuperSecretDemo123!` | `/admin` |
-| **Venue Manager** | `demo_manager@shiftboard.com` | `DemoManager123!` | `/venue` |
-| **Worker** | `demo_worker@shiftboard.com` | `DemoWorker123!` | `/worker` |
+| Persona | Email Address | Password | Role Key | Target Dashboard |
+| :--- | :--- | :--- | :--- | :--- |
+| **Super Admin** | `demo_admin@shiftboard.com` | `SuperSecretDemo123!` | `platform_admin` | `/admin` |
+| **Venue Manager** | `demo_manager@shiftboard.com` | `DemoManager123!` | `venue_manager` | `/venue` |
+| **Worker** | `demo_worker@shiftboard.com` | `DemoWorker123!` | `worker` | `/worker` |
 
 > [!TIP]
-> On the login screen (`/login`), click any of the **Quick Demo Credentials** buttons (Admin, Manager, Worker) to instantly pre-fill credentials and sign in.
+> On the login screen (`/login`), you can also click any of the **Quick Demo Credentials** buttons (Admin, Manager, Worker) to instantly populate the form fields.
 
 ---
 
-## F. Useful Commands
+## 6. Useful Commands & Workflows
 
-### Viewing Logs
+### Streaming Logs
 ```bash
-# Stream all logs
+# View all service logs
 docker compose logs -f
 
-# Stream backend API logs only
+# View backend logs only
 docker compose logs -f backend
 
-# Stream frontend build logs
+# View frontend logs only
 docker compose logs -f frontend
+
+# View database logs only
+docker compose logs -f database
 ```
 
-### Rebuilding after Dependency Changes
+### Rebuilding Containers
 ```bash
-# If adding backend or frontend packages
+# Rebuild without cache after changing package dependencies
 docker compose build --no-cache
 docker compose up -d
 ```
 
-### Resetting the Database
+### Resetting Database Schema & Re-Seeding
 ```bash
-# Teardown containers and wipe persistent volumes
+# Wipe database volume and re-run seed script
 docker compose down -v
-
-# Relaunch and trigger fresh seed data execution
-docker compose up --build
+docker compose up -d --build
 ```
 
 ---
 
 ## License
-Proprietary — Internal service-industry platform. All rights reserved.
+Proprietary — Internal service-industry call board platform. All rights reserved.
