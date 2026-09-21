@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
     # Super Admin Seeding
-    SUPER_ADMIN_USERNAME: str = os.getenv("SUPER_ADMIN_USERNAME", "demo_admin@shiftboard.local")
+    SUPER_ADMIN_USERNAME: str = os.getenv("SUPER_ADMIN_USERNAME", "demo_admin@shiftboard.com")
     SUPER_ADMIN_PASSWORD: str = os.getenv("SUPER_ADMIN_PASSWORD", "SuperSecretDemo123!")
 
     # Firebase Mocking

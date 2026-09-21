@@ -7,10 +7,10 @@ const api = axios.create({
   },
 });
 
-// Request Interceptor: attach JWT auth token
+// Request Interceptor: read token from localStorage and attach to Authorization header
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('shiftboard_token');
+    const token = localStorage.getItem('token') || localStorage.getItem('shiftboard_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -24,9 +24,10 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      // If unauthorized and not already on auth endpoints, clear token
       if (!error.config.url.includes('/auth/login') && !error.config.url.includes('/auth/register')) {
+        localStorage.removeItem('token');
         localStorage.removeItem('shiftboard_token');
+        localStorage.removeItem('user');
         localStorage.removeItem('shiftboard_user');
         window.dispatchEvent(new Event('shiftboard_auth_logout'));
       }

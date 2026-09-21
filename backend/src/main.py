@@ -8,7 +8,8 @@ from src.seed import seed_initial_data
 from src.routers.auth import router as auth_router
 from src.routers.users import router as users_router
 from src.routers.venues import router as venues_router
-from src.routers.shifts import router as shifts_router
+from src.routers.shifts import router as shifts_router, requests_router
+from src.routers.admin import router as admin_router
 
 # Configure logging
 logging.basicConfig(
@@ -62,6 +63,8 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(venues_router)
 app.include_router(shifts_router)
+app.include_router(requests_router)
+app.include_router(admin_router)
 
 @app.get("/healthz", tags=["System"])
 async def health_check():

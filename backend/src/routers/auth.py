@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from src.database import get_db
-from src.models import User, UserRole
-from src.schemas import LoginRequest, RegisterRequest, TokenResponse, FirebaseLoginRequest, UserResponse
+from src.models import User, UserRole, VenueManager
+from src.schemas import LoginRequest, RegisterRequest, UserCreate, TokenResponse, FirebaseLoginRequest, UserResponse
 from src.auth import (
     verify_password,
     get_password_hash,
@@ -17,10 +18,10 @@ from src.config import settings
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(request: UserCreate, db: AsyncSession = Depends(get_db)):
     """
-    Task 2: Register a new user account.
-    Supports creating both WORKER and VENUE_MANAGER accounts.
+    Register a new user account with hashed password.
+    Supports platform_admin, venue_manager, or worker roles.
     """
     result = await db.execute(select(User).where(User.email == request.email.lower()))
     existing_user = result.scalar_one_or_none()
@@ -30,13 +31,18 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
             detail="A user with this email already exists"
         )
 
-    # Determine role (WORKER or VENUE_MANAGER)
-    role_str = (request.role or "WORKER").upper()
-    assigned_role = UserRole.VENUE_MANAGER if "MANAGER" in role_str else UserRole.WORKER
+    # Determine assigned role
+    role_norm = normalize_role(request.role)
+    if role_norm == "platform_admin":
+        assigned_role = UserRole.PLATFORM_ADMIN
+    elif role_norm == "venue_manager":
+        assigned_role = UserRole.VENUE_MANAGER
+    else:
+        assigned_role = UserRole.WORKER
 
     user = User(
         email=request.email.lower(),
-        password_hash=get_password_hash(request.password),
+        hashed_password=get_password_hash(request.password),
         role=assigned_role,
         first_name=request.first_name or "",
         last_name=request.last_name or "",
@@ -51,8 +57,12 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(user)
 
-    # Return JWT containing User ID and Role
-    token = create_access_token(data={"sub": str(user.id), "role": str(user.role.value)})
+    # Return JWT containing sub (ID), role, and venue_id
+    token = create_access_token(data={
+        "sub": str(user.id),
+        "role": normalize_role(user.role),
+        "venue_id": None
+    })
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -62,12 +72,24 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     """
-    Task 2: Validate credentials and return a JWT containing user ID and Role.
+    Validate credentials with verify_password against hashed_password.
+    Returns JWT containing sub (ID), role (platform_admin, venue_manager, worker), and venue_id.
     """
-    result = await db.execute(select(User).where(User.email == request.email.lower()))
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.managed_venues))
+        .where(User.email == request.email.lower())
+    )
     user = result.scalar_one_or_none()
 
-    if not user or not user.password_hash or not verify_password(request.password, user.password_hash):
+    if not user or not user.hashed_password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    if not verify_password(request.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -77,27 +99,37 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
 
-    # JWT containing User ID and Role
-    user_role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
-    token = create_access_token(data={"sub": str(user.id), "role": user_role_str})
+    user_role_str = normalize_role(user.role)
+    venue_id_str = str(user.managed_venues[0].venue_id) if user.managed_venues and len(user.managed_venues) > 0 else None
+
+    token_payload = {
+        "sub": str(user.id),
+        "role": user_role_str,
+        "venue_id": venue_id_str
+    }
+    token = create_access_token(data=token_payload)
+
+    user_resp = UserResponse.model_validate(user)
+    user_resp.venue_id = venue_id_str
+
     return TokenResponse(
         access_token=token,
         token_type="bearer",
-        user=UserResponse.model_validate(user)
+        user=user_resp
     )
 
 @router.post("/firebase-login", response_model=TokenResponse)
 async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depends(get_db)):
     """
     Firebase login / Mock OAuth endpoint.
-    Returns JWT containing User ID and Role.
+    Returns JWT containing sub (ID), role, and venue_id.
     """
     token = request.firebase_token.strip()
 
     if settings.USE_MOCK_FIREBASE:
         user = await get_or_create_mock_firebase_user(
             db,
-            email=request.email or "demo_google_worker@shiftboard.local",
+            email=request.email or "demo_google_worker@shiftboard.com",
             first_name=request.first_name or "Alex",
             last_name=request.last_name or "Rivera"
         )
@@ -136,8 +168,12 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
                 detail=f"Firebase token verification failed: {str(e)}"
             )
 
-    user_role_str = user.role.value if hasattr(user.role, "value") else str(user.role)
-    jwt_token = create_access_token(data={"sub": str(user.id), "role": user_role_str})
+    user_role_str = normalize_role(user.role)
+    jwt_token = create_access_token(data={
+        "sub": str(user.id),
+        "role": user_role_str,
+        "venue_id": getattr(user, "venue_id", None)
+    })
     return TokenResponse(
         access_token=jwt_token,
         token_type="bearer",

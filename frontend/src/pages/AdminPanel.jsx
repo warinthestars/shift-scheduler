@@ -1,132 +1,100 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/client';
 import {
-  Shield, Building2, Plus, UserPlus, MapPin, Check,
-  AlertCircle, Trash2, Calendar, Clock, DollarSign
+  Shield, Building2, Plus, Users, Calendar, AlertCircle,
+  Check, X, MapPin, Trash2, BarChart3, Briefcase
 } from 'lucide-react';
 
 export default function AdminPanel() {
   const [venues, setVenues] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [systemStats, setSystemStats] = useState({
+    total_venues: 0,
+    total_shifts: 0,
+    open_shifts: 0,
+    total_workers: 0,
+    total_managers: 0,
+    total_requests: 0,
+    pending_requests: 0,
+  });
   const [loading, setLoading] = useState(true);
-  const [statusMsg, setStatusMsg] = useState(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [notification, setNotification] = useState(null);
 
-  // New Venue State
-  const [venueName, setVenueName] = useState('');
-  const [venueAddress, setVenueAddress] = useState('');
-  const [venueLat, setVenueLat] = useState('40.7128');
-  const [venueLng, setVenueLng] = useState('-74.0060');
-  const [geofenceRadius, setGeofenceRadius] = useState('100');
+  // Form state for Create New Venue Modal
+  const [name, setName] = useState('');
+  const [address, setAddress] = useState('');
+  const [managerEmail, setManagerEmail] = useState('');
+  const [geofenceRadius, setGeofenceRadius] = useState('150');
   const [autoApproveRating, setAutoApproveRating] = useState('4.5');
 
-  // Assign Manager State
-  const [selectedVenueId, setSelectedVenueId] = useState('');
-  const [selectedUserId, setSelectedUserId] = useState('');
-
-  // New Shift State
-  const [shiftVenueId, setShiftVenueId] = useState('');
-  const [shiftTitle, setShiftTitle] = useState('');
-  const [shiftRole, setShiftRole] = useState('Bartender');
-  const [shiftRate, setShiftRate] = useState('35.00');
-  const [shiftSpots, setShiftSpots] = useState('2');
-  const [shiftAutoConfirm, setShiftAutoConfirm] = useState(false);
-  const [shiftStart, setShiftStart] = useState('');
-  const [shiftEnd, setShiftEnd] = useState('');
-
-  const loadAdminData = async () => {
+  const fetchAdminData = async () => {
     try {
       setLoading(true);
-      const [venuesRes, usersRes] = await Promise.all([
-        api.get('/venues'),
-        api.get('/users'),
+      const [venuesRes, statsRes] = await Promise.all([
+        api.get('/admin/venues'),
+        api.get('/admin/stats'),
       ]);
-      setVenues(venuesRes.data);
-      setUsers(usersRes.data);
-      if (venuesRes.data.length > 0) {
-        setSelectedVenueId(venuesRes.data[0].id);
-        setShiftVenueId(venuesRes.data[0].id);
-      }
-      if (usersRes.data.length > 0) {
-        setSelectedUserId(usersRes.data[0].id);
-      }
+      setVenues(venuesRes.data || []);
+      setSystemStats(statsRes.data || {});
     } catch (err) {
       console.error('Failed to load admin data:', err);
+      setNotification({
+        type: 'error',
+        message: 'Failed to load platform data from admin endpoints.',
+      });
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadAdminData();
+    fetchAdminData();
   }, []);
 
   const handleCreateVenue = async (e) => {
     e.preventDefault();
     try {
       const res = await api.post('/venues', {
-        name: venueName,
-        address: venueAddress,
-        latitude: parseFloat(venueLat),
-        longitude: parseFloat(venueLng),
-        geofence_radius_meters: parseInt(geofenceRadius, 10),
-        global_auto_approve_min_rating: autoApproveRating ? parseFloat(autoApproveRating) : null,
-      });
-      setStatusMsg({ type: 'success', text: `Venue "${res.data.name}" created successfully!` });
-      setVenueName('');
-      setVenueAddress('');
-      loadAdminData();
-    } catch (err) {
-      setStatusMsg({ type: 'error', text: err.response?.data?.detail || 'Failed to create venue.' });
-    }
-  };
-
-  const handleAssignManager = async (e) => {
-    e.preventDefault();
-    try {
-      await api.post(`/venues/${selectedVenueId}/managers`, {
-        user_id: selectedUserId,
-        is_primary: false,
-      });
-      setStatusMsg({ type: 'success', text: 'Venue manager assigned successfully!' });
-      loadAdminData();
-    } catch (err) {
-      setStatusMsg({ type: 'error', text: err.response?.data?.detail || 'Failed to assign manager.' });
-    }
-  };
-
-  const handleCreateShift = async (e) => {
-    e.preventDefault();
-    try {
-      const now = new Date();
-      const start = shiftStart ? new Date(shiftStart).toISOString() : new Date(now.getTime() + 86400000).toISOString();
-      const end = shiftEnd ? new Date(shiftEnd).toISOString() : new Date(now.getTime() + 86400000 + 21600000).toISOString();
-
-      await api.post('/shifts', {
-        venue_id: shiftVenueId,
-        title: shiftTitle,
-        role_type: shiftRole,
-        start_time: start,
-        end_time: end,
-        hourly_rate: parseFloat(shiftRate),
-        capacity: parseInt(shiftSpots, 10),
-        is_shift_auto_confirm: shiftAutoConfirm,
+        name,
+        address,
+        initial_manager_email: managerEmail || undefined,
+        manager_email: managerEmail || undefined,
+        geofence_radius_meters: parseInt(geofenceRadius, 10) || 100,
+        auto_approve_rating_threshold: autoApproveRating ? parseFloat(autoApproveRating) : null,
       });
 
-      setStatusMsg({ type: 'success', text: `Shift "${shiftTitle}" posted to the call-board!` });
-      setShiftTitle('');
+      setNotification({
+        type: 'success',
+        message: `Venue "${res.data.name}" created successfully${managerEmail ? ` and assigned to ${managerEmail}` : ''}!`,
+      });
+
+      setShowCreateModal(false);
+      setName('');
+      setAddress('');
+      setManagerEmail('');
+      fetchAdminData();
     } catch (err) {
-      setStatusMsg({ type: 'error', text: err.response?.data?.detail || 'Failed to post shift.' });
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to create venue.',
+      });
     }
   };
 
   const handleDeleteVenue = async (venueId) => {
-    if (!confirm('Are you sure you want to delete this venue?')) return;
+    if (!confirm('Are you sure you want to remove this venue from ShiftBoard?')) return;
     try {
       await api.delete(`/venues/${venueId}`);
-      setStatusMsg({ type: 'success', text: 'Venue deleted.' });
-      loadAdminData();
+      setNotification({
+        type: 'info',
+        message: 'Venue deleted.',
+      });
+      fetchAdminData();
     } catch (err) {
-      setStatusMsg({ type: 'error', text: err.response?.data?.detail || 'Failed to delete venue.' });
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to delete venue.',
+      });
     }
   };
 
@@ -134,313 +102,248 @@ export default function AdminPanel() {
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-16">
       {/* Header */}
       <section className="bg-slate-900 border-b border-slate-800 py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto flex items-center space-x-3">
-          <div className="p-3 bg-indigo-500/10 text-indigo-400 rounded-2xl border border-indigo-500/20">
-            <Shield className="w-8 h-8" />
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center space-x-4">
+            <div className="p-3 bg-indigo-500/10 text-indigo-400 rounded-2xl border border-indigo-500/20">
+              <Shield className="w-8 h-8" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-black text-white">Platform Administration</h1>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Super Admin control panel for venue oversight, system analytics, and management.
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-black text-white">Super Admin Control Panel</h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Manage platform venues, assign venue managers, and post system-wide shifts.
-            </p>
-          </div>
+
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs shadow-md shadow-emerald-500/20 transition flex items-center space-x-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Create New Venue</span>
+          </button>
         </div>
       </section>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
-        {/* Status Alerts */}
-        {statusMsg && (
+        {notification && (
           <div
             className={`p-4 rounded-xl border flex items-center justify-between ${
-              statusMsg.type === 'success'
+              notification.type === 'success'
                 ? 'bg-emerald-950/80 border-emerald-700 text-emerald-200'
-                : 'bg-rose-950/80 border-rose-700 text-rose-200'
+                : notification.type === 'error'
+                ? 'bg-rose-950/80 border-rose-700 text-rose-200'
+                : 'bg-indigo-950/80 border-indigo-700 text-indigo-200'
             }`}
           >
             <div className="flex items-center space-x-2">
-              {statusMsg.type === 'success' ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
-              <span className="text-sm font-medium">{statusMsg.text}</span>
+              {notification.type === 'success' ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+              <span className="text-sm font-medium">{notification.message}</span>
             </div>
-            <button onClick={() => setStatusMsg(null)} className="text-xs underline">Dismiss</button>
+            <button onClick={() => setNotification(null)} className="text-xs underline">Dismiss</button>
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column: Create Venue & Assign Manager */}
-          <div className="space-y-8">
-            {/* Create Venue Form */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-base font-bold text-white mb-4 flex items-center space-x-2">
-                <Building2 className="w-5 h-5 text-emerald-400" />
-                <span>Register New Venue</span>
-              </h3>
-              <form onSubmit={handleCreateVenue} className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Venue Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={venueName}
-                    onChange={(e) => setVenueName(e.target.value)}
-                    placeholder="The Rooftop Bar & Grill"
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Physical Address</label>
-                  <input
-                    type="text"
-                    required
-                    value={venueAddress}
-                    onChange={(e) => setVenueAddress(e.target.value)}
-                    placeholder="123 Main St, New York, NY"
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Latitude</label>
-                    <input
-                      type="number"
-                      step="any"
-                      required
-                      value={venueLat}
-                      onChange={(e) => setVenueLat(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Longitude</label>
-                    <input
-                      type="number"
-                      step="any"
-                      required
-                      value={venueLng}
-                      onChange={(e) => setVenueLng(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Geofence Radius (m)</label>
-                    <input
-                      type="number"
-                      required
-                      value={geofenceRadius}
-                      onChange={(e) => setGeofenceRadius(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Auto-Approve Rating (★)</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="1.0"
-                      max="5.0"
-                      value={autoApproveRating}
-                      onChange={(e) => setAutoApproveRating(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full mt-2 py-2 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs shadow-md shadow-emerald-500/20 transition flex items-center justify-center space-x-1.5"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Create Venue</span>
-                </button>
-              </form>
-            </div>
-
-            {/* Assign Venue Manager Form */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-base font-bold text-white mb-4 flex items-center space-x-2">
-                <UserPlus className="w-5 h-5 text-indigo-400" />
-                <span>Assign Venue Manager</span>
-              </h3>
-              <form onSubmit={handleAssignManager} className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Select Venue</label>
-                  <select
-                    value={selectedVenueId}
-                    onChange={(e) => setSelectedVenueId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
-                  >
-                    {venues.map((v) => (
-                      <option key={v.id} value={v.id}>{v.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Select User to Promote</label>
-                  <select
-                    value={selectedUserId}
-                    onChange={(e) => setSelectedUserId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
-                  >
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.first_name} {u.last_name} ({u.email})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full mt-2 py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-white text-xs shadow-md shadow-indigo-600/20 transition flex items-center justify-center space-x-1.5"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  <span>Assign Manager</span>
-                </button>
-              </form>
-            </div>
+        {/* System Stats Row */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Venues</p>
+            <h3 className="text-2xl font-black text-white mt-1">{systemStats.total_venues}</h3>
+            <p className="text-xs text-slate-500 mt-2">Active business accounts</p>
           </div>
 
-          {/* Right Columns: Registered Venues & Post Shifts */}
-          <div className="lg:col-span-2 space-y-8">
-            {/* Post Shift Form */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-base font-bold text-white mb-4 flex items-center space-x-2">
-                <Calendar className="w-5 h-5 text-emerald-400" />
-                <span>Post New Shift to Call-Board</span>
-              </h3>
-              <form onSubmit={handleCreateShift} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Venue</label>
-                  <select
-                    value={shiftVenueId}
-                    onChange={(e) => setShiftVenueId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  >
-                    {venues.map((v) => (
-                      <option key={v.id} value={v.id}>{v.name}</option>
-                    ))}
-                  </select>
-                </div>
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Shifts</p>
+            <h3 className="text-2xl font-black text-emerald-400 mt-1">{systemStats.total_shifts}</h3>
+            <p className="text-xs text-slate-500 mt-2">{systemStats.open_shifts} currently open</p>
+          </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Shift Title</label>
-                  <input
-                    type="text"
-                    required
-                    value={shiftTitle}
-                    onChange={(e) => setShiftTitle(e.target.value)}
-                    placeholder="Weekend Prime Bar Service"
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Workers</p>
+            <h3 className="text-2xl font-black text-teal-400 mt-1">{systemStats.total_workers}</h3>
+            <p className="text-xs text-slate-500 mt-2">Registered shift seekers</p>
+          </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Role Required</label>
-                  <select
-                    value={shiftRole}
-                    onChange={(e) => setShiftRole(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  >
-                    <option value="Bartender">Bartender</option>
-                    <option value="Server">Server</option>
-                    <option value="Dishwasher">Dishwasher</option>
-                    <option value="Barback">Barback</option>
-                    <option value="AV Tech">AV Tech</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Hourly ($)</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      required
-                      value={shiftRate}
-                      onChange={(e) => setShiftRate(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">Spots Needed</label>
-                    <input
-                      type="number"
-                      min="1"
-                      required
-                      value={shiftSpots}
-                      onChange={(e) => setShiftSpots(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="md:col-span-2 flex items-center space-x-2 pt-2">
-                  <input
-                    type="checkbox"
-                    id="autoConfirmCheck"
-                    checked={shiftAutoConfirm}
-                    onChange={(e) => setShiftAutoConfirm(e.target.checked)}
-                    className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-emerald-500"
-                  />
-                  <label htmlFor="autoConfirmCheck" className="text-xs font-medium text-slate-300">
-                    Auto-Confirm Anyone (Condition 1 in Engine: bypasses whitelist and rating checks)
-                  </label>
-                </div>
-
-                <div className="md:col-span-2">
-                  <button
-                    type="submit"
-                    className="w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs shadow-md shadow-emerald-500/20 transition flex items-center justify-center space-x-1.5"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Publish Shift to Call-Board</span>
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            {/* Venues List */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-base font-bold text-white mb-4">
-                Registered Venues ({venues.length})
-              </h3>
-              <div className="space-y-3">
-                {venues.map((venue) => (
-                  <div
-                    key={venue.id}
-                    className="p-4 bg-slate-950/60 border border-slate-800 rounded-xl flex items-center justify-between"
-                  >
-                    <div>
-                      <h4 className="text-sm font-bold text-white">{venue.name}</h4>
-                      <p className="text-xs text-slate-400 flex items-center space-x-1 mt-0.5">
-                        <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                        <span>{venue.address}</span>
-                      </p>
-                      <div className="flex items-center space-x-3 text-xs text-slate-500 mt-2">
-                        <span>Geofence: {venue.geofence_radius_meters}m</span>
-                        <span>•</span>
-                        <span>Auto-Approve Threshold: ≥ {venue.global_auto_approve_min_rating || 'None'}★</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteVenue(venue.id)}
-                      className="p-2 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition"
-                      title="Delete venue"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Shift Requests</p>
+            <h3 className="text-2xl font-black text-amber-400 mt-1">{systemStats.total_requests}</h3>
+            <p className="text-xs text-slate-500 mt-2">{systemStats.pending_requests} pending approval</p>
           </div>
         </div>
+
+        {/* Venues Data-Table */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+          <div className="p-6 border-b border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-base font-bold text-white">Registered Venues</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Complete directory of venues on the ShiftBoard platform.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs flex items-center space-x-1.5 transition"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create New Venue</span>
+            </button>
+          </div>
+
+          {venues.length === 0 ? (
+            <div className="text-center py-16 text-slate-500 text-xs">
+              No venues registered. Click "Create New Venue" to add one.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-300">
+                <thead className="bg-slate-950/70 text-slate-400 uppercase tracking-wider text-[11px] border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-5">Venue Name</th>
+                    <th className="py-3 px-5">Address</th>
+                    <th className="py-3 px-5">Geofence</th>
+                    <th className="py-3 px-5">Auto-Approve Threshold</th>
+                    <th className="py-3 px-5">Registered</th>
+                    <th className="py-3 px-5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {venues.map((venue) => (
+                    <tr key={venue.id} className="hover:bg-slate-800/40 transition">
+                      <td className="py-3.5 px-5 font-bold text-white flex items-center space-x-2">
+                        <Building2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                        <span>{venue.name}</span>
+                      </td>
+                      <td className="py-3.5 px-5 text-slate-400 max-w-xs truncate">
+                        {venue.address}
+                      </td>
+                      <td className="py-3.5 px-5 font-mono text-slate-300">
+                        {venue.geofence_radius_meters}m
+                      </td>
+                      <td className="py-3.5 px-5">
+                        <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-semibold">
+                          ≥ {venue.auto_approve_rating_threshold || venue.global_auto_approve_min_rating || '4.5'}★
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-5 text-slate-500">
+                        {new Date(venue.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="py-3.5 px-5 text-right">
+                        <button
+                          onClick={() => handleDeleteVenue(venue.id)}
+                          title="Delete venue"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </main>
+
+      {/* Modal: Create New Venue */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+              <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                <Building2 className="w-5 h-5 text-emerald-400" />
+                <span>Create New Venue</span>
+              </h3>
+              <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateVenue} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Venue Name</label>
+                <input
+                  type="text"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="The Grand Terrace"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Physical Address</label>
+                <input
+                  type="text"
+                  required
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="450 Lexington Ave, New York, NY"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Assign Initial Manager Email
+                </label>
+                <input
+                  type="email"
+                  value={managerEmail}
+                  onChange={(e) => setManagerEmail(e.target.value)}
+                  placeholder="manager@venue.com"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  If user does not exist, an account with venue_manager role will be provisioned.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Geofence Radius (m)</label>
+                  <input
+                    type="number"
+                    required
+                    value={geofenceRadius}
+                    onChange={(e) => setGeofenceRadius(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Auto-Approve Min Rating (★)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="1.0"
+                    max="5.0"
+                    value={autoApproveRating}
+                    onChange={(e) => setAutoApproveRating(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition shadow-md shadow-emerald-500/20"
+                >
+                  Save Venue
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

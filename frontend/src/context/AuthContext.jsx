@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { jwtDecode } from 'jwt-decode';
 import api from '../api/client';
 
 const AuthContext = createContext(null);
@@ -8,23 +9,48 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Parse token safely and extract user payload
+  const parseTokenUser = (jwtToken, extraUserData = {}) => {
+    try {
+      const decoded = jwtDecode(jwtToken);
+      return {
+        id: decoded.sub || extraUserData.id,
+        role: decoded.role || extraUserData.role || 'worker',
+        venue_id: decoded.venue_id || extraUserData.venue_id || null,
+        ...extraUserData,
+      };
+    } catch (err) {
+      console.warn('Could not decode JWT:', err);
+      return extraUserData;
+    }
+  };
+
   // Initialize auth state from local storage on boot
   useEffect(() => {
-    const savedToken = localStorage.getItem('shiftboard_token');
-    const savedUser = localStorage.getItem('shiftboard_user');
+    const savedToken = localStorage.getItem('token') || localStorage.getItem('shiftboard_token');
+    const savedUser = localStorage.getItem('user') || localStorage.getItem('shiftboard_user');
 
-    if (savedToken && savedUser) {
+    if (savedToken) {
       try {
         setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-        // Verify / refresh user profile in background
-        api.get('/auth/me')
+        let parsedUser = null;
+        if (savedUser) {
+          try {
+            parsedUser = JSON.parse(savedUser);
+          } catch (e) {}
+        }
+        const userObj = parseTokenUser(savedToken, parsedUser || {});
+        setUser(userObj);
+
+        // Verify & fetch full profile from /api/users/me
+        api.get('/users/me')
           .then((res) => {
-            setUser(res.data);
-            localStorage.setItem('shiftboard_user', JSON.stringify(res.data));
+            const updated = parseTokenUser(savedToken, res.data);
+            setUser(updated);
+            localStorage.setItem('user', JSON.stringify(updated));
           })
           .catch(() => {
-            // Token might be invalid, logout will be handled by interceptor
+            // Interceptor handles logout on 401
           })
           .finally(() => setLoading(false));
       } catch (err) {
@@ -43,59 +69,69 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('shiftboard_auth_logout', handleLogoutEvent);
   }, []);
 
-  const saveAuthSession = (accessToken, userData) => {
+  const saveAuthSession = (accessToken, rawUserData = {}) => {
     setToken(accessToken);
-    setUser(userData);
+    const decodedUser = parseTokenUser(accessToken, rawUserData);
+    setUser(decodedUser);
+    localStorage.setItem('token', accessToken);
     localStorage.setItem('shiftboard_token', accessToken);
-    localStorage.setItem('shiftboard_user', JSON.stringify(userData));
+    localStorage.setItem('user', JSON.stringify(decodedUser));
+    localStorage.setItem('shiftboard_user', JSON.stringify(decodedUser));
+    return decodedUser;
   };
 
   const login = async (email, password) => {
     const response = await api.post('/auth/login', { email, password });
-    saveAuthSession(response.data.access_token, response.data.user);
-    return response.data.user;
+    const { access_token, user: apiUser } = response.data;
+    const userSession = saveAuthSession(access_token, apiUser);
+    return userSession;
   };
 
   const loginWithGoogleMock = async () => {
-    // Mock Firebase OAuth: passes dummy token to backend mock resolver
     const response = await api.post('/auth/firebase-login', {
       firebase_token: 'mock-firebase-token-123',
-      email: 'demo_google_worker@shiftboard.local',
+      email: 'demo_google_worker@shiftboard.com',
       first_name: 'Alex',
-      last_name: 'Rivera'
+      last_name: 'Rivera',
     });
-    saveAuthSession(response.data.access_token, response.data.user);
-    return response.data.user;
+    const { access_token, user: apiUser } = response.data;
+    const userSession = saveAuthSession(access_token, apiUser);
+    return userSession;
   };
 
   const register = async (userData) => {
     const response = await api.post('/auth/register', userData);
-    saveAuthSession(response.data.access_token, response.data.user);
-    return response.data.user;
+    const { access_token, user: apiUser } = response.data;
+    const userSession = saveAuthSession(access_token, apiUser);
+    return userSession;
   };
 
   const logout = () => {
     setUser(null);
     setToken(null);
+    localStorage.removeItem('token');
     localStorage.removeItem('shiftboard_token');
+    localStorage.removeItem('user');
     localStorage.removeItem('shiftboard_user');
   };
 
   const refreshProfile = async () => {
     try {
       const res = await api.get('/users/me');
-      setUser(res.data);
-      localStorage.setItem('shiftboard_user', JSON.stringify(res.data));
-      return res.data;
+      const savedToken = localStorage.getItem('token');
+      const updated = parseTokenUser(savedToken || '', res.data);
+      setUser(updated);
+      localStorage.setItem('user', JSON.stringify(updated));
+      return updated;
     } catch (err) {
       console.error('Failed to refresh profile:', err);
     }
   };
 
-  const normalizedRole = (user?.role || '').toUpperCase();
-  const isAdmin = normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'PLATFORM_ADMIN';
-  const isManager = isAdmin || normalizedRole === 'VENUE_MANAGER';
-  const isWorker = normalizedRole === 'WORKER';
+  const userRole = (user?.role || '').toLowerCase();
+  const isAdmin = userRole === 'platform_admin';
+  const isManager = userRole === 'venue_manager' || isAdmin;
+  const isWorker = userRole === 'worker';
 
   return (
     <AuthContext.Provider
@@ -112,6 +148,7 @@ export function AuthProvider({ children }) {
         isAdmin,
         isManager,
         isWorker,
+        role: userRole,
       }}
     >
       {children}

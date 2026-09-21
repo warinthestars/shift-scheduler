@@ -23,15 +23,18 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
-class RegisterRequest(BaseModel):
+class UserCreate(BaseModel):
     email: EmailStr
     password: str
-    role: Optional[str] = "WORKER"  # "WORKER" or "VENUE_MANAGER"
+    role: Optional[str] = "worker"  # "platform_admin", "venue_manager", or "worker"
     first_name: Optional[str] = ""
     last_name: Optional[str] = ""
     phone: Optional[str] = None
     skills: Optional[List[str]] = []
     bio: Optional[str] = None
+
+class RegisterRequest(UserCreate):
+    pass
 
 class FirebaseLoginRequest(BaseModel):
     firebase_token: str
@@ -59,6 +62,7 @@ class UserBase(BaseModel):
 
 class UserResponse(UserBase):
     id: UUID
+    venue_id: Optional[str] = None
     aggregate_rating: float
     rating_count: int
     total_shifts: int
@@ -109,8 +113,17 @@ class VenueBase(BaseModel):
     description: Optional[str] = None
     logo_url: Optional[str] = None
 
-class VenueCreate(VenueBase):
-    pass
+class VenueCreate(BaseModel):
+    name: str
+    address: str
+    lat: Optional[float] = 40.7128
+    lng: Optional[float] = -74.0060
+    geofence_radius_meters: Optional[int] = 100
+    auto_approve_rating_threshold: Optional[float] = 4.5
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    manager_email: Optional[EmailStr] = None
+    initial_manager_email: Optional[EmailStr] = None
 
 class VenueUpdateSettings(BaseModel):
     auto_approve_rating_threshold: Optional[float] = None
@@ -148,16 +161,21 @@ class WhitelistResponse(BaseModel):
 # ------------------------------------------------------------------------------
 # Shift Schemas
 # ------------------------------------------------------------------------------
+class RoleRequirement(BaseModel):
+    role: str
+    quantity: int = 1
+
 class ShiftCreate(BaseModel):
     venue_id: UUID
     title: str
-    role_type: str
+    role_type: Optional[str] = "Worker"
     start_time: datetime
     end_time: datetime
-    capacity: int = 1
-    is_shift_auto_confirm: bool = False
-    hourly_rate: float = 25.00
+    capacity: Optional[int] = 1
+    is_shift_auto_confirm: Optional[bool] = False
+    hourly_rate: Optional[float] = 25.00
     description: Optional[str] = None
+    role_requirements: Optional[List[RoleRequirement]] = None
 
 class ShiftResponse(BaseModel):
     id: UUID

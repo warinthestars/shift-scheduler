@@ -60,6 +60,23 @@ async def get_my_profile_and_experience(
     user_data["past_venues"] = list(past_venues_set)
     return user_data
 
+@router.get("/me/shifts")
+async def get_my_shifts_alias(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve my submitted shift requests and schedule"""
+    result = await db.execute(
+        select(ShiftRequest)
+        .options(
+            selectinload(ShiftRequest.shift).selectinload(Shift.venue),
+            selectinload(ShiftRequest.worker)
+        )
+        .where(ShiftRequest.worker_id == current_user.id)
+        .order_by(ShiftRequest.created_at.desc())
+    )
+    return result.scalars().all()
+
 @router.put("/me", response_model=UserResponse)
 async def update_my_profile(
     profile_update: UserUpdateMe,

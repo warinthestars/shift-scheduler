@@ -34,7 +34,7 @@ async def create_shift(
 
     # 2. Verify manager authorization for this venue
     user_role = normalize_role(current_user.role)
-    if user_role != "SUPER_ADMIN":
+    if user_role not in ("platform_admin", "super_admin"):
         mgr = await db.scalar(
             select(VenueManager).where(
                 VenueManager.venue_id == shift_in.venue_id,
@@ -47,29 +47,70 @@ async def create_shift(
                 detail="You are not authorized to create shifts for this venue"
             )
 
-    shift = Shift(
-        venue_id=shift_in.venue_id,
-        created_by_user_id=current_user.id,
-        title=shift_in.title,
-        role_type=shift_in.role_type,
-        start_time=shift_in.start_time,
-        end_time=shift_in.end_time,
-        capacity=shift_in.capacity,
-        spots_filled=0,
-        is_shift_auto_confirm=shift_in.is_shift_auto_confirm,
-        hourly_rate=shift_in.hourly_rate,
-        description=shift_in.description,
-        status="OPEN"
-    )
-    db.add(shift)
-    await db.commit()
-    await db.refresh(shift)
+    # Handle dynamic role requirements list if provided
+    if shift_in.role_requirements and len(shift_in.role_requirements) > 0:
+        first_shift = None
+        for req in shift_in.role_requirements:
+            s = Shift(
+                venue_id=shift_in.venue_id,
+                created_by_user_id=current_user.id,
+                title=shift_in.title,
+                role_type=req.role,
+                start_time=shift_in.start_time,
+                end_time=shift_in.end_time,
+                capacity=req.quantity,
+                spots_filled=0,
+                is_shift_auto_confirm=shift_in.is_shift_auto_confirm or False,
+                hourly_rate=shift_in.hourly_rate or 25.0,
+                description=shift_in.description,
+                status="OPEN"
+            )
+            db.add(s)
+            if first_shift is None:
+                first_shift = s
+        await db.commit()
+        await db.refresh(first_shift)
+        shift = first_shift
+    else:
+        shift = Shift(
+            venue_id=shift_in.venue_id,
+            created_by_user_id=current_user.id,
+            title=shift_in.title,
+            role_type=shift_in.role_type or "Worker",
+            start_time=shift_in.start_time,
+            end_time=shift_in.end_time,
+            capacity=shift_in.capacity or 1,
+            spots_filled=0,
+            is_shift_auto_confirm=shift_in.is_shift_auto_confirm or False,
+            hourly_rate=shift_in.hourly_rate or 25.0,
+            description=shift_in.description,
+            status="OPEN"
+        )
+        db.add(shift)
+        await db.commit()
+        await db.refresh(shift)
 
     # Reload with venue relation
     result = await db.execute(
         select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift.id)
     )
     return result.scalar_one()
+
+@router.get("/open", response_model=List[ShiftResponse])
+async def get_open_shifts(
+    role: Optional[str] = Query(None, description="Filter by role"),
+    venue_id: Optional[UUID] = Query(None, description="Filter by Venue ID"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Fetch all open shifts on the call-board"""
+    query = select(Shift).options(selectinload(Shift.venue)).where(Shift.status == "OPEN")
+    if venue_id:
+        query = query.where(Shift.venue_id == venue_id)
+    if role:
+        query = query.where(Shift.role_type.ilike(f"%{role}%"))
+    query = query.order_by(Shift.start_time.asc())
+    result = await db.execute(query)
+    return result.scalars().all()
 
 @router.get("", response_model=List[ShiftResponse])
 async def get_shifts(
@@ -204,7 +245,7 @@ async def update_shift_request_status(
     user_role = normalize_role(current_user.role)
 
     # Verify authorization
-    if user_role != "SUPER_ADMIN":
+    if user_role not in ("platform_admin", "super_admin"):
         mgr = await db.scalar(
             select(VenueManager).where(
                 VenueManager.venue_id == shift.venue_id,
@@ -340,3 +381,39 @@ async def check_out_shift(
     await db.commit()
     await db.refresh(shift_req)
     return shift_req
+
+# ------------------------------------------------------------------------------
+# Requests Approval Queue Router
+# ------------------------------------------------------------------------------
+requests_router = APIRouter(prefix="/api/requests", tags=["Requests"])
+
+@requests_router.post("/{request_id}/approve", response_model=ShiftRequestResponse)
+@requests_router.put("/{request_id}/approve", response_model=ShiftRequestResponse)
+async def approve_request_endpoint(
+    request_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Approve a pending shift request"""
+    return await update_shift_request_status(
+        request_id=request_id,
+        status_update=ShiftRequestStatusUpdate(status="APPROVED"),
+        current_user=current_user,
+        db=db
+    )
+
+@requests_router.post("/{request_id}/deny", response_model=ShiftRequestResponse)
+@requests_router.put("/{request_id}/deny", response_model=ShiftRequestResponse)
+async def deny_request_endpoint(
+    request_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Deny a pending shift request"""
+    return await update_shift_request_status(
+        request_id=request_id,
+        status_update=ShiftRequestStatusUpdate(status="REJECTED"),
+        current_user=current_user,
+        db=db
+    )
+

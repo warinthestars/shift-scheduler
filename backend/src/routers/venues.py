@@ -22,7 +22,7 @@ async def verify_venue_manager_access(venue_id: UUID, user: User, db: AsyncSessi
         raise HTTPException(status_code=404, detail="Venue not found")
 
     user_role = normalize_role(user.role)
-    if user_role == "SUPER_ADMIN":
+    if user_role in ("platform_admin", "super_admin"):
         return venue
 
     # Check venue_managers junction table
@@ -56,15 +56,39 @@ async def create_venue(
     Accessible by Super Admin or Venue Managers.
     Automatically assigns the creator as manager in VenueManagers relation.
     """
-    venue = Venue(**venue_in.model_dump())
+    venue_dict = venue_in.model_dump(exclude={"manager_email", "initial_manager_email"})
+    venue = Venue(**venue_dict)
     db.add(venue)
     await db.commit()
     await db.refresh(venue)
 
-    # Assign creator in VenueManagers table
+    # Check if a manager email was provided
+    mgr_email = venue_in.manager_email or venue_in.initial_manager_email
+    mgr_user = None
+    if mgr_email:
+        m_res = await db.execute(select(User).where(User.email == mgr_email.lower()))
+        mgr_user = m_res.scalar_one_or_none()
+        if not mgr_user:
+            from src.auth import get_password_hash
+            mgr_user = User(
+                email=mgr_email.lower(),
+                hashed_password=get_password_hash("Manager123!"),
+                role=UserRole.VENUE_MANAGER,
+                first_name="Venue",
+                last_name="Manager",
+                is_active=True
+            )
+            db.add(mgr_user)
+            await db.commit()
+            await db.refresh(mgr_user)
+        else:
+            mgr_user.role = UserRole.VENUE_MANAGER
+            await db.commit()
+
+    manager_user_id = mgr_user.id if mgr_user else current_user.id
     manager_entry = VenueManager(
         venue_id=venue.id,
-        user_id=current_user.id,
+        user_id=manager_user_id,
         is_primary=True
     )
     db.add(manager_entry)
@@ -83,6 +107,40 @@ async def get_venue(venue_id: UUID, db: AsyncSession = Depends(get_db)):
     if not venue:
         raise HTTPException(status_code=404, detail="Venue not found")
     return venue
+
+@router.get("/{venue_id}/shifts", response_model=List[ShiftResponse])
+async def get_venue_shifts(
+    venue_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve all shifts for a specific venue"""
+    result = await db.execute(
+        select(Shift)
+        .options(selectinload(Shift.venue))
+        .where(Shift.venue_id == venue_id)
+        .order_by(Shift.start_time.asc())
+    )
+    return result.scalars().all()
+
+@router.get("/{venue_id}/requests/pending", response_model=List[ShiftRequestResponse])
+async def get_venue_pending_requests(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve pending shift requests for this venue's shifts"""
+    await verify_venue_manager_access(venue_id, current_user, db)
+    result = await db.execute(
+        select(ShiftRequest)
+        .join(Shift, ShiftRequest.shift_id == Shift.id)
+        .options(
+            selectinload(ShiftRequest.shift).selectinload(Shift.venue),
+            selectinload(ShiftRequest.worker)
+        )
+        .where(Shift.venue_id == venue_id, ShiftRequest.status == RequestStatus.PENDING)
+        .order_by(ShiftRequest.created_at.asc())
+    )
+    return result.scalars().all()
 
 @router.put("/{venue_id}/settings", response_model=VenueResponse)
 async def update_venue_settings(

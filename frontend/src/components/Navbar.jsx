@@ -1,10 +1,10 @@
 import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Calendar, Shield, User, LogOut, Star, Award } from 'lucide-react';
+import { Calendar, Shield, User, LogOut, Star, Building2, Briefcase } from 'lucide-react';
 
 export default function Navbar() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, isAdmin, isManager, isWorker } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -12,6 +12,8 @@ export default function Navbar() {
     logout();
     navigate('/login');
   };
+
+  const userRole = (user?.role || '').toLowerCase();
 
   return (
     <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40">
@@ -29,18 +31,35 @@ export default function Navbar() {
               </div>
             </Link>
 
-            {/* Navigation links */}
+            {/* Navigation links based on role */}
             <nav className="hidden md:flex ml-8 space-x-2">
-              <Link
-                to="/"
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                  location.pathname === '/'
-                    ? 'bg-slate-800 text-emerald-400'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                Worker Call-Board
-              </Link>
+              {(isWorker || isAdmin) && (
+                <Link
+                  to="/worker"
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
+                    location.pathname === '/worker'
+                      ? 'bg-slate-800 text-emerald-400'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Briefcase className="w-4 h-4" />
+                  <span>Worker Call-Board</span>
+                </Link>
+              )}
+
+              {(userRole === 'venue_manager' || isAdmin) && (
+                <Link
+                  to="/venue"
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
+                    location.pathname === '/venue'
+                      ? 'bg-slate-800 text-teal-400'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Building2 className="w-4 h-4" />
+                  <span>Venue Portal</span>
+                </Link>
+              )}
 
               {isAdmin && (
                 <Link
@@ -63,11 +82,11 @@ export default function Navbar() {
             {user && (
               <div className="flex items-center space-x-3">
                 {/* Rating Badge for Workers */}
-                {user.role === 'worker' && (
+                {userRole === 'worker' && (
                   <div className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-semibold">
                     <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                    <span>{Number(user.rating_average).toFixed(1)}</span>
-                    <span className="text-amber-500/70">({user.rating_count})</span>
+                    <span>{Number(user.rating_average || user.aggregate_rating || 5.0).toFixed(1)}</span>
+                    <span className="text-amber-500/70">({user.rating_count || 0})</span>
                   </div>
                 )}
 
@@ -75,8 +94,14 @@ export default function Navbar() {
                 <div className="text-right hidden sm:block">
                   <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
                   <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
-                    <span className={`w-1.5 h-1.5 rounded-full ${user.role === 'platform_admin' ? 'bg-indigo-400' : 'bg-emerald-400'}`}></span>
-                    <span>{user.role.replace('_', ' ')}</span>
+                    <span className={`w-1.5 h-1.5 rounded-full ${
+                      userRole === 'platform_admin'
+                        ? 'bg-indigo-400'
+                        : userRole === 'venue_manager'
+                        ? 'bg-teal-400'
+                        : 'bg-emerald-400'
+                    }`}></span>
+                    <span>{userRole.replace('_', ' ')}</span>
                   </div>
                 </div>
 

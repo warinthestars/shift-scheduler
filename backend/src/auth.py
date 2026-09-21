@@ -1,10 +1,10 @@
-import jwt
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
+from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.config import settings
@@ -18,14 +18,17 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a plain password against the stored hashed password"""
     if not hashed_password:
         return False
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
+    """Generate bcrypt hash for a plain password"""
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Generate JWT encoding user id (sub), role, and venue_id"""
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
@@ -33,19 +36,20 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 def normalize_role(role_val) -> str:
+    """Normalize role to one of 'platform_admin', 'venue_manager', 'worker'"""
     if not role_val:
-        return "WORKER"
+        return "worker"
     val = role_val.value if hasattr(role_val, "value") else str(role_val)
-    val = val.upper()
-    if val in ("PLATFORM_ADMIN", "SUPER_ADMIN", "ADMIN"):
-        return "SUPER_ADMIN"
-    if val in ("VENUE_MANAGER", "MANAGER"):
-        return "VENUE_MANAGER"
-    return "WORKER"
+    val = val.lower()
+    if val in ("platform_admin", "super_admin", "admin"):
+        return "platform_admin"
+    if val in ("venue_manager", "manager"):
+        return "venue_manager"
+    return "worker"
 
 async def get_or_create_mock_firebase_user(
     db: AsyncSession,
-    email: str = "demo_google_worker@shiftboard.local",
+    email: str = "demo_google_worker@shiftboard.com",
     first_name: str = "Alex",
     last_name: str = "Rivera"
 ) -> User:
@@ -88,8 +92,8 @@ async def get_current_user(
     """
     Unified Authentication Dependency:
     1. Validates Mock Firebase tokens if USE_MOCK_FIREBASE is true.
-    2. Validates real Firebase tokens if configured.
-    3. Validates Local Auth JWT tokens.
+    2. Validates Local Auth JWT tokens.
+    3. Validates Real Firebase tokens if configured.
     """
     if not credentials:
         raise HTTPException(
@@ -110,15 +114,15 @@ async def get_current_user(
         return user
 
     # --------------------------------------------------------------------------
-    # 2. Local JWT Token Evaluation
+    # 2. Local JWT Token Evaluation (python-jose)
     # --------------------------------------------------------------------------
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         user_id_str: str = payload.get("sub")
         if not user_id_str:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-    except jwt.PyJWTError:
-        # Fallback to real firebase auth
+            raise HTTPException(status_code=401, detail="Invalid token payload: missing sub")
+    except JWTError:
+        # Fallback to real firebase auth if mock is disabled
         if not settings.USE_MOCK_FIREBASE:
             try:
                 from firebase_admin import auth as fb_auth
@@ -154,22 +158,22 @@ async def get_current_user(
 
 def require_role(allowed_roles: List[str]):
     """Role-based access control dependency factory"""
-    normalized_allowed = [r.upper() for r in allowed_roles]
+    normalized_allowed = [normalize_role(r) for r in allowed_roles]
     def role_checker(user: User = Depends(get_current_user)) -> User:
         user_role = normalize_role(user.role)
-        # Super admin always passes
-        if user_role == "SUPER_ADMIN":
+        # Platform Admin always passes
+        if user_role == "platform_admin":
             return user
         if user_role not in normalized_allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: user role '{user_role}' does not have required permissions"
+                detail=f"Access forbidden: requires one of {allowed_roles}"
             )
         return user
     return role_checker
 
-require_super_admin = require_role(["SUPER_ADMIN"])
-require_admin = require_super_admin  # Backward compatibility alias
-require_venue_manager = require_role(["VENUE_MANAGER", "SUPER_ADMIN"])
+require_admin = require_role(["platform_admin"])
+require_super_admin = require_admin
+require_venue_manager = require_role(["venue_manager", "platform_admin"])
 require_manager_or_admin = require_venue_manager
-require_worker = require_role(["WORKER", "SUPER_ADMIN"])
+require_worker = require_role(["worker", "platform_admin"])

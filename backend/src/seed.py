@@ -11,22 +11,26 @@ logger = logging.getLogger("shiftboard.seed")
 async def seed_initial_data(db: AsyncSession):
     """
     Startup lifecycle database seeding:
-    1. Super Admin checking & creation (SUPER_ADMIN role).
-    2. Demo worker user for local testing.
+    1. Super Admin checking & creation (platform_admin role) using get_password_hash.
+    2. Demo venue manager & demo worker (all @shiftboard.com).
     3. Demo venues, shifts, and whitelists for testing Auto-Confirm Engine.
     """
     logger.info("Checking Super Admin account...")
 
     # 1. Super Admin Seeding
-    result = await db.execute(select(User).where(User.email == settings.SUPER_ADMIN_USERNAME.lower()))
+    admin_email = (settings.SUPER_ADMIN_USERNAME or "demo_admin@shiftboard.com").lower()
+    if "@shiftboard.local" in admin_email:
+        admin_email = admin_email.replace("@shiftboard.local", "@shiftboard.com")
+
+    result = await db.execute(select(User).where(User.email == admin_email))
     admin_user = result.scalar_one_or_none()
 
     if not admin_user:
-        logger.info(f"Seeding Super Admin user: {settings.SUPER_ADMIN_USERNAME}")
+        logger.info(f"Seeding Super Admin user: {admin_email}")
         admin_user = User(
-            email=settings.SUPER_ADMIN_USERNAME.lower(),
-            password_hash=get_password_hash(settings.SUPER_ADMIN_PASSWORD),
-            role=UserRole.SUPER_ADMIN,
+            email=admin_email,
+            hashed_password=get_password_hash(settings.SUPER_ADMIN_PASSWORD),
+            role=UserRole.PLATFORM_ADMIN,
             first_name="Platform",
             last_name="SuperAdmin",
             phone="555-0100",
@@ -43,8 +47,32 @@ async def seed_initial_data(db: AsyncSession):
     else:
         logger.info("Super Admin already exists.")
 
-    # 2. Demo Worker Seeding
-    worker_email = "demo_worker@shiftboard.local"
+    # 2. Demo Venue Manager Seeding
+    manager_email = "demo_manager@shiftboard.com"
+    result = await db.execute(select(User).where(User.email == manager_email))
+    manager_user = result.scalar_one_or_none()
+
+    if not manager_user:
+        logger.info(f"Seeding Demo Venue Manager: {manager_email}")
+        manager_user = User(
+            email=manager_email,
+            hashed_password=get_password_hash("DemoManager123!"),
+            role=UserRole.VENUE_MANAGER,
+            first_name="Morgan",
+            last_name="Vance",
+            phone="555-0155",
+            bio="General Manager with 10+ years hospitality leadership.",
+            is_active=True,
+            aggregate_rating=5.00,
+            rating_count=0,
+            total_shifts=0
+        )
+        db.add(manager_user)
+        await db.commit()
+        await db.refresh(manager_user)
+
+    # 3. Demo Worker Seeding
+    worker_email = "demo_worker@shiftboard.com"
     result = await db.execute(select(User).where(User.email == worker_email))
     worker_user = result.scalar_one_or_none()
 
@@ -52,7 +80,7 @@ async def seed_initial_data(db: AsyncSession):
         logger.info(f"Seeding Demo Worker: {worker_email}")
         worker_user = User(
             email=worker_email,
-            password_hash=get_password_hash("DemoWorker123!"),
+            hashed_password=get_password_hash("DemoWorker123!"),
             role=UserRole.WORKER,
             first_name="Jordan",
             last_name="Lee",
@@ -68,7 +96,7 @@ async def seed_initial_data(db: AsyncSession):
         await db.commit()
         await db.refresh(worker_user)
 
-    # 3. Demo Venues & Shifts
+    # 4. Demo Venues & Shifts
     result = await db.execute(select(Venue))
     venues = result.scalars().all()
 
@@ -99,8 +127,9 @@ async def seed_initial_data(db: AsyncSession):
         await db.refresh(venue1)
         await db.refresh(venue2)
 
-        # Assign Venue Manager
-        db.add(VenueManager(venue_id=venue1.id, user_id=admin_user.id, is_primary=True))
+        # Assign Venue Managers
+        db.add(VenueManager(venue_id=venue1.id, user_id=manager_user.id, is_primary=True))
+        db.add(VenueManager(venue_id=venue1.id, user_id=admin_user.id, is_primary=False))
 
         # Add worker to Whitelist for venue2 (Tests Condition 2)
         db.add(VenueWhitelist(venue_id=venue2.id, worker_id=worker_user.id, notes="Trusted weekend server"))
@@ -111,7 +140,7 @@ async def seed_initial_data(db: AsyncSession):
         # Shift 1: is_shift_auto_confirm == True (Tests Condition 1)
         shift1 = Shift(
             venue_id=venue1.id,
-            created_by_user_id=admin_user.id,
+            created_by_user_id=manager_user.id,
             title="Friday Prime Time Bartender",
             role_type="Bartender",
             start_time=now + timedelta(days=1, hours=2),
@@ -127,7 +156,7 @@ async def seed_initial_data(db: AsyncSession):
         # Shift 2: Rating Threshold Auto-Confirm (Tests Condition 3: venue threshold is 4.50, worker rating is 4.85)
         shift2 = Shift(
             venue_id=venue1.id,
-            created_by_user_id=admin_user.id,
+            created_by_user_id=manager_user.id,
             title="Saturday Night VIP Lounge Server",
             role_type="Server",
             start_time=now + timedelta(days=2, hours=3),
@@ -140,7 +169,7 @@ async def seed_initial_data(db: AsyncSession):
             status="OPEN"
         )
 
-        # Shift 3: Fallback (Condition 4: venue2 threshold is 4.90 > worker 4.85, but worker is whitelisted so approved via Condition 2)
+        # Shift 3: Whitelist Match on Venue 2 (Tests Condition 2)
         shift3 = Shift(
             venue_id=venue2.id,
             created_by_user_id=admin_user.id,
@@ -158,8 +187,8 @@ async def seed_initial_data(db: AsyncSession):
 
         # Shift 4: Strict Venue 2 shift with non-whitelisted worker (Tests Condition 4: Fallback to PENDING)
         shift4 = Shift(
-            venue_id=venue2.id,
-            created_by_user_id=admin_user.id,
+            venue_id=venue1.id,
+            created_by_user_id=manager_user.id,
             title="Sunday Sunset Banquet Captain",
             role_type="Server",
             start_time=now + timedelta(days=4, hours=1),

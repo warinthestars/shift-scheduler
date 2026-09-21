@@ -10,9 +10,9 @@ from sqlalchemy.orm import relationship
 from src.database import Base
 
 class UserRole(str, Enum):
-    SUPER_ADMIN = "SUPER_ADMIN"
-    VENUE_MANAGER = "VENUE_MANAGER"
-    WORKER = "WORKER"
+    PLATFORM_ADMIN = "platform_admin"
+    VENUE_MANAGER = "venue_manager"
+    WORKER = "worker"
 
 class RequestStatus(str, Enum):
     PENDING = "PENDING"
@@ -26,7 +26,7 @@ class User(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=True)
+    hashed_password = Column(String(255), nullable=True)
     role = Column(
         SQLEnum(UserRole, name="user_role", native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
@@ -48,6 +48,20 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Aliases for Phase 2 compatibility
+    @property
+    def password_hash(self):
+        return self.hashed_password
+
+    @password_hash.setter
+    def password_hash(self, val):
+        self.hashed_password = val
+
+    @property
+    def venue_id(self):
+        if self.managed_venues and len(self.managed_venues) > 0:
+            return str(self.managed_venues[0].venue_id)
+        return None
+
     @property
     def rating_average(self):
         return self.aggregate_rating

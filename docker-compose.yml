@@ -64,7 +64,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-shiftboard_user}:${POSTGRES_PASSWORD:-shiftboard_secret_password}@database:5432/${POSTGRES_DB:-shiftboard}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-shiftboard_redis_pass}@redis:6379/0
       - USE_MOCK_FIREBASE=${USE_MOCK_FIREBASE:-true}
-      - SUPER_ADMIN_USERNAME=${SUPER_ADMIN_USERNAME:-demo_admin@shiftboard.local}
+      - SUPER_ADMIN_USERNAME=${SUPER_ADMIN_USERNAME:-demo_admin@shiftboard.com}
       - SUPER_ADMIN_PASSWORD=${SUPER_ADMIN_PASSWORD:-SuperSecretDemo123!}
     volumes:
       - ./backend:/app
