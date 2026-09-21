@@ -1,0 +1,10 @@
+# Cloudflare Tunnel Configuration
+tunnel: ${CLOUDFLARE_TUNNEL_ID}
+credentials-file: /etc/cloudflared/secrets/tunnel-credentials.json
+
+ingress:
+  # Route traffic to Nginx frontend container
+  - hostname: ${APP_DOMAIN}
+    service: http://frontend:80
+  # Default catch-all rule (required by Cloudflare tunnel)
+  - service: http_status:404

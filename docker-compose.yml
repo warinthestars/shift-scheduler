@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------------------
+  # PostgreSQL Relational Database
+  # ----------------------------------------------------------------------------
+  database:
+    image: postgres:16-alpine
+    container_name: shiftboard-database
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-shiftboard}
+      POSTGRES_USER: ${POSTGRES_USER:-shiftboard_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shiftboard_secret_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shiftboard_user} -d ${POSTGRES_DB:-shiftboard}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shiftboard-network
+
+  # ----------------------------------------------------------------------------
+  # Redis Cache & Background Queue
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: shiftboard-redis
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD:-shiftboard_redis_pass}"]
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-shiftboard_redis_pass}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shiftboard-network
+
+  # ----------------------------------------------------------------------------
+  # Backend API (Python / FastAPI)
+  # ----------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shiftboard-backend
+    restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        required: false
+      - path: ./.secrets/.secrets.env
+        required: false
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-shiftboard_user}:${POSTGRES_PASSWORD:-shiftboard_secret_password}@database:5432/${POSTGRES_DB:-shiftboard}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-shiftboard_redis_pass}@redis:6379/0
+    volumes:
+      - ./backend:/app
+      - ./.secrets:/app/secrets:ro
+    ports:
+      - "${PORT_BACKEND:-8000}:8000"
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shiftboard-network
+
+  # ----------------------------------------------------------------------------
+  # Frontend PWA & Reverse Proxy (Nginx)
+  # ----------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: shiftboard-frontend
+    restart: unless-stopped
+    env_file:
+      - path: ./frontend/.env
+        required: false
+    ports:
+      - "${PORT_FRONTEND:-80}:80"
+    depends_on:
+      - backend
+    networks:
+      - shiftboard-network
+
+  # ----------------------------------------------------------------------------
+  # Cloudflare Tunnel (Zero-Trust Inbound Ingress)
+  # ----------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: shiftboard-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    env_file:
+      - path: ./.secrets/.secrets.env
+        required: false
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./.secrets:/etc/cloudflared/secrets:ro
+    depends_on:
+      - frontend
+    networks:
+      - shiftboard-network
+
+networks:
+  shiftboard-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
