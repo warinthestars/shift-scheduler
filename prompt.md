@@ -1,33 +1,20 @@
-# Phase 5: Dependency Fix & Documentation
+# Phase 6: Networking, Proxying, and Docker Build Stabilization
 
-## 1. Fix Missing Frontend Dependency
-The frontend is failing to compile because `jwt-decode` is imported in `frontend/src/context/AuthContext.jsx` but is missing from the package dependencies.
-*   Update `frontend/package.json` to include `"jwt-decode": "^4.0.0"` (or the latest stable version) in the `dependencies` object.
-*   Ensure that the `frontend/Dockerfile` runs `npm install` so that rebuilding the container will properly install this new dependency.
+The backend is dropping requests, resulting in an "empty response." This is likely due to the backend container crashing when attempting to utilize the newly added cryptography libraries, or CORS/networking mismatches. We need to stabilize the Docker configuration and implement a proper API reverse proxy.
 
-## 2. Project Documentation (`README.md`)
-Create a comprehensive `README.md` at the root of the repository (`/shift-scheduler/README.md`) to document the purpose, architecture, and setup instructions for this application. Structure the README with the following sections:
+## 1. Backend Dockerfile & Dependencies
+The addition of `passlib[bcrypt]` and `python-jose[cryptography]` often causes crashes if the underlying OS lacks build tools.
+*   Update `backend/Dockerfile` to use a standard slim image (e.g., `FROM python:3.11-slim`).
+*   Add a step to install essential build dependencies before running `pip install`. Add: `RUN apt-get update && apt-get install -y gcc libffi-dev build-essential`
+*   Ensure the `CMD` or `ENTRYPOINT` starts Uvicorn correctly on `0.0.0.0:8000`.
 
-### A. Project Overview
-*   Describe the app: A service-industry shift scheduling platform connecting workers with venues, functioning similarly to a community call board.
-*   Mention the eventual goal of transitioning from a Progressive Web App (PWA) to native mobile applications (App Store/Play Store).
+## 2. API Routing & Nginx Reverse Proxy
+The frontend must not hardcode `http://localhost:8000`. It should use relative paths and rely on a proxy.
+*   **Vite Dev Server (`frontend/vite.config.js`):** Configure the Vite development server to proxy all requests starting with `/api` to `http://backend:8000`.
+*   **Nginx Production Server (`frontend/nginx.conf`):** Update the Nginx configuration to include a `location /api/ { proxy_pass http://backend:8000/api/; }` block. Ensure standard proxy headers (`X-Real-IP`, `X-Forwarded-For`) are passed.
+*   **Frontend API Client (`frontend/src/api/client.js`):** Change the `baseURL` from `http://localhost:8000` to an empty string `""` or simply use relative paths like `/api/auth/login` in your axios instances.
 
-### B. Tech Stack & Architecture
-*   **Frontend:** React (Vite), Tailwind CSS, Nginx PWA.
-*   **Backend:** Python, FastAPI, SQLAlchemy (PostgreSQL).
-*   **Authentication:** Dual-system supporting local email/password (with bcrypt hashing) and a mock Firebase setup for development. 
-*   **Infrastructure:** Docker Compose (bare-metal host), Redis (caching/queues), Cloudflare Tunnels (secure external access), and Cloudflare R2 (CDN/Storage).
+## 3. CORS Configuration (`backend/src/main.py`)
+*   Ensure the FastAPI CORS middleware in `main.py` is configured to allow `origins=["*"]` (or explicitly `"http://localhost"`, `"http://localhost:5173"`) with `allow_credentials=True`, `allow_methods=["*"]`, and `allow_headers=["*"]`.
 
-### C. Role & Permission Matrix
-Briefly define the three core roles and their capabilities:
-1.  **Platform Admin:** Global oversight and Venue provisioning.
-2.  **Venue Manager:** Shift creation, roster management, manual request approvals, and worker whitelisting.
-3.  **Worker:** Shift filtering/requesting, GPS-based check-in/out, and shift swapping.
-
-### D. Local Development Setup
-Provide clear, step-by-step instructions for a new developer to spin up the project locally:
-1.  Copying `.env.template` and `.secrets/.secrets.env.template` to their actual `.env` and `.secrets.env` counterparts.
-2.  Running `docker compose up --build` to start the application.
-3.  Logging in with the default seeded super-admin and worker credentials.
-
-Make the README highly professional, using Markdown tables for the Role Matrix and code blocks for the terminal commands.
+Rebuild the containers using the new Dockerfile specifications and verify that the frontend routes API calls through the proxy successfully.

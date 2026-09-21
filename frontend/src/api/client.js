@@ -1,15 +1,22 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: '',
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Request Interceptor: read token from localStorage and attach to Authorization header
+// Request Interceptor: ensure relative /api path and attach Authorization bearer token
 api.interceptors.request.use(
   (config) => {
+    // Route through /api proxy if not absolute URL
+    if (config.url && !config.url.startsWith('http://') && !config.url.startsWith('https://')) {
+      if (!config.url.startsWith('/api')) {
+        config.url = `/api${config.url.startsWith('/') ? '' : '/'}${config.url}`;
+      }
+    }
+
     const token = localStorage.getItem('token') || localStorage.getItem('shiftboard_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -24,7 +31,8 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      if (!error.config.url.includes('/auth/login') && !error.config.url.includes('/auth/register')) {
+      const url = error.config?.url || '';
+      if (!url.includes('/auth/login') && !url.includes('/auth/register')) {
         localStorage.removeItem('token');
         localStorage.removeItem('shiftboard_token');
         localStorage.removeItem('user');
