@@ -83,7 +83,7 @@ export function AuthProvider({ children }) {
 
   const refreshProfile = async () => {
     try {
-      const res = await api.get('/users/profile');
+      const res = await api.get('/users/me');
       setUser(res.data);
       localStorage.setItem('shiftboard_user', JSON.stringify(res.data));
       return res.data;
@@ -91,6 +91,11 @@ export function AuthProvider({ children }) {
       console.error('Failed to refresh profile:', err);
     }
   };
+
+  const normalizedRole = (user?.role || '').toUpperCase();
+  const isAdmin = normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'PLATFORM_ADMIN';
+  const isManager = isAdmin || normalizedRole === 'VENUE_MANAGER';
+  const isWorker = normalizedRole === 'WORKER';
 
   return (
     <AuthContext.Provider
@@ -104,9 +109,9 @@ export function AuthProvider({ children }) {
         logout,
         refreshProfile,
         isAuthenticated: !!token,
-        isAdmin: user?.role === 'platform_admin',
-        isManager: user?.role === 'venue_manager' || user?.role === 'platform_admin',
-        isWorker: user?.role === 'worker',
+        isAdmin,
+        isManager,
+        isWorker,
       }}
     >
       {children}

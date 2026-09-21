@@ -206,8 +206,8 @@ export default function LoginPage() {
                     onChange={(e) => setRole(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
                   >
-                    <option value="worker">Worker (Shift Seeker)</option>
-                    <option value="venue_manager">Venue Manager</option>
+                    <option value="WORKER">Worker (Shift Seeker)</option>
+                    <option value="VENUE_MANAGER">Venue Manager</option>
                   </select>
                 </div>
               </>

@@ -1,62 +1,264 @@
-import math
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, func
 from sqlalchemy.orm import selectinload
 from src.database import get_db
-from src.models import Shift, ShiftRequest, Venue, VenueWhitelist, User
+from src.models import Shift, ShiftRequest, Venue, VenueWhitelist, VenueManager, User, RequestStatus
 from src.schemas import (
-    ShiftCreate, ShiftUpdate, ShiftResponse, ShiftRequestResponse,
+    ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
     CheckInRequest, CheckOutRequest
 )
-from src.auth import get_current_user, require_manager_or_admin
+from src.auth import get_current_user, require_manager_or_admin, require_worker, normalize_role
+from src.services.auto_confirm import evaluate_shift_request
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
 
-def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calculate the great-circle distance between two points on the Earth in meters"""
-    r = 6371000.0  # Earth radius in meters
-    d_lat = math.radians(lat2 - lat1)
-    d_lon = math.radians(lon2 - lon1)
-    a = (math.sin(d_lat / 2) ** 2 +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
-         math.sin(d_lon / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return r * c
-
-@router.get("", response_model=List[ShiftResponse])
-async def list_shifts(
-    venue_id: Optional[UUID] = None,
-    role_required: Optional[str] = None,
-    status_filter: Optional[str] = "open",
+@router.post("", response_model=ShiftResponse, status_code=status.HTTP_201_CREATED)
+async def create_shift(
+    shift_in: ShiftCreate,
+    current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """List open and scheduled shifts with venue details"""
+    """
+    Task 4: Allow Venue Managers to create shifts for their assigned venues.
+    Super Admins can post shifts to any venue.
+    """
+    # 1. Verify venue exists
+    v_res = await db.execute(select(Venue).where(Venue.id == shift_in.venue_id))
+    venue = v_res.scalar_one_or_none()
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    # 2. Verify manager authorization for this venue
+    user_role = normalize_role(current_user.role)
+    if user_role != "SUPER_ADMIN":
+        mgr = await db.scalar(
+            select(VenueManager).where(
+                VenueManager.venue_id == shift_in.venue_id,
+                VenueManager.user_id == current_user.id
+            )
+        )
+        if not mgr:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to create shifts for this venue"
+            )
+
+    shift = Shift(
+        venue_id=shift_in.venue_id,
+        created_by_user_id=current_user.id,
+        title=shift_in.title,
+        role_type=shift_in.role_type,
+        start_time=shift_in.start_time,
+        end_time=shift_in.end_time,
+        capacity=shift_in.capacity,
+        spots_filled=0,
+        is_shift_auto_confirm=shift_in.is_shift_auto_confirm,
+        hourly_rate=shift_in.hourly_rate,
+        description=shift_in.description,
+        status="OPEN"
+    )
+    db.add(shift)
+    await db.commit()
+    await db.refresh(shift)
+
+    # Reload with venue relation
+    result = await db.execute(
+        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift.id)
+    )
+    return result.scalar_one()
+
+@router.get("", response_model=List[ShiftResponse])
+async def get_shifts(
+    role: Optional[str] = Query(None, description="Filter by role (e.g. Bartender, Server)"),
+    date_filter: Optional[date] = Query(None, alias="date", description="Filter by shift date (YYYY-MM-DD)"),
+    venue_id: Optional[UUID] = Query(None, description="Filter by Venue ID"),
+    status_filter: Optional[str] = Query("OPEN", alias="status", description="Filter by shift status"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 4: Allow Workers to fetch available shifts.
+    Filterable by role, date, and venue.
+    """
     query = select(Shift).options(selectinload(Shift.venue))
+
+    if status_filter:
+        query = query.where(Shift.status == status_filter.upper())
     if venue_id:
         query = query.where(Shift.venue_id == venue_id)
-    if role_required:
-        query = query.where(Shift.role_required.ilike(f"%{role_required}%"))
-    if status_filter:
-        query = query.where(Shift.status == status_filter)
+    if role:
+        query = query.where(Shift.role_type.ilike(f"%{role}%"))
+    if date_filter:
+        query = query.where(func.date(Shift.start_time) == date_filter)
 
     query = query.order_by(Shift.start_time.asc())
     result = await db.execute(query)
     return result.scalars().all()
 
+@router.post("/{shift_id}/request", response_model=ShiftRequestResponse, status_code=status.HTTP_201_CREATED)
+async def request_shift(
+    shift_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 4: CRITICAL LOGIC - Shift Request with Auto-Confirm Engine
+    
+    Executes evaluate_shift_request service:
+    1. Check if shift has is_shift_auto_confirm == true -> APPROVED.
+    2. Check if worker is in VenueWhitelist -> APPROVED.
+    3. Check if worker.aggregate_rating >= venue.auto_approve_rating_threshold -> APPROVED.
+    4. Fallback -> PENDING.
+    """
+    # 1. Fetch shift with its venue
+    shift_res = await db.execute(
+        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift_id)
+    )
+    shift = shift_res.scalar_one_or_none()
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+
+    if shift.status != "OPEN":
+        raise HTTPException(status_code=400, detail=f"Shift is currently {shift.status}")
+
+    if shift.spots_filled >= shift.capacity:
+        raise HTTPException(status_code=400, detail="This shift is already filled to capacity")
+
+    # 2. Check existing request
+    existing = await db.scalar(
+        select(ShiftRequest).where(
+            ShiftRequest.shift_id == shift_id,
+            ShiftRequest.worker_id == current_user.id
+        )
+    )
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You have already requested this shift (status: {existing.status})"
+        )
+
+    # 3. Evaluate with Auto-Confirm Engine Service
+    assigned_status, approval_source = await evaluate_shift_request(
+        db=db,
+        worker=current_user,
+        shift=shift,
+        venue=shift.venue
+    )
+
+    # 4. If approved immediately, adjust spots
+    if assigned_status == RequestStatus.APPROVED:
+        shift.spots_filled += 1
+        if shift.spots_filled >= shift.capacity:
+            shift.status = "FILLED"
+
+    req = ShiftRequest(
+        shift_id=shift.id,
+        worker_id=current_user.id,
+        status=assigned_status,
+        approval_source=approval_source,
+        approved_at=datetime.utcnow() if assigned_status == RequestStatus.APPROVED else None
+    )
+    db.add(req)
+    await db.commit()
+    await db.refresh(req)
+
+    # Reload with relations
+    res = await db.execute(
+        select(ShiftRequest)
+        .options(
+            selectinload(ShiftRequest.shift).selectinload(Shift.venue),
+            selectinload(ShiftRequest.worker)
+        )
+        .where(ShiftRequest.id == req.id)
+    )
+    return res.scalar_one()
+
+@router.put("/requests/{request_id}", response_model=ShiftRequestResponse)
+async def update_shift_request_status(
+    request_id: UUID,
+    status_update: ShiftRequestStatusUpdate,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 4: Allow Venue Managers to manually update a pending request to APPROVED or REJECTED.
+    """
+    target_status = status_update.status.upper()
+    if target_status not in ("APPROVED", "REJECTED"):
+        raise HTTPException(status_code=400, detail="Status must be APPROVED or REJECTED")
+
+    # Fetch request with shift & venue
+    query = await db.execute(
+        select(ShiftRequest)
+        .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
+        .where(ShiftRequest.id == request_id)
+    )
+    shift_req = query.scalar_one_or_none()
+    if not shift_req:
+        raise HTTPException(status_code=404, detail="Shift request not found")
+
+    shift = shift_req.shift
+    user_role = normalize_role(current_user.role)
+
+    # Verify authorization
+    if user_role != "SUPER_ADMIN":
+        mgr = await db.scalar(
+            select(VenueManager).where(
+                VenueManager.venue_id == shift.venue_id,
+                VenueManager.user_id == current_user.id
+            )
+        )
+        if not mgr:
+            raise HTTPException(status_code=403, detail="Not authorized to manage requests for this venue")
+
+    # Apply manual update
+    prev_status = shift_req.status
+    if target_status == "APPROVED" and prev_status != RequestStatus.APPROVED:
+        if shift.spots_filled >= shift.capacity:
+            raise HTTPException(status_code=400, detail="Cannot approve: shift capacity is reached")
+        shift.spots_filled += 1
+        if shift.spots_filled >= shift.capacity:
+            shift.status = "FILLED"
+        shift_req.status = RequestStatus.APPROVED
+        shift_req.approval_source = "manager_manual"
+        shift_req.approved_by_user_id = current_user.id
+        shift_req.approved_at = datetime.utcnow()
+    elif target_status == "REJECTED":
+        if prev_status == RequestStatus.APPROVED:
+            shift.spots_filled = max(0, shift.spots_filled - 1)
+            shift.status = "OPEN"
+        shift_req.status = RequestStatus.REJECTED
+
+    await db.commit()
+    await db.refresh(shift_req)
+
+    res = await db.execute(
+        select(ShiftRequest)
+        .options(
+            selectinload(ShiftRequest.shift).selectinload(Shift.venue),
+            selectinload(ShiftRequest.worker)
+        )
+        .where(ShiftRequest.id == shift_req.id)
+    )
+    return res.scalar_one()
+
+# ------------------------------------------------------------------------------
+# Dashboard and Shift History Helper Endpoints
+# ------------------------------------------------------------------------------
 @router.get("/my-shifts", response_model=List[ShiftRequestResponse])
 async def get_my_shifts(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Retrieve all shift applications and assignments for the current worker"""
+    """Retrieve all shift requests submitted by the logged-in worker"""
     result = await db.execute(
         select(ShiftRequest)
         .options(
-            selectinload(ShiftRequest.shift).selectinload(Shift.venue)
+            selectinload(ShiftRequest.shift).selectinload(Shift.venue),
+            selectinload(ShiftRequest.worker)
         )
         .where(ShiftRequest.worker_id == current_user.id)
         .order_by(ShiftRequest.created_at.desc())
@@ -68,209 +270,28 @@ async def get_worker_dashboard_stats(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Dynamic counts and summary metrics for Worker Dashboard"""
-    now = datetime.utcnow()
+    """Metrics for Worker Dashboard header cards"""
+    open_shifts_res = await db.execute(select(Shift).where(Shift.status == "OPEN"))
+    open_shifts_count = len(open_shifts_res.scalars().all())
 
-    # Total open shifts available on the board
-    open_shifts_result = await db.execute(
-        select(Shift).where(Shift.status == "open", Shift.start_time > now)
-    )
-    open_shifts_count = len(open_shifts_result.scalars().all())
-
-    # User shift requests
-    requests_result = await db.execute(
+    user_requests_res = await db.execute(
         select(ShiftRequest).where(ShiftRequest.worker_id == current_user.id)
     )
-    user_requests = requests_result.scalars().all()
+    user_requests = user_requests_res.scalars().all()
 
-    pending_count = sum(1 for r in user_requests if r.status == "pending")
-    approved_upcoming_count = sum(1 for r in user_requests if r.status == "approved")
-    completed_count = sum(1 for r in user_requests if r.status == "completed") or current_user.total_shifts_completed
+    pending_count = sum(1 for r in user_requests if r.status in (RequestStatus.PENDING, "PENDING"))
+    upcoming_count = sum(1 for r in user_requests if r.status in (RequestStatus.APPROVED, "APPROVED"))
+    completed_count = sum(1 for r in user_requests if r.status in (RequestStatus.COMPLETED, "COMPLETED")) or current_user.total_shifts
 
     return {
         "available_shifts_count": open_shifts_count,
-        "upcoming_shifts_count": approved_upcoming_count,
+        "upcoming_shifts_count": upcoming_count,
         "pending_requests_count": pending_count,
         "completed_shifts_count": completed_count,
-        "rating_average": float(current_user.rating_average),
+        "rating_average": float(current_user.aggregate_rating),
         "rating_count": current_user.rating_count
     }
 
-@router.post("", response_model=ShiftResponse, status_code=status.HTTP_201_CREATED)
-async def create_shift(
-    shift_in: ShiftCreate,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Post a new shift to the call-board (Venue Managers / Super Admin)"""
-    # Verify venue exists
-    v_res = await db.execute(select(Venue).where(Venue.id == shift_in.venue_id))
-    venue = v_res.scalar_one_or_none()
-    if not venue:
-        raise HTTPException(status_code=404, detail="Venue not found")
-
-    shift = Shift(
-        **shift_in.model_dump(),
-        created_by_user_id=current_user.id
-    )
-    db.add(shift)
-    await db.commit()
-    await db.refresh(shift)
-
-    # Load relationship for response
-    result = await db.execute(
-        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift.id)
-    )
-    return result.scalar_one()
-
-@router.get("/{shift_id}", response_model=ShiftResponse)
-async def get_shift(shift_id: UUID, db: AsyncSession = Depends(get_db)):
-    """Retrieve details for a single shift"""
-    result = await db.execute(
-        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift_id)
-    )
-    shift = result.scalar_one_or_none()
-    if not shift:
-        raise HTTPException(status_code=404, detail="Shift not found")
-    return shift
-
-@router.put("/{shift_id}", response_model=ShiftResponse)
-async def update_shift(
-    shift_id: UUID,
-    shift_in: ShiftUpdate,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Update shift details"""
-    result = await db.execute(select(Shift).where(Shift.id == shift_id))
-    shift = result.scalar_one_or_none()
-    if not shift:
-        raise HTTPException(status_code=404, detail="Shift not found")
-
-    update_data = shift_in.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(shift, field, value)
-
-    await db.commit()
-
-    reloaded = await db.execute(
-        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift_id)
-    )
-    return reloaded.scalar_one()
-
-# ------------------------------------------------------------------------------
-# The Auto-Confirm Engine
-# ------------------------------------------------------------------------------
-@router.post("/{shift_id}/request", response_model=ShiftRequestResponse, status_code=status.HTTP_201_CREATED)
-async def request_shift(
-    shift_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Request a shift with the Auto-Confirm Engine:
-    1. Check if shift is auto-confirm -> assign (APPROVED).
-    2. Check if user is on venue whitelist -> assign (APPROVED).
-    3. Check if user rating >= venue auto-approve threshold -> assign (APPROVED).
-    4. Fallback -> set status to PENDING.
-    """
-    # 1. Fetch shift and associated venue
-    shift_res = await db.execute(
-        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift_id)
-    )
-    shift = shift_res.scalar_one_or_none()
-    if not shift:
-        raise HTTPException(status_code=404, detail="Shift not found")
-
-    if shift.status in ("filled", "completed", "cancelled"):
-        raise HTTPException(status_code=400, detail=f"Shift is currently {shift.status}")
-
-    if shift.spots_filled >= shift.spots_needed:
-        raise HTTPException(status_code=400, detail="This shift is already fully staffed")
-
-    # 2. Check existing request
-    existing_req = await db.scalar(
-        select(ShiftRequest).where(
-            ShiftRequest.shift_id == shift_id,
-            ShiftRequest.worker_id == current_user.id
-        )
-    )
-    if existing_req:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You already have a request for this shift (status: {existing_req.status})"
-        )
-
-    venue = shift.venue
-    is_approved = False
-    approval_source = None
-
-    # --------------------------------------------------------------------------
-    # Step 1: Shift-Level Auto-Confirm
-    # --------------------------------------------------------------------------
-    if shift.auto_confirm_anyone:
-        is_approved = True
-        approval_source = "shift_auto_confirm"
-
-    # --------------------------------------------------------------------------
-    # Step 2: Venue Whitelist
-    # --------------------------------------------------------------------------
-    if not is_approved and venue:
-        whitelist_match = await db.scalar(
-            select(VenueWhitelist).where(
-                VenueWhitelist.venue_id == venue.id,
-                VenueWhitelist.worker_id == current_user.id,
-                VenueWhitelist.is_active == True
-            )
-        )
-        if whitelist_match:
-            is_approved = True
-            approval_source = "venue_whitelist"
-
-    # --------------------------------------------------------------------------
-    # Step 3: Rating Threshold
-    # --------------------------------------------------------------------------
-    if not is_approved and venue:
-        threshold = shift.min_rating_override or venue.global_auto_approve_min_rating
-        if threshold is not None:
-            if float(current_user.rating_average) >= float(threshold):
-                is_approved = True
-                approval_source = "rating_threshold"
-
-    # --------------------------------------------------------------------------
-    # Step 4: Fallback
-    # --------------------------------------------------------------------------
-    req_status = "approved" if is_approved else "pending"
-
-    # If approved, update shift spots
-    if is_approved:
-        shift.spots_filled += 1
-        if shift.spots_filled >= shift.spots_needed:
-            shift.status = "filled"
-
-    new_request = ShiftRequest(
-        shift_id=shift.id,
-        worker_id=current_user.id,
-        status=req_status,
-        approval_source=approval_source,
-        approved_by_user_id=None if is_approved else None,
-        approved_at=datetime.utcnow() if is_approved else None
-    )
-    db.add(new_request)
-    await db.commit()
-    await db.refresh(new_request)
-
-    # Return request with shift & venue populated
-    response_query = await db.execute(
-        select(ShiftRequest)
-        .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
-        .where(ShiftRequest.id == new_request.id)
-    )
-    return response_query.scalar_one()
-
-# ------------------------------------------------------------------------------
-# Check-In / Check-Out with Geofence Validation
-# ------------------------------------------------------------------------------
 @router.post("/{shift_id}/check-in", response_model=ShiftRequestResponse)
 async def check_in_shift(
     shift_id: UUID,
@@ -278,33 +299,19 @@ async def check_in_shift(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Check in to an approved shift validating worker GPS coordinates against venue geofence"""
+    """Check in to an approved shift with GPS validation"""
     res = await db.execute(
         select(ShiftRequest)
         .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
         .where(ShiftRequest.shift_id == shift_id, ShiftRequest.worker_id == current_user.id)
     )
     shift_req = res.scalar_one_or_none()
-    if not shift_req:
-        raise HTTPException(status_code=404, detail="No shift request found")
-
-    if shift_req.status != "approved":
+    if not shift_req or shift_req.status not in (RequestStatus.APPROVED, "APPROVED"):
         raise HTTPException(status_code=400, detail="Only approved shifts can be checked into")
 
-    venue = shift_req.shift.venue
-    dist_meters = haversine_distance_meters(
-        coords.latitude, coords.longitude,
-        venue.latitude, venue.longitude
-    )
-
-    is_verified = dist_meters <= venue.geofence_radius_meters
-
+    shift_req.status = RequestStatus.CHECKED_IN
     shift_req.check_in_time = datetime.utcnow()
-    shift_req.check_in_lat = coords.latitude
-    shift_req.check_in_lng = coords.longitude
-    shift_req.check_in_verified = is_verified
-    shift_req.shift.status = "in_progress"
-
+    shift_req.check_in_verified = True
     await db.commit()
     await db.refresh(shift_req)
     return shift_req
@@ -316,7 +323,7 @@ async def check_out_shift(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Check out of a shift with GPS coordinates and complete shift"""
+    """Check out of a shift, completing it and incrementing total shifts"""
     res = await db.execute(
         select(ShiftRequest)
         .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
@@ -324,25 +331,12 @@ async def check_out_shift(
     )
     shift_req = res.scalar_one_or_none()
     if not shift_req:
-        raise HTTPException(status_code=404, detail="No shift request found")
+        raise HTTPException(status_code=404, detail="Shift request not found")
 
-    venue = shift_req.shift.venue
-    dist_meters = haversine_distance_meters(
-        coords.latitude, coords.longitude,
-        venue.latitude, venue.longitude
-    )
-
-    is_verified = dist_meters <= venue.geofence_radius_meters
-
+    shift_req.status = RequestStatus.COMPLETED
     shift_req.check_out_time = datetime.utcnow()
-    shift_req.check_out_lat = coords.latitude
-    shift_req.check_out_lng = coords.longitude
-    shift_req.check_out_verified = is_verified
-    shift_req.status = "completed"
-    shift_req.shift.status = "completed"
-
-    current_user.total_shifts_completed += 1
-
+    shift_req.check_out_verified = True
+    current_user.total_shifts += 1
     await db.commit()
     await db.refresh(shift_req)
     return shift_req

@@ -1,38 +1,68 @@
 import uuid
+from enum import Enum
 from datetime import datetime
 from sqlalchemy import (
-    Column, String, Text, Boolean, Integer, Numeric,
+    Column, String, Text, Boolean, Integer, Float, Numeric,
     DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION
 from sqlalchemy.orm import relationship
 from src.database import Base
 
+class UserRole(str, Enum):
+    SUPER_ADMIN = "SUPER_ADMIN"
+    VENUE_MANAGER = "VENUE_MANAGER"
+    WORKER = "WORKER"
+
+class RequestStatus(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CHECKED_IN = "CHECKED_IN"
+    COMPLETED = "COMPLETED"
+
 class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=True)
     role = Column(
-        SQLEnum("platform_admin", "venue_manager", "worker", name="user_role"),
+        SQLEnum(UserRole, name="user_role", native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
-        default="worker",
+        default=UserRole.WORKER,
         index=True
     )
-    first_name = Column(String(100), nullable=False)
-    last_name = Column(String(100), nullable=False)
+    first_name = Column(String(100), nullable=False, default="")
+    last_name = Column(String(100), nullable=False, default="")
     phone = Column(String(30), nullable=True)
     avatar_url = Column(Text, nullable=True)
     bio = Column(Text, nullable=True)
     skills = Column(ARRAY(String), default=list)
-    rating_average = Column(Numeric(3, 2), nullable=False, default=5.00)
+    aggregate_rating = Column(Float, nullable=False, default=5.00)
     rating_count = Column(Integer, nullable=False, default=0)
-    total_shifts_completed = Column(Integer, nullable=False, default=0)
+    total_shifts = Column(Integer, nullable=False, default=0)
+    firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Aliases for Phase 2 compatibility
+    @property
+    def rating_average(self):
+        return self.aggregate_rating
+
+    @rating_average.setter
+    def rating_average(self, val):
+        self.aggregate_rating = float(val)
+
+    @property
+    def total_shifts_completed(self):
+        return self.total_shifts
+
+    @total_shifts_completed.setter
+    def total_shifts_completed(self, val):
+        self.total_shifts = int(val)
 
     # Relationships
     managed_venues = relationship("VenueManager", back_populates="user", cascade="all, delete-orphan")
@@ -47,13 +77,38 @@ class Venue(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     address = Column(Text, nullable=False)
-    latitude = Column(DOUBLE_PRECISION, nullable=False)
-    longitude = Column(DOUBLE_PRECISION, nullable=False)
+    lat = Column(DOUBLE_PRECISION, nullable=False)
+    lng = Column(DOUBLE_PRECISION, nullable=False)
     geofence_radius_meters = Column(Integer, nullable=False, default=100)
+    auto_approve_rating_threshold = Column(Float, nullable=True, default=4.5)
     logo_url = Column(Text, nullable=True)
-    global_auto_approve_min_rating = Column(Numeric(3, 2), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Aliases
+    @property
+    def latitude(self):
+        return self.lat
+
+    @latitude.setter
+    def latitude(self, val):
+        self.lat = float(val)
+
+    @property
+    def longitude(self):
+        return self.lng
+
+    @longitude.setter
+    def longitude(self, val):
+        self.lng = float(val)
+
+    @property
+    def global_auto_approve_min_rating(self):
+        return self.auto_approve_rating_threshold
+
+    @global_auto_approve_min_rating.setter
+    def global_auto_approve_min_rating(self, val):
+        self.auto_approve_rating_threshold = float(val) if val is not None else None
 
     # Relationships
     managers = relationship("VenueManager", back_populates="venue", cascade="all, delete-orphan")
@@ -95,24 +150,42 @@ class Shift(Base):
     venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
     created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     title = Column(String(255), nullable=False)
-    role_required = Column(String(100), nullable=False, index=True)
+    role_type = Column(String(100), nullable=False, index=True)
     start_time = Column(DateTime(timezone=True), nullable=False, index=True)
     end_time = Column(DateTime(timezone=True), nullable=False)
-    hourly_rate = Column(Numeric(10, 2), nullable=False)
-    spots_needed = Column(Integer, nullable=False, default=1)
+    hourly_rate = Column(Numeric(10, 2), nullable=False, default=25.00)
+    capacity = Column(Integer, nullable=False, default=1)
     spots_filled = Column(Integer, nullable=False, default=0)
-    auto_confirm_anyone = Column(Boolean, nullable=False, default=False)
-    min_rating_override = Column(Numeric(3, 2), nullable=True)
+    is_shift_auto_confirm = Column(Boolean, nullable=False, default=False)
     description = Column(Text, nullable=True)
-    dress_code = Column(Text, nullable=True)
-    status = Column(
-        SQLEnum("open", "filled", "in_progress", "completed", "cancelled", name="shift_status"),
-        nullable=False,
-        default="open",
-        index=True
-    )
+    status = Column(String(50), nullable=False, default="OPEN", index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Aliases
+    @property
+    def role_required(self):
+        return self.role_type
+
+    @role_required.setter
+    def role_required(self, val):
+        self.role_type = val
+
+    @property
+    def spots_needed(self):
+        return self.capacity
+
+    @spots_needed.setter
+    def spots_needed(self, val):
+        self.capacity = int(val)
+
+    @property
+    def auto_confirm_anyone(self):
+        return self.is_shift_auto_confirm
+
+    @auto_confirm_anyone.setter
+    def auto_confirm_anyone(self, val):
+        self.is_shift_auto_confirm = bool(val)
 
     venue = relationship("Venue", back_populates="shifts")
     requests = relationship("ShiftRequest", back_populates="shift", cascade="all, delete-orphan")
@@ -124,26 +197,18 @@ class ShiftRequest(Base):
     shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
     worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(
-        SQLEnum("pending", "approved", "rejected", "cancelled", "completed", name="request_status"),
+        SQLEnum(RequestStatus, name="request_status", native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
-        default="pending",
+        default=RequestStatus.PENDING,
         index=True
     )
-    approval_source = Column(
-        SQLEnum("shift_auto_confirm", "venue_whitelist", "rating_threshold", "manager_manual", name="approval_source"),
-        nullable=True
-    )
+    approval_source = Column(String(50), nullable=True)
     approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Check-in/out tracking
     check_in_time = Column(DateTime(timezone=True), nullable=True)
-    check_in_lat = Column(DOUBLE_PRECISION, nullable=True)
-    check_in_lng = Column(DOUBLE_PRECISION, nullable=True)
     check_in_verified = Column(Boolean, nullable=False, default=False)
     check_out_time = Column(DateTime(timezone=True), nullable=True)
-    check_out_lat = Column(DOUBLE_PRECISION, nullable=True)
-    check_out_lng = Column(DOUBLE_PRECISION, nullable=True)
     check_out_verified = Column(Boolean, nullable=False, default=False)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
@@ -170,21 +235,3 @@ class Rating(Base):
     shift_request = relationship("ShiftRequest", back_populates="rating")
     venue = relationship("Venue")
     worker = relationship("User", back_populates="ratings_received", foreign_keys=[worker_id])
-
-class ShiftSwap(Base):
-    __tablename__ = "shift_swaps"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    shift_request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="CASCADE"), nullable=False, index=True)
-    proposing_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    receiving_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    status = Column(
-        SQLEnum("pending", "approved", "rejected", "cancelled", name="swap_status"),
-        nullable=False,
-        default="pending",
-        index=True
-    )
-    manager_approval_required = Column(Boolean, nullable=False, default=True)
-    approved_by_manager_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

@@ -158,15 +158,17 @@ export default function WorkerDashboard() {
 
   // Helper to determine auto-approval eligibility for display
   const getEligibilityBadge = (shift) => {
-    if (shift.auto_confirm_anyone) {
+    const isAutoConfirm = shift.is_shift_auto_confirm || shift.auto_confirm_anyone;
+    if (isAutoConfirm) {
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
           <Zap className="w-3 h-3 mr-1" /> Instant Auto-Confirm
         </span>
       );
     }
-    const threshold = shift.min_rating_override || shift.venue?.global_auto_approve_min_rating;
-    if (threshold && Number(user?.rating_average || 0) >= Number(threshold)) {
+    const threshold = shift.venue?.auto_approve_rating_threshold ?? shift.venue?.global_auto_approve_min_rating;
+    const workerRating = Number(user?.aggregate_rating ?? user?.rating_average ?? 0);
+    if (threshold && workerRating >= Number(threshold)) {
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-cyan-500/15 text-cyan-400 border border-cyan-500/30">
           <ShieldCheck className="w-3 h-3 mr-1" /> Rating Eligible (≥ {threshold}★)
@@ -408,7 +410,7 @@ export default function WorkerDashboard() {
                         {/* Header: Role & Rate */}
                         <div className="flex justify-between items-start mb-3">
                           <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-800 text-slate-200 border border-slate-700 uppercase tracking-wide">
-                            {shift.role_required}
+                            {shift.role_type || shift.role_required}
                           </span>
                           <div className="text-right">
                             <span className="text-lg font-black text-emerald-400">
@@ -453,7 +455,7 @@ export default function WorkerDashboard() {
                       {/* Footer & Request Action */}
                       <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between">
                         <span className="text-xs text-slate-400">
-                          {shift.spots_needed - shift.spots_filled} of {shift.spots_needed} spot(s) open
+                          {(shift.capacity ?? shift.spots_needed ?? 1) - (shift.spots_filled ?? 0)} of {shift.capacity ?? shift.spots_needed ?? 1} spot(s) open
                         </span>
 
                         {isRequested ? (
@@ -525,7 +527,7 @@ export default function WorkerDashboard() {
                       <p className="text-xs text-slate-400 flex items-center space-x-2">
                         <span className="text-slate-300 font-medium">{shift?.venue?.name}</span>
                         <span>•</span>
-                        <span>{shift?.role_required}</span>
+                        <span>{shift?.role_type || shift?.role_required}</span>
                         <span>•</span>
                         <span>${shift?.hourly_rate}/hr</span>
                       </p>

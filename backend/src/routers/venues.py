@@ -5,14 +5,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from src.database import get_db
-from src.models import Venue, VenueManager, VenueWhitelist, User
+from src.models import Venue, VenueManager, VenueWhitelist, User, UserRole
 from src.schemas import (
-    VenueCreate, VenueUpdate, VenueResponse,
-    VenueManagerAssign, WhitelistCreate, WhitelistResponse
+    VenueCreate, VenueUpdateSettings, VenueResponse,
+    WhitelistAddRequest, WhitelistResponse
 )
-from src.auth import get_current_user, require_admin, require_manager_or_admin
+from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
+
+async def verify_venue_manager_access(venue_id: UUID, user: User, db: AsyncSession) -> Venue:
+    """Verify that user is either a SUPER_ADMIN or an assigned manager for this venue"""
+    res = await db.execute(select(Venue).where(Venue.id == venue_id))
+    venue = res.scalar_one_or_none()
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    user_role = normalize_role(user.role)
+    if user_role == "SUPER_ADMIN":
+        return venue
+
+    # Check venue_managers junction table
+    mgr = await db.scalar(
+        select(VenueManager).where(
+            VenueManager.venue_id == venue_id,
+            VenueManager.user_id == user.id
+        )
+    )
+    if not mgr:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to manage this venue"
+        )
+    return venue
 
 @router.get("", response_model=List[VenueResponse])
 async def list_venues(db: AsyncSession = Depends(get_db)):
@@ -23,45 +48,56 @@ async def list_venues(db: AsyncSession = Depends(get_db)):
 @router.post("", response_model=VenueResponse, status_code=status.HTTP_201_CREATED)
 async def create_venue(
     venue_in: VenueCreate,
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """Create a new venue (Super Admin restricted)"""
+    """
+    Task 3: Create a new Venue profile.
+    Accessible by Super Admin or Venue Managers.
+    Automatically assigns the creator as manager in VenueManagers relation.
+    """
     venue = Venue(**venue_in.model_dump())
     db.add(venue)
     await db.commit()
     await db.refresh(venue)
 
-    # Automatically assign the creator as a manager
-    manager = VenueManager(venue_id=venue.id, user_id=current_user.id, is_primary=True)
-    db.add(manager)
+    # Assign creator in VenueManagers table
+    manager_entry = VenueManager(
+        venue_id=venue.id,
+        user_id=current_user.id,
+        is_primary=True
+    )
+    db.add(manager_entry)
     await db.commit()
+    await db.refresh(venue)
 
     return venue
 
 @router.get("/{venue_id}", response_model=VenueResponse)
 async def get_venue(venue_id: UUID, db: AsyncSession = Depends(get_db)):
-    """Get venue details by ID"""
+    """
+    Task 3: Retrieve venue details by ID.
+    """
     result = await db.execute(select(Venue).where(Venue.id == venue_id))
     venue = result.scalar_one_or_none()
     if not venue:
         raise HTTPException(status_code=404, detail="Venue not found")
     return venue
 
-@router.put("/{venue_id}", response_model=VenueResponse)
-async def update_venue(
+@router.put("/{venue_id}/settings", response_model=VenueResponse)
+async def update_venue_settings(
     venue_id: UUID,
-    venue_in: VenueUpdate,
+    settings_in: VenueUpdateSettings,
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update venue settings (auto-approve threshold, radius, details)"""
-    result = await db.execute(select(Venue).where(Venue.id == venue_id))
-    venue = result.scalar_one_or_none()
-    if not venue:
-        raise HTTPException(status_code=404, detail="Venue not found")
+    """
+    Task 3: Update auto_approve_rating_threshold and geofence parameters.
+    Protected by role & venue manager assignment check.
+    """
+    venue = await verify_venue_manager_access(venue_id, current_user, db)
 
-    update_data = venue_in.model_dump(exclude_unset=True)
+    update_data = settings_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(venue, field, value)
 
@@ -69,75 +105,24 @@ async def update_venue(
     await db.refresh(venue)
     return venue
 
-@router.delete("/{venue_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_venue(
-    venue_id: UUID,
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Delete a venue (Super Admin restricted)"""
-    result = await db.execute(select(Venue).where(Venue.id == venue_id))
-    venue = result.scalar_one_or_none()
-    if not venue:
-        raise HTTPException(status_code=404, detail="Venue not found")
-
-    await db.delete(venue)
-    await db.commit()
-
-@router.post("/{venue_id}/managers", status_code=status.HTTP_200_OK)
-async def assign_venue_manager(
-    venue_id: UUID,
-    assign_in: VenueManagerAssign,
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Assign a manager to a venue (Super Admin restricted)"""
-    # Verify venue
-    v_res = await db.execute(select(Venue).where(Venue.id == venue_id))
-    if not v_res.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Venue not found")
-
-    # Verify target user
-    u_res = await db.execute(select(User).where(User.id == assign_in.user_id))
-    target_user = u_res.scalar_one_or_none()
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # Update role to venue_manager if currently worker
-    if target_user.role == "worker":
-        target_user.role = "venue_manager"
-
-    manager = VenueManager(
-        venue_id=venue_id,
-        user_id=assign_in.user_id,
-        is_primary=assign_in.is_primary
-    )
-    db.add(manager)
-    await db.commit()
-    return {"message": f"Assigned {target_user.email} as manager to venue"}
-
-@router.get("/{venue_id}/whitelist", response_model=List[WhitelistResponse])
-async def get_venue_whitelist(
-    venue_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get active whitelisted workers for this venue"""
-    result = await db.execute(
-        select(VenueWhitelist)
-        .options(selectinload(VenueWhitelist.worker))
-        .where(VenueWhitelist.venue_id == venue_id, VenueWhitelist.is_active == True)
-    )
-    return result.scalars().all()
-
 @router.post("/{venue_id}/whitelist", response_model=WhitelistResponse)
 async def add_worker_to_whitelist(
     venue_id: UUID,
-    wl_in: WhitelistCreate,
+    wl_in: WhitelistAddRequest,
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """Add a worker to the venue's trusted whitelist (Condition 2 of hierarchy)"""
+    """
+    Task 3: Add a worker's user ID to this venue's auto-approve whitelist.
+    """
+    await verify_venue_manager_access(venue_id, current_user, db)
+
+    # Verify worker user exists
+    w_res = await db.execute(select(User).where(User.id == wl_in.worker_id))
+    worker = w_res.scalar_one_or_none()
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker user not found")
+
     existing = await db.scalar(
         select(VenueWhitelist).where(
             VenueWhitelist.venue_id == venue_id,
@@ -160,3 +145,33 @@ async def add_worker_to_whitelist(
     await db.commit()
     await db.refresh(new_entry)
     return new_entry
+
+@router.get("/{venue_id}/whitelist", response_model=List[WhitelistResponse])
+async def get_venue_whitelist(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """List active whitelisted workers for this venue"""
+    await verify_venue_manager_access(venue_id, current_user, db)
+    result = await db.execute(
+        select(VenueWhitelist)
+        .options(selectinload(VenueWhitelist.worker))
+        .where(VenueWhitelist.venue_id == venue_id, VenueWhitelist.is_active == True)
+    )
+    return result.scalars().all()
+
+@router.delete("/{venue_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_venue(
+    venue_id: UUID,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a venue (Super Admin only)"""
+    result = await db.execute(select(Venue).where(Venue.id == venue_id))
+    venue = result.scalar_one_or_none()
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    await db.delete(venue)
+    await db.commit()

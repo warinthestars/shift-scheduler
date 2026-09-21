@@ -1,4 +1,5 @@
 import jwt
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import Depends, HTTPException, status
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.config import settings
 from src.database import get_db
-from src.models import User
+from src.models import User, UserRole
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -31,6 +32,17 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return encoded_jwt
 
+def normalize_role(role_val) -> str:
+    if not role_val:
+        return "WORKER"
+    val = role_val.value if hasattr(role_val, "value") else str(role_val)
+    val = val.upper()
+    if val in ("PLATFORM_ADMIN", "SUPER_ADMIN", "ADMIN"):
+        return "SUPER_ADMIN"
+    if val in ("VENUE_MANAGER", "MANAGER"):
+        return "VENUE_MANAGER"
+    return "WORKER"
+
 async def get_or_create_mock_firebase_user(
     db: AsyncSession,
     email: str = "demo_google_worker@shiftboard.local",
@@ -43,7 +55,6 @@ async def get_or_create_mock_firebase_user(
     user = result.scalar_one_or_none()
 
     if not user:
-        # Check by email
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         if user:
@@ -54,13 +65,13 @@ async def get_or_create_mock_firebase_user(
             user = User(
                 email=email,
                 firebase_uid=mock_uid,
-                role="worker",
+                role=UserRole.WORKER,
                 first_name=first_name,
                 last_name=last_name,
                 phone="555-0199",
-                rating_average=4.90,
+                aggregate_rating=4.90,
                 rating_count=8,
-                total_shifts_completed=8,
+                total_shifts=8,
                 skills=["Bartender", "Server", "Barback"],
                 bio="Experienced mixologist and high-volume banquet server.",
                 is_active=True
@@ -107,12 +118,9 @@ async def get_current_user(
         if not user_id_str:
             raise HTTPException(status_code=401, detail="Invalid token payload")
     except jwt.PyJWTError:
-        # ----------------------------------------------------------------------
-        # 3. Real Firebase Auth Fallback (when mock is disabled)
-        # ----------------------------------------------------------------------
+        # Fallback to real firebase auth
         if not settings.USE_MOCK_FIREBASE:
             try:
-                import firebase_admin
                 from firebase_admin import auth as fb_auth
                 decoded_fb = fb_auth.verify_id_token(token)
                 fb_uid = decoded_fb.get("uid")
@@ -128,7 +136,6 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    import uuid
     try:
         user_uuid = uuid.UUID(user_id_str)
     except ValueError:
@@ -147,15 +154,22 @@ async def get_current_user(
 
 def require_role(allowed_roles: List[str]):
     """Role-based access control dependency factory"""
+    normalized_allowed = [r.upper() for r in allowed_roles]
     def role_checker(user: User = Depends(get_current_user)) -> User:
-        if user.role not in allowed_roles:
+        user_role = normalize_role(user.role)
+        # Super admin always passes
+        if user_role == "SUPER_ADMIN":
+            return user
+        if user_role not in normalized_allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: requires one of {allowed_roles}"
+                detail=f"Access forbidden: user role '{user_role}' does not have required permissions"
             )
         return user
     return role_checker
 
-require_admin = require_role(["platform_admin"])
-require_manager_or_admin = require_role(["platform_admin", "venue_manager"])
-require_worker = require_role(["worker", "platform_admin"])
+require_super_admin = require_role(["SUPER_ADMIN"])
+require_admin = require_super_admin  # Backward compatibility alias
+require_venue_manager = require_role(["VENUE_MANAGER", "SUPER_ADMIN"])
+require_manager_or_admin = require_venue_manager
+require_worker = require_role(["WORKER", "SUPER_ADMIN"])

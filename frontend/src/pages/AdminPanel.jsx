@@ -104,12 +104,12 @@ export default function AdminPanel() {
       await api.post('/shifts', {
         venue_id: shiftVenueId,
         title: shiftTitle,
-        role_required: shiftRole,
+        role_type: shiftRole,
         start_time: start,
         end_time: end,
         hourly_rate: parseFloat(shiftRate),
-        spots_needed: parseInt(shiftSpots, 10),
-        auto_confirm_anyone: shiftAutoConfirm,
+        capacity: parseInt(shiftSpots, 10),
+        is_shift_auto_confirm: shiftAutoConfirm,
       });
 
       setStatusMsg({ type: 'success', text: `Shift "${shiftTitle}" posted to the call-board!` });

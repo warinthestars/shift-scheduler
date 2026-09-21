@@ -1,7 +1,20 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from uuid import UUID
+from enum import Enum
+
+class RoleEnum(str, Enum):
+    SUPER_ADMIN = "SUPER_ADMIN"
+    VENUE_MANAGER = "VENUE_MANAGER"
+    WORKER = "WORKER"
+
+class RequestStatusEnum(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CHECKED_IN = "CHECKED_IN"
+    COMPLETED = "COMPLETED"
 
 # ------------------------------------------------------------------------------
 # Auth Schemas
@@ -13,11 +26,12 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
-    first_name: str
-    last_name: str
+    role: Optional[str] = "WORKER"  # "WORKER" or "VENUE_MANAGER"
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
     phone: Optional[str] = None
-    role: Optional[str] = "worker"
     skills: Optional[List[str]] = []
+    bio: Optional[str] = None
 
 class FirebaseLoginRequest(BaseModel):
     firebase_token: str
@@ -45,16 +59,25 @@ class UserBase(BaseModel):
 
 class UserResponse(UserBase):
     id: UUID
-    rating_average: float
+    aggregate_rating: float
     rating_count: int
-    total_shifts_completed: int
+    total_shifts: int
     is_active: bool
     created_at: datetime
+
+    # For UI compatibility
+    @property
+    def rating_average(self) -> float:
+        return self.aggregate_rating
+
+    @property
+    def total_shifts_completed(self) -> int:
+        return self.total_shifts
 
     class Config:
         from_attributes = True
 
-class UserUpdateProfile(BaseModel):
+class UserUpdateMe(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
@@ -67,7 +90,8 @@ class UserBrief(BaseModel):
     first_name: str
     last_name: str
     email: str
-    rating_average: float
+    role: str
+    aggregate_rating: float
 
     class Config:
         from_attributes = True
@@ -77,26 +101,25 @@ class UserBrief(BaseModel):
 # ------------------------------------------------------------------------------
 class VenueBase(BaseModel):
     name: str
-    description: Optional[str] = None
     address: str
-    latitude: float
-    longitude: float
+    lat: float
+    lng: float
     geofence_radius_meters: int = 100
+    auto_approve_rating_threshold: Optional[float] = 4.5
+    description: Optional[str] = None
     logo_url: Optional[str] = None
-    global_auto_approve_min_rating: Optional[float] = None
 
 class VenueCreate(VenueBase):
     pass
 
-class VenueUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    address: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+class VenueUpdateSettings(BaseModel):
+    auto_approve_rating_threshold: Optional[float] = None
     geofence_radius_meters: Optional[int] = None
-    logo_url: Optional[str] = None
-    global_auto_approve_min_rating: Optional[float] = None
+    name: Optional[str] = None
+    address: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    description: Optional[str] = None
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -106,11 +129,7 @@ class VenueResponse(VenueBase):
     class Config:
         from_attributes = True
 
-class VenueManagerAssign(BaseModel):
-    user_id: UUID
-    is_primary: bool = False
-
-class WhitelistCreate(BaseModel):
+class WhitelistAddRequest(BaseModel):
     worker_id: UUID
     notes: Optional[str] = None
 
@@ -129,42 +148,45 @@ class WhitelistResponse(BaseModel):
 # ------------------------------------------------------------------------------
 # Shift Schemas
 # ------------------------------------------------------------------------------
-class ShiftBase(BaseModel):
+class ShiftCreate(BaseModel):
     venue_id: UUID
     title: str
-    role_required: str
+    role_type: str
     start_time: datetime
     end_time: datetime
-    hourly_rate: float
-    spots_needed: int = 1
-    auto_confirm_anyone: bool = False
-    min_rating_override: Optional[float] = None
+    capacity: int = 1
+    is_shift_auto_confirm: bool = False
+    hourly_rate: float = 25.00
     description: Optional[str] = None
-    dress_code: Optional[str] = None
 
-class ShiftCreate(ShiftBase):
-    pass
-
-class ShiftUpdate(BaseModel):
-    title: Optional[str] = None
-    role_required: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    hourly_rate: Optional[float] = None
-    spots_needed: Optional[int] = None
-    auto_confirm_anyone: Optional[bool] = None
-    min_rating_override: Optional[float] = None
-    description: Optional[str] = None
-    dress_code: Optional[str] = None
-    status: Optional[str] = None
-
-class ShiftResponse(ShiftBase):
+class ShiftResponse(BaseModel):
     id: UUID
+    venue_id: UUID
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    capacity: int
     spots_filled: int
+    is_shift_auto_confirm: bool
+    hourly_rate: float
+    description: Optional[str] = None
     status: str
-    created_by_user_id: Optional[UUID] = None
     created_at: datetime
     venue: Optional[VenueResponse] = None
+
+    # Aliases
+    @property
+    def role_required(self) -> str:
+        return self.role_type
+
+    @property
+    def spots_needed(self) -> int:
+        return self.capacity
+
+    @property
+    def auto_confirm_anyone(self) -> bool:
+        return self.is_shift_auto_confirm
 
     class Config:
         from_attributes = True
@@ -182,9 +204,13 @@ class ShiftRequestResponse(BaseModel):
     check_out_verified: bool
     created_at: datetime
     shift: Optional[ShiftResponse] = None
+    worker: Optional[UserBrief] = None
 
     class Config:
         from_attributes = True
+
+class ShiftRequestStatusUpdate(BaseModel):
+    status: str = Field(description="Must be APPROVED or REJECTED")
 
 class CheckInRequest(BaseModel):
     latitude: float
@@ -194,25 +220,4 @@ class CheckOutRequest(BaseModel):
     latitude: float
     longitude: float
 
-# ------------------------------------------------------------------------------
-# Rating Schemas
-# ------------------------------------------------------------------------------
-class RatingCreate(BaseModel):
-    shift_request_id: UUID
-    rating: int = Field(ge=1, le=5)
-    review: Optional[str] = None
-
-class RatingResponse(BaseModel):
-    id: UUID
-    shift_request_id: UUID
-    venue_id: UUID
-    worker_id: UUID
-    rating: int
-    review: Optional[str] = None
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-# Avoid circular reference in Pydantic v2
 TokenResponse.model_rebuild()
