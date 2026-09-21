@@ -19,10 +19,12 @@ class Settings(BaseSettings):
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://:shiftboard_redis_pass@redis:6379/0")
 
     # JWT Authentication
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "fallback_secret_key_for_local_dev_only")
     JWT_SECRET_KEY: str = os.getenv(
         "JWT_SECRET_KEY",
-        "shiftboard_local_jwt_secret_key_please_change_in_production_32chars"
+        os.getenv("SECRET_KEY", "fallback_secret_key_for_local_dev_only")
     )
+    ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 

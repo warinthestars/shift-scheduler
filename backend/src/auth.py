@@ -1,9 +1,12 @@
+import os
 import uuid
+import logging
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
+from passlib.exc import UnknownHashError
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -11,17 +14,27 @@ from src.config import settings
 from src.database import get_db
 from src.models import User, UserRole
 
+logger = logging.getLogger("shiftboard.auth")
+
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# JWT configuration with fallback
+SECRET_KEY = os.getenv("SECRET_KEY", getattr(settings, "SECRET_KEY", "fallback_secret_key_for_local_dev_only"))
+ALGORITHM = "HS256"
 
 # Bearer token extractor
 bearer_scheme = HTTPBearer(auto_error=False)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plain password against the stored hashed password"""
-    if not hashed_password:
+    """Verify a plain password against the stored hashed password defensively"""
+    if not hashed_password or not plain_password:
         return False
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (UnknownHashError, ValueError, Exception) as e:
+        logger.warning(f"verify_password caught invalid hash format: {e}")
+        return False
 
 def get_password_hash(password: str) -> str:
     """Generate bcrypt hash for a plain password"""
@@ -32,7 +45,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 def normalize_role(role_val) -> str:
@@ -117,7 +130,7 @@ async def get_current_user(
     # 2. Local JWT Token Evaluation (python-jose)
     # --------------------------------------------------------------------------
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id_str: str = payload.get("sub")
         if not user_id_str:
             raise HTTPException(status_code=401, detail="Invalid token payload: missing sub")

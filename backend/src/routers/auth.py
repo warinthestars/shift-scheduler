@@ -58,11 +58,18 @@ async def register(request: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.refresh(user)
 
     # Return JWT containing sub (ID), role, and venue_id
-    token = create_access_token(data={
-        "sub": str(user.id),
-        "role": normalize_role(user.role),
-        "venue_id": None
-    })
+    try:
+        token = create_access_token(data={
+            "sub": str(user.id),
+            "role": normalize_role(user.role),
+            "venue_id": None
+        })
+    except Exception as e:
+        print(f"JWT Generation Error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error."
+        )
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -107,7 +114,14 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
         "role": user_role_str,
         "venue_id": venue_id_str
     }
-    token = create_access_token(data=token_payload)
+    try:
+        token = create_access_token(data=token_payload)
+    except Exception as e:
+        print(f"JWT Generation Error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error."
+        )
 
     user_resp = UserResponse.model_validate(user)
     user_resp.venue_id = venue_id_str
@@ -169,11 +183,18 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
             )
 
     user_role_str = normalize_role(user.role)
-    jwt_token = create_access_token(data={
-        "sub": str(user.id),
-        "role": user_role_str,
-        "venue_id": getattr(user, "venue_id", None)
-    })
+    try:
+        jwt_token = create_access_token(data={
+            "sub": str(user.id),
+            "role": user_role_str,
+            "venue_id": getattr(user, "venue_id", None)
+        })
+    except Exception as e:
+        print(f"JWT Generation Error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error."
+        )
     return TokenResponse(
         access_token=jwt_token,
         token_type="bearer",
