@@ -5,9 +5,17 @@ from uuid import UUID
 from enum import Enum
 
 class RoleEnum(str, Enum):
-    SUPER_ADMIN = "SUPER_ADMIN"
-    VENUE_MANAGER = "VENUE_MANAGER"
-    WORKER = "WORKER"
+    platform_admin = "platform_admin"
+    venue_manager = "venue_manager"
+    worker = "worker"
+
+    # Backward compatibility aliases
+    PLATFORM_ADMIN = "platform_admin"
+    VENUE_MANAGER = "venue_manager"
+    WORKER = "worker"
+    SUPER_ADMIN = "platform_admin"
+
+UserRole = RoleEnum
 
 class RequestStatusEnum(str, Enum):
     PENDING = "PENDING"

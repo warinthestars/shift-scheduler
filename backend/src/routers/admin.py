@@ -30,8 +30,8 @@ async def get_admin_stats(
     users = (await db.execute(select(User))).scalars().all()
     requests = (await db.execute(select(ShiftRequest))).scalars().all()
 
-    workers_count = sum(1 for u in users if u.role in (UserRole.WORKER, "worker"))
-    managers_count = sum(1 for u in users if u.role in (UserRole.VENUE_MANAGER, "venue_manager"))
+    workers_count = sum(1 for u in users if u.role in (UserRole.worker, "worker"))
+    managers_count = sum(1 for u in users if u.role in (UserRole.venue_manager, "venue_manager"))
     open_shifts = sum(1 for s in shifts if s.status == "OPEN")
     pending_requests = sum(1 for r in requests if r.status in ("PENDING", "pending"))
 

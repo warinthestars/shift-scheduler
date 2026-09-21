@@ -30,7 +30,7 @@ async def seed_initial_data(db: AsyncSession):
         admin_user = User(
             email=admin_email,
             hashed_password=get_password_hash(settings.SUPER_ADMIN_PASSWORD),
-            role=UserRole.PLATFORM_ADMIN,
+            role="platform_admin",
             first_name="Platform",
             last_name="SuperAdmin",
             phone="555-0100",
@@ -57,7 +57,7 @@ async def seed_initial_data(db: AsyncSession):
         manager_user = User(
             email=manager_email,
             hashed_password=get_password_hash("DemoManager123!"),
-            role=UserRole.VENUE_MANAGER,
+            role="venue_manager",
             first_name="Morgan",
             last_name="Vance",
             phone="555-0155",
@@ -81,7 +81,7 @@ async def seed_initial_data(db: AsyncSession):
         worker_user = User(
             email=worker_email,
             hashed_password=get_password_hash("DemoWorker123!"),
-            role=UserRole.WORKER,
+            role="worker",
             first_name="Jordan",
             last_name="Lee",
             phone="555-0144",

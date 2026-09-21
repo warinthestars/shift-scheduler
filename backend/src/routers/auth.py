@@ -34,11 +34,11 @@ async def register(request: UserCreate, db: AsyncSession = Depends(get_db)):
     # Determine assigned role
     role_norm = normalize_role(request.role)
     if role_norm == "platform_admin":
-        assigned_role = UserRole.PLATFORM_ADMIN
+        assigned_role = "platform_admin"
     elif role_norm == "venue_manager":
-        assigned_role = UserRole.VENUE_MANAGER
+        assigned_role = "venue_manager"
     else:
-        assigned_role = UserRole.WORKER
+        assigned_role = "worker"
 
     user = User(
         email=request.email.lower(),
@@ -171,7 +171,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
                         email=email,
                         first_name=first_name,
                         last_name=last_name,
-                        role=UserRole.WORKER
+                        role="worker"
                     )
                     db.add(user)
                 await db.commit()

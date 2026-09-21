@@ -82,7 +82,7 @@ async def get_or_create_mock_firebase_user(
             user = User(
                 email=email,
                 firebase_uid=mock_uid,
-                role=UserRole.WORKER,
+                role="worker",
                 first_name=first_name,
                 last_name=last_name,
                 phone="555-0199",

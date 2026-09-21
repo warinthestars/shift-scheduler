@@ -10,6 +10,11 @@ from sqlalchemy.orm import relationship
 from src.database import Base
 
 class UserRole(str, Enum):
+    platform_admin = "platform_admin"
+    venue_manager = "venue_manager"
+    worker = "worker"
+
+    # Backward compatibility aliases
     PLATFORM_ADMIN = "platform_admin"
     VENUE_MANAGER = "venue_manager"
     WORKER = "worker"
@@ -27,12 +32,7 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=True)
-    role = Column(
-        SQLEnum(UserRole, name="user_role", native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
-        nullable=False,
-        default=UserRole.WORKER,
-        index=True
-    )
+    role = Column(String(50), nullable=False, default="worker", index=True)
     first_name = Column(String(100), nullable=False, default="")
     last_name = Column(String(100), nullable=False, default="")
     phone = Column(String(30), nullable=True)

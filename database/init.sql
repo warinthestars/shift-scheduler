@@ -1,6 +1,11 @@
 -- ==============================================================================
 -- ShiftBoard Database Initialization Schema
 -- PostgreSQL 16
+-- 
+-- NOTE: If updating ENUM definitions or database constraints, wipe the existing
+-- Docker database volume to apply changes:
+--   docker compose down -v
+--   docker compose up --build
 -- ==============================================================================
 
 -- Enable UUID Extension
@@ -9,12 +14,6 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- ------------------------------------------------------------------------------
 -- Custom ENUM Types
 -- ------------------------------------------------------------------------------
-CREATE TYPE user_role AS ENUM (
-    'SUPER_ADMIN',
-    'VENUE_MANAGER',
-    'WORKER'
-);
-
 CREATE TYPE request_status AS ENUM (
     'PENDING',
     'APPROVED',
@@ -30,7 +29,7 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     hashed_password VARCHAR(255),
-    role user_role NOT NULL DEFAULT 'WORKER',
+    role VARCHAR(50) NOT NULL DEFAULT 'worker',
     first_name VARCHAR(100) NOT NULL DEFAULT '',
     last_name VARCHAR(100) NOT NULL DEFAULT '',
     phone VARCHAR(30),

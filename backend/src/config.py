@@ -2,16 +2,34 @@ import os
 from pydantic_settings import BaseSettings
 from typing import List
 
+# Database connection parameters resolved dynamically from environment
+DB_USER = os.getenv("POSTGRES_USER", "shiftboard_user")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+DB_HOST = os.getenv("POSTGRES_HOST", "database")  # Must match docker-compose service name
+DB_PORT = os.getenv("POSTGRES_PORT", "5432")
+DB_NAME = os.getenv("POSTGRES_DB", "shiftboard")
+
+if DB_PASSWORD:
+    SQLALCHEMY_DATABASE_URI = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+else:
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "DATABASE_URL",
+        f"postgresql+asyncpg://{DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    )
+
 class Settings(BaseSettings):
     ENV: str = os.getenv("ENV", "development")
     DEBUG: bool = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
     PORT: int = int(os.getenv("PORT", "8000"))
 
     # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://shiftboard_user:shiftboard_secret_password@database:5432/shiftboard"
-    )
+    POSTGRES_USER: str = DB_USER
+    POSTGRES_PASSWORD: str = DB_PASSWORD
+    POSTGRES_HOST: str = DB_HOST
+    POSTGRES_PORT: int = int(DB_PORT)
+    POSTGRES_DB: str = DB_NAME
+    SQLALCHEMY_DATABASE_URI: str = SQLALCHEMY_DATABASE_URI
+    DATABASE_URL: str = SQLALCHEMY_DATABASE_URI
     DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "20"))
     DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 

@@ -77,7 +77,7 @@ async def create_venue(
             mgr_user = User(
                 email=mgr_email.lower(),
                 hashed_password=get_password_hash("Manager123!"),
-                role=UserRole.VENUE_MANAGER,
+                role="venue_manager",
                 first_name="Venue",
                 last_name="Manager",
                 is_active=True
@@ -86,7 +86,7 @@ async def create_venue(
             await db.commit()
             await db.refresh(mgr_user)
         else:
-            mgr_user.role = UserRole.VENUE_MANAGER
+            mgr_user.role = "venue_manager"
             await db.commit()
 
     manager_user_id = mgr_user.id if mgr_user else current_user.id
