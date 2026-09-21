@@ -1,27 +1,81 @@
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import os
+from src.config import settings
+from src.database import AsyncSessionLocal, engine, Base
+from src.seed import seed_initial_data
+from src.routers.auth import router as auth_router
+from src.routers.users import router as users_router
+from src.routers.venues import router as venues_router
+from src.routers.shifts import router as shifts_router
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("shiftboard.main")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application startup & shutdown lifecycle: seeds database on startup"""
+    logger.info("Initializing ShiftBoard Backend Application...")
+
+    # Ensure tables exist in database (fallback if init.sql wasn't pre-run)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as e:
+        logger.warning(f"Metadata create_all check: {e}")
+
+    # Seed Super Admin and initial demo data
+    try:
+        async with AsyncSessionLocal() as session:
+            await seed_initial_data(session)
+    except Exception as e:
+        logger.error(f"Error during startup data seeding: {e}", exc_info=True)
+
+    yield
+
+    logger.info("Shutting down ShiftBoard Backend Application...")
+    await engine.dispose()
 
 app = FastAPI(
     title="ShiftBoard API",
-    description="Shift scheduling and call-board backend for the service industry",
-    version="0.1.0"
+    description="Shift scheduling and community call-board platform for the service industry",
+    version="0.2.0",
+    lifespan=lifespan
 )
 
-# CORS configuration
-origins = os.getenv("CORS_ORIGINS", "http://localhost,http://localhost:3000").split(",")
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.cors_origins_list or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/healthz")
-async def health_check():
-    return {"status": "ok", "service": "shiftboard-backend"}
+# Mount Routers
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(venues_router)
+app.include_router(shifts_router)
 
-@app.get("/api/v1/ping")
-async def ping():
-    return {"message": "pong"}
+@app.get("/healthz", tags=["System"])
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "shiftboard-backend",
+        "mock_firebase": settings.USE_MOCK_FIREBASE,
+        "env": settings.ENV
+    }
+
+@app.get("/", tags=["System"])
+async def root():
+    return {
+        "message": "Welcome to ShiftBoard API",
+        "docs_url": "/docs",
+        "version": "0.2.0"
+    }

@@ -50,8 +50,9 @@ CREATE TYPE swap_status AS ENUM (
 -- ------------------------------------------------------------------------------
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    firebase_uid VARCHAR(128) UNIQUE NOT NULL,
+    firebase_uid VARCHAR(128) UNIQUE,
     email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255),
     role user_role NOT NULL DEFAULT 'worker',
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,

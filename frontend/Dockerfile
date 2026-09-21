@@ -1,25 +1,15 @@
-# Build stage
-FROM node:20-alpine AS build
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy dependency specifications
+# Install dependencies first for efficient layer caching
 COPY package*.json ./
 RUN npm install
 
-# Copy source and build
+# Copy application source
 COPY . .
-RUN npm run build
 
-# Production Nginx stage
-FROM nginx:alpine
+EXPOSE 5173
 
-# Copy custom nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Copy build output to Nginx document root
-COPY --from=build /app/dist /usr/share/nginx/html
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+# Hot-reloading development server
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
