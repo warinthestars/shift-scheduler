@@ -19,8 +19,11 @@ CREATE TYPE request_status AS ENUM (
     'APPROVED',
     'REJECTED',
     'CHECKED_IN',
-    'COMPLETED'
+    'COMPLETED',
+    'dropped',
+    'DROPPED'
 );
+
 
 -- ------------------------------------------------------------------------------
 -- 1. Users Table

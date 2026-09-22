@@ -27,6 +27,9 @@ export default function WorkerDashboard() {
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [transferShiftId, setTransferShiftId] = useState(null);
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
+  const [shiftToDrop, setShiftToDrop] = useState(null);
+  const [dropping, setDropping] = useState(false);
+
 
   const fetchWorkerData = async () => {
     try {
@@ -176,7 +179,33 @@ export default function WorkerDashboard() {
     }
   };
 
+  // Phase 14: Shift Dropping
+  const handleDropShift = async () => {
+    if (!shiftToDrop) return;
+    const targetShiftId = shiftToDrop.shift_id || shiftToDrop.shift?.id;
+    try {
+      setDropping(true);
+      await api.post(`/shifts/${targetShiftId}/drop`);
+      // Immediately remove the shift from the UI without requiring a page reload
+      setMyShifts((prev) => prev.filter((s) => s.id !== shiftToDrop.id));
+      setNotification({
+        type: 'success',
+        message: 'Shift dropped successfully. Capacity has been returned to the open marketplace.',
+      });
+      setShiftToDrop(null);
+      fetchWorkerData();
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to drop shift.',
+      });
+    } finally {
+      setDropping(false);
+    }
+  };
+
   const confirmedShifts = myShifts.filter((s) =>
+
     ['APPROVED', 'CHECKED_IN'].includes(s.status)
   );
 
@@ -523,6 +552,38 @@ export default function WorkerDashboard() {
                         </button>
                       )}
 
+                      {/* Drop Shift button (Phase 14) */}
+                      {isApproved && !isCheckedIn && !isCompleted && (() => {
+                        const shiftStartTime = new Date(shift?.start_time).getTime();
+                        const nowTime = Date.now();
+                        const hoursRemaining = (shiftStartTime - nowTime) / (1000 * 60 * 60);
+                        const canDrop = hoursRemaining >= 24;
+
+                        return (
+                          <div className="flex flex-col items-end">
+                            <button
+                              type="button"
+                              onClick={() => setShiftToDrop(req)}
+                              disabled={!canDrop}
+                              title={
+                                !canDrop
+                                  ? 'Shifts cannot be dropped within 24 hours of the start time. Please request a transfer or contact the manager.'
+                                  : 'Drop this shift and return it to the open marketplace.'
+                              }
+                              className="px-3 py-1.5 rounded-xl text-xs font-semibold transition text-red-600 border border-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                            >
+                              Drop Shift
+                            </button>
+                            {!canDrop && (
+                              <span className="text-[10px] text-slate-500 italic mt-0.5">
+                                &lt;24h to start (locked)
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+
                       {/* Time Tracking Clock In / Clock Out Button */}
                       {(isApproved || isCheckedIn) && (
                         isCheckedIn ? (
@@ -681,6 +742,65 @@ export default function WorkerDashboard() {
           </div>
         </div>
       )}
+
+      {/* Confirm Drop Modal (Phase 14) */}
+      {shiftToDrop && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+              <div className="flex items-center space-x-2 text-rose-500">
+                <AlertCircle className="w-5 h-5" />
+                <h3 className="text-base font-bold text-white">Confirm Drop Shift</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShiftToDrop(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Are you sure you want to drop this shift? This action cannot be undone, and the shift will be offered to other workers.
+              </p>
+
+              {shiftToDrop.shift && (
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
+                  <p className="font-bold text-white">{shiftToDrop.shift.title}</p>
+                  <p className="text-slate-400">
+                    {shiftToDrop.shift.venue?.name} • {shiftToDrop.shift.role_type} • ${shiftToDrop.shift.hourly_rate}/hr
+                  </p>
+                  <p className="text-slate-500 text-[11px]">
+                    {new Date(shiftToDrop.shift.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => setShiftToDrop(null)}
+                disabled={dropping}
+                className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-semibold text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDropShift}
+                disabled={dropping}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-md shadow-rose-600/20 disabled:opacity-50"
+              >
+                {dropping ? 'Dropping...' : 'Confirm Drop'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

@@ -23,6 +23,9 @@ class RequestStatusEnum(str, Enum):
     REJECTED = "REJECTED"
     CHECKED_IN = "CHECKED_IN"
     COMPLETED = "COMPLETED"
+    DROPPED = "dropped"
+    dropped = "dropped"
+
 
 # ------------------------------------------------------------------------------
 # Auth Schemas

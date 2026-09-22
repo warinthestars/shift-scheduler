@@ -1,51 +1,62 @@
-# Phase 13: Core Feature Expansion (Time Tracking, Transfers, and Boards)
+# Phase 15: Shift Drop Endpoint Debugging & Transaction Fix
 
-This phase implements mission-critical scheduling logic and interactive features. You must adhere to the exact database schemas, API routes, and frontend state structures defined below. Do not modify the existing authentication configuration.
+The `POST /api/shifts/{shift_id}/drop` endpoint is returning a 500 Internal Server Error. This indicates a failure in the datetime comparison logic or the database transaction block.
 
-## 1. Double-Booking Prevention (Backend Logic)
-Update the existing shift request and auto-approval logic to prevent schedule overlaps.
-*   **Target Files:** `backend/src/services/auto_confirm.py` and `backend/src/routers/shifts.py`.
-*   **Query Logic:** Before creating an approved `ShiftRequest` or assigning a worker to a `Shift`, execute a SQLAlchemy query checking for overlapping times. The logic must check if the worker has any approved shifts where `(existing_shift.start_time < new_shift.end_time) AND (existing_shift.end_time > new_shift.start_time)`.
-*   **Error Handling:** If an overlap is found, abort the transaction and raise an `HTTPException(status_code=400, detail="Worker is already booked for this time slot.")`.
+## 1. Datetime Offset Fix (`backend/src/routers/shifts.py`)
+*   Locate the 24-hour time constraint check in the drop endpoint.
+*   Ensure both the shift's `start_time` and the current time are fully timezone-aware before comparison. If the database returns naive datetimes, apply `.replace(tzinfo=timezone.utc)` to the shift's start time before comparing it to `datetime.now(timezone.utc)`.
 
-## 2. Hour Tracking & Payroll CSV Export
-Implement precise time tracking and a CSV export utility for managers.
-*   **Database Schema (`backend/src/models.py`):** 
-    *   Create a `TimeEntry` class inheriting from `Base`.
-    *   Columns: `id` (UUID, primary key), `worker_id` (UUID, ForeignKey to `users.id`), `shift_id` (UUID, ForeignKey to `shifts.id`), `clock_in_time` (DateTime, timezone=True), `clock_out_time` (DateTime, timezone=True, nullable).
-*   **Backend Endpoints (`backend/src/routers/shifts.py` & `venues.py`):**
-    *   `POST /api/shifts/{shift_id}/clock-in`: Verify the user is assigned to the shift. Create a new `TimeEntry` setting `clock_in_time` to `datetime.now(timezone.utc)`.
-    *   `POST /api/shifts/{shift_id}/clock-out`: Find the active `TimeEntry` for this user and shift. Set `clock_out_time` to current UTC time.
-    *   `GET /api/venues/{venue_id}/export-hours`: Query all `TimeEntry` records for the venue. Join with the `User` and `Shift` tables. Use the Python `csv` module and `io.StringIO` to format columns: `Worker Name`, `Shift Date`, `Role`, `Clock In`, `Clock Out`, `Total Hours`. Return a FastAPI `StreamingResponse` with `media_type="text/csv"` and a `Content-Disposition` header specifying the filename.
-*   **Frontend UI (`frontend/src/pages/WorkerDashboard.jsx` & `VenueManagerDashboard.jsx`):**
-    *   **Worker:** On the "My Schedule" tab, map over confirmed shifts. Render a "Clock In" button. Upon successful API response, swap the button to "Clock Out".
-    *   **Manager:** Add a `handleExportCSV` function that fetches the export endpoint and uses `window.URL.createObjectURL(blob)` to trigger a browser file download.
+## 2. Transaction Error Handling & Validation
+*   Wrap the entire database modification block (updating the assignment status and incrementing the shift capacity) in a `try/except Exception as e:` block.
+*   Inside the except block, explicitly execute `await db.rollback()`, print the error to the console using `print(f"Drop shift transaction error: {e}")`, and raise an `HTTPException(status_code=500, detail=str(e))`. 
+*   Verify that the column names being updated exactly match the attributes defined in `backend/src/models.py`. Confirm the logic is updating the correct status column on the assignment model and incrementing the correct capacity column on the `Shift` model.
 
-## 3. Worker-to-Worker Shift Transfers
-Implement a dual-approval state machine for shift swapping.
-*   **Database Schema (`backend/src/models.py`):**
-    *   Create a `ShiftTransfer` class.
-    *   Columns: `id` (UUID, primary key), `shift_id` (UUID, ForeignKey), `from_worker_id` (UUID, ForeignKey), `to_worker_id` (UUID, ForeignKey), `status` (String, default `"pending_worker_acceptance"`).
-*   **Backend Endpoints (`backend/src/routers/transfers.py`):**
-    *   `POST /api/transfers/propose`: Accepts `shift_id` and `to_worker_id`. Verifies `from_worker_id` actually owns the shift. Creates the `ShiftTransfer` record.
-    *   `POST /api/transfers/{id}/accept`: Updates status to `"pending_manager_approval"`.
-    *   `POST /api/transfers/{id}/approve`: Validates the user has `venue_manager` role. Updates status to `"approved"`. Reassigns the `shift_id` to `to_worker_id` in the shifts table. Deletes or modifies the original `ShiftRequest`.
-*   **Frontend UI:**
-    *   Create a new component `TransferModal.jsx`. Allow a worker to select a confirmed shift and select a peer from a dropdown of eligible venue workers.
-    *   Add a "Pending Transfers" section to the WorkerDashboard for accepting/rejecting incoming offers.
-    *   Add a "Transfer Approvals" section to the VenueManagerDashboard mapping over transfers with the `pending_manager_approval` status.
+# Phase 16: Venue Manager Roster & Calendar Views
 
-## 4. Event-Specific Discussion Boards
-Create an access-controlled forum for shift communication.
-*   **Database Schema (`backend/src/models.py`):**
-    *   Create a `ShiftBoardMessage` class.
-    *   Columns: `id` (UUID, primary key), `shift_id` (UUID, ForeignKey), `author_id` (UUID, ForeignKey), `content` (Text), `created_at` (DateTime, default UTC now).
-*   **Backend Endpoints (`backend/src/routers/shifts.py`):**
-    *   `GET /api/shifts/{shift_id}/messages`: Returns a list of messages. **Authorization:** Query the DB to ensure `current_user.id` is assigned to the shift, OR `current_user.role == "venue_manager"` and they manage the parent venue. Return 403 Forbidden otherwise.
-    *   `POST /api/shifts/{shift_id}/messages`: Accepts a `content` string. Enforces the same authorization check before saving.
-    *   `DELETE /api/messages/{message_id}`: Allows Venue Managers to delete any message.
-*   **Frontend UI (`frontend/src/components/ShiftBoard.jsx`):**
-    *   Create a reusable component receiving `shiftId` as a prop.
-    *   State: `messages` (array), `newMessage` (string).
-    *   Use a `useEffect` hook to fetch messages on mount. 
-    *   Render a chronological list of messages. If the decoded JWT role is `venue_manager`, conditionally render a "Delete" icon next to each message payload.
+The Venue Manager requires a comprehensive scheduling overview to see exactly who is working which shift, featuring both a List View and a Calendar View, with the ability to drill down into a worker's contact and profile information. Execute the following implementation strictly.
+
+## 1. Frontend Dependencies (`frontend/package.json`)
+We need a robust calendar library and a date utility to handle the calendar rendering.
+*   Run `npm install react-big-calendar date-fns` in the frontend directory.
+*   Update `package.json` dependencies to reflect these additions.
+
+## 2. Backend Roster Endpoint (`backend/src/routers/venues.py` & `schemas.py`)
+Create a new endpoint that aggregates shift data with the specific details of approved workers. Do NOT expose `hashed_password` or sensitive user data.
+
+**A. Create the Schema (`schemas.py`):**
+*   Create a `WorkerContactSchema` inheriting from `BaseModel` containing: `id`, `first_name`, `last_name`, `email`, `phone`, `avatar_url`, and `aggregate_rating`.
+*   Create a `ShiftRosterResponse` schema that extends your standard `ShiftResponse` but includes a new field: `assigned_workers: List[WorkerContactSchema]`.
+
+**B. Create the Endpoint (`venues.py`):**
+*   `GET /api/venues/{venue_id}/roster`
+*   **Authorization:** Ensure `current_user` has the `venue_manager` role and is authorized for `venue_id`.
+*   **SQLAlchemy Logic:** 
+    1. Query all future and recent past `Shift` records for the `venue_id`.
+    2. For each shift, query the `ShiftTransfer`, `ShiftAssignment`, or `ShiftRequest` table (depending on your final schema) to find all records tied to this `shift_id` where the status is strictly `"approved"` or `"confirmed"`.
+    3. Join the `User` table to fetch the matching workers' contact details.
+    4. Construct and return a list of `ShiftRosterResponse` objects.
+
+## 3. Frontend UI Implementation (`frontend/src/pages/VenueManagerDashboard.jsx`)
+Update the manager dashboard to consume the new roster endpoint and render the dual-view interface.
+
+**A. Component State:**
+*   `const [viewMode, setViewMode] = useState("calendar")` // Toggles between "list" and "calendar".
+*   `const [roster, setRoster] = useState([])` // Holds the data from `/api/venues/{venue_id}/roster`.
+*   `const [selectedShift, setSelectedShift] = useState(null)` // Triggers the drill-down modal.
+
+**B. Data Transformation:**
+*   Create a `useEffect` hook to fetch `/api/venues/{venue_id}/roster`.
+*   Map the returned `roster` data into an array of event objects formatted for `react-big-calendar`. Example format: 
+    `{ id: shift.id, title: shift.name, start: new Date(shift.start_time), end: new Date(shift.end_time), resource: shift }`.
+
+**C. Render the Dual Views:**
+*   **Toggle Control:** Render a button group at the top of the schedule section to toggle `viewMode` between "Calendar" and "List".
+*   **Calendar View (`react-big-calendar`):** When `viewMode === "calendar"`, render the `Calendar` component. Map the `onSelectEvent` prop to `(event) => setSelectedShift(event.resource)`.
+*   **List View:** When `viewMode === "list"`, render a Tailwind-styled table grouped by Date. Include columns for Shift Name, Time, Role Requirements, and a "View Staff" button. Map the "View Staff" button's `onClick` to `setSelectedShift(shift)`.
+
+**D. Drill-Down Modal Component (`ShiftRosterModal.jsx`):**
+*   Create a modal that renders conditionally when `selectedShift !== null`.
+*   The modal header should display the Shift Name and Date.
+*   The modal body must iterate over `selectedShift.assigned_workers`.
+*   Render a contact card for each worker showing their `avatar_url` (or placeholder), `first_name` `last_name`, `email`, `phone` (with a `href="tel:..."` link), and their `aggregate_rating` represented by a star icon.
+*   Include a "Close" button that sets `setSelectedShift(null)`.

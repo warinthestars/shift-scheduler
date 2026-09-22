@@ -25,6 +25,9 @@ class RequestStatus(str, Enum):
     REJECTED = "REJECTED"
     CHECKED_IN = "CHECKED_IN"
     COMPLETED = "COMPLETED"
+    DROPPED = "dropped"
+    dropped = "dropped"
+
 
 class User(Base):
     __tablename__ = "users"
@@ -200,6 +203,15 @@ class Shift(Base):
     @auto_confirm_anyone.setter
     def auto_confirm_anyone(self, val):
         self.is_shift_auto_confirm = bool(val)
+
+    @property
+    def available_spots(self):
+        return max(0, self.capacity - self.spots_filled)
+
+    @available_spots.setter
+    def available_spots(self, val):
+        self.spots_filled = max(0, self.capacity - int(val))
+
 
     venue = relationship("Venue", back_populates="shifts")
     requests = relationship("ShiftRequest", back_populates="shift", cascade="all, delete-orphan")

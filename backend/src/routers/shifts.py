@@ -406,6 +406,84 @@ async def check_out_shift(
     return shift_req
 
 # ------------------------------------------------------------------------------
+# Phase 14: Shift Dropping & Roster Reallocation
+# ------------------------------------------------------------------------------
+@router.post("/{shift_id}/drop")
+async def drop_shift(
+    shift_id: UUID,
+    current_user: User = Depends(require_worker),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 14: Drop a confirmed shift.
+    1. Verify current_user has worker role and is assigned to the shift.
+    2. Enforce 24-hour drop deadline.
+    3. Update ShiftRequest status to 'dropped'.
+    4. Increment Shift available capacity (available_spots = available_spots + 1).
+    """
+    # 1. Fetch shift
+    shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+
+    # 2. Query assignment for current user
+    shift_req = await db.scalar(
+        select(ShiftRequest).where(
+            ShiftRequest.shift_id == shift_id,
+            ShiftRequest.worker_id == current_user.id,
+            ShiftRequest.status.in_([
+                RequestStatus.APPROVED, RequestStatus.CHECKED_IN,
+                "APPROVED", "CHECKED_IN", "approved"
+            ])
+        )
+    )
+    if not shift_req:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Shift assignment not found."
+        )
+
+    # 3. Time constraint logic: Compare start_time with datetime.now(timezone.utc)
+    shift_start = shift.start_time
+    if shift_start.tzinfo is None:
+        shift_start = shift_start.replace(tzinfo=timezone.utc)
+    else:
+        shift_start = shift_start.astimezone(timezone.utc)
+
+    now_utc = datetime.now(timezone.utc)
+    time_to_start = (shift_start - now_utc).total_seconds()
+    if time_to_start < 24 * 3600:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Shifts cannot be dropped within 24 hours of the start time. Please request a transfer or contact the manager."
+        )
+
+    # 4. Database Transaction (Strict Ordering)
+    try:
+        # Step 1: Update status of worker's ShiftRequest record to "dropped"
+        shift_req.status = "dropped"
+
+        # Step 2: Increment Shift available capacity (available_spots = available_spots + 1)
+        shift.spots_filled = max(0, shift.spots_filled - 1)
+        if shift.status == "FILLED":
+            shift.status = "OPEN"
+
+        # Step 3: Commit transaction (all or nothing)
+        await db.commit()
+        await db.refresh(shift_req)
+        await db.refresh(shift)
+    except Exception:
+        await db.rollback()
+        raise
+
+    return {
+        "message": "Shift successfully dropped and returned to open marketplace.",
+        "shift_id": str(shift_id),
+        "status": "dropped"
+    }
+
+
+# ------------------------------------------------------------------------------
 # Requests Approval Queue Router
 # ------------------------------------------------------------------------------
 requests_router = APIRouter(prefix="/api/requests", tags=["Requests"])
