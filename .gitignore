@@ -1,10 +1,12 @@
 # Environment & Secrets
+# !!! DO NOT change ".secrets/*" to ".secrets/" !!!
+# Ignoring the folder itself makes git skip it entirely, and the !-rules below
+# can no longer re-include the *.template files (they silently become untracked).
 .env
 *.env
 !.env.template
 .secrets/*
 !.secrets/*.template
-!.secrets/.secrets.env.template
 *.pem
 *.key
 

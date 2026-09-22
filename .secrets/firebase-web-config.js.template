@@ -1,0 +1,22 @@
+// ==============================================================================
+// ShiftBoard - Firebase Web Config Template
+// Save as: .secrets/firebase-web-config.js (IGNORED BY GIT)
+//
+// Paste the snippet exactly as Firebase Console gives it:
+//   Firebase Console > Project settings > General > Your apps > SDK setup and configuration > Config
+// Replace everything between the markers below. "const" in front is fine either way.
+// These values are public client identifiers (not secrets); they are kept here so
+// each environment (dev / prod) can point at its own Firebase project.
+// ==============================================================================
+
+// ---- paste below this line ----
+firebaseConfig = {
+  apiKey: "your-api-key",
+  authDomain: "your-project.firebaseapp.com",
+  projectId: "your-project-id",
+  storageBucket: "your-project.firebasestorage.app",
+  messagingSenderId: "000000000000",
+  appId: "1:000000000000:web:0000000000000000",
+  measurementId: "G-XXXXXXXXXX"
+};
+// ---- paste above this line ----
