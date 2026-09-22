@@ -3,28 +3,46 @@ import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
   Calendar, Clock, DollarSign, MapPin, CheckCircle2, AlertCircle,
-  Star, Briefcase, Zap, ShieldCheck, Check, Search, Filter
+  Star, Briefcase, Zap, ShieldCheck, Check, Search, Filter,
+  Timer, ArrowRightLeft, MessageSquare, X, ArrowUpRight
 } from 'lucide-react';
+import TransferModal from '../components/TransferModal';
+import ShiftBoard from '../components/ShiftBoard';
 
 export default function WorkerDashboard() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState('find'); // 'find' | 'schedule'
+  const [activeTab, setActiveTab] = useState('find'); // 'find' | 'schedule' | 'transfers'
   const [availableShifts, setAvailableShifts] = useState([]);
   const [myShifts, setMyShifts] = useState([]);
+  const [incomingTransfers, setIncomingTransfers] = useState([]);
+  const [activeClockIns, setActiveClockIns] = useState(new Set());
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
   const [requestingId, setRequestingId] = useState(null);
+  const [clockActionLoading, setClockActionLoading] = useState(null);
+  const [transferActionLoading, setTransferActionLoading] = useState(null);
   const [notification, setNotification] = useState(null);
+
+  // Modals state
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [transferShiftId, setTransferShiftId] = useState(null);
+  const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
 
   const fetchWorkerData = async () => {
     try {
       setLoading(true);
-      const [openRes, myRes] = await Promise.all([
+      const [openRes, myRes, transfersRes, activeClocksRes] = await Promise.all([
         api.get('/shifts/open'),
         api.get('/users/me/shifts'),
+        api.get('/transfers/my-incoming'),
+        api.get('/shifts/time-entries/active').catch(() => ({ data: [] })),
       ]);
       setAvailableShifts(openRes.data || []);
       setMyShifts(myRes.data || []);
+      setIncomingTransfers(transfersRes.data || []);
+
+      const clockedIds = new Set((activeClocksRes.data || []).map((te) => te.shift_id));
+      setActiveClockIns(clockedIds);
     } catch (err) {
       console.error('Error loading worker dashboard data:', err);
       setNotification({
@@ -49,7 +67,6 @@ export default function WorkerDashboard() {
       const newRequest = res.data;
 
       if (newRequest.status === 'APPROVED') {
-        // Auto-confirmed: move shift to My Schedule
         setMyShifts((prev) => [newRequest, ...prev]);
         setAvailableShifts((prev) => prev.filter((s) => s.id !== shiftId));
         setNotification({
@@ -59,7 +76,6 @@ export default function WorkerDashboard() {
           }.`,
         });
       } else {
-        // Manual approval pending: update request in state
         setMyShifts((prev) => [newRequest, ...prev]);
         setNotification({
           type: 'info',
@@ -75,6 +91,94 @@ export default function WorkerDashboard() {
       setRequestingId(null);
     }
   };
+
+  // Hour tracking Clock In / Clock Out
+  const handleClockIn = async (shiftId) => {
+    try {
+      setClockActionLoading(shiftId);
+      await api.post(`/shifts/${shiftId}/clock-in`);
+      setActiveClockIns((prev) => new Set([...prev, shiftId]));
+      setNotification({
+        type: 'success',
+        message: '⏱️ Clocked in! Time tracking has commenced for this shift.',
+      });
+      fetchWorkerData();
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to clock in.',
+      });
+    } finally {
+      setClockActionLoading(null);
+    }
+  };
+
+  const handleClockOut = async (shiftId) => {
+    try {
+      setClockActionLoading(shiftId);
+      await api.post(`/shifts/${shiftId}/clock-out`);
+      setActiveClockIns((prev) => {
+        const updated = new Set(prev);
+        updated.delete(shiftId);
+        return updated;
+      });
+      setNotification({
+        type: 'success',
+        message: '🏁 Clocked out! Shift hours recorded successfully.',
+      });
+      fetchWorkerData();
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to clock out.',
+      });
+    } finally {
+      setClockActionLoading(null);
+    }
+  };
+
+  // Shift Transfers (Accept / Reject)
+  const handleAcceptTransfer = async (transferId) => {
+    try {
+      setTransferActionLoading(transferId);
+      await api.post(`/transfers/${transferId}/accept`);
+      setNotification({
+        type: 'success',
+        message: 'Shift transfer accepted! Awaiting Venue Manager approval.',
+      });
+      fetchWorkerData();
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to accept transfer.',
+      });
+    } finally {
+      setTransferActionLoading(null);
+    }
+  };
+
+  const handleRejectTransfer = async (transferId) => {
+    try {
+      setTransferActionLoading(transferId);
+      await api.post(`/transfers/${transferId}/reject`);
+      setNotification({
+        type: 'info',
+        message: 'Shift transfer proposal declined.',
+      });
+      fetchWorkerData();
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to decline transfer.',
+      });
+    } finally {
+      setTransferActionLoading(null);
+    }
+  };
+
+  const confirmedShifts = myShifts.filter((s) =>
+    ['APPROVED', 'CHECKED_IN'].includes(s.status)
+  );
 
   // Set of shift IDs currently requested
   const requestedMap = new Map();
@@ -120,7 +224,11 @@ export default function WorkerDashboard() {
             </div>
             <span className="text-slate-700">•</span>
             <div className="text-xs text-slate-300">
-              <span className="font-bold text-white">{myShifts.filter((s) => s.status === 'APPROVED').length}</span> scheduled
+              <span className="font-bold text-white">{confirmedShifts.length}</span> scheduled
+            </div>
+            <span className="text-slate-700">•</span>
+            <div className="text-xs text-slate-300">
+              <span className="font-bold text-white">{incomingTransfers.length}</span> transfers
             </div>
             <span className="text-slate-700">•</span>
             <div className="text-xs text-slate-300">
@@ -130,7 +238,7 @@ export default function WorkerDashboard() {
         </div>
       </section>
 
-      {/* Main Two-Tab Dashboard */}
+      {/* Main Dashboard */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
         {notification && (
           <div
@@ -178,6 +286,17 @@ export default function WorkerDashboard() {
               }`}
             >
               My Schedule ({myShifts.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('transfers')}
+              className={`px-5 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
+                activeTab === 'transfers'
+                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                  : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5" />
+              <span>Pending Transfers ({incomingTransfers.length})</span>
             </button>
           </div>
 
@@ -325,9 +444,12 @@ export default function WorkerDashboard() {
             ) : (
               myShifts.map((req) => {
                 const shift = req.shift;
+                const shiftId = req.shift_id || shift?.id;
                 const isApproved = req.status === 'APPROVED';
+                const isCheckedIn = req.status === 'CHECKED_IN' || activeClockIns.has(shiftId);
+                const isCompleted = req.status === 'COMPLETED';
                 const isPending = req.status === 'PENDING';
-                const isRejected = req.status === 'REJECTED';
+                const isClockLoading = clockActionLoading === shiftId;
 
                 return (
                   <div
@@ -338,14 +460,18 @@ export default function WorkerDashboard() {
                       <div className="flex items-center space-x-2">
                         <span
                           className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase ${
-                            isApproved
+                            isCheckedIn
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
+                              : isApproved
                               ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                              : isCompleted
+                              ? 'bg-slate-800 text-slate-300 border border-slate-700'
                               : isPending
                               ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
                               : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
                           }`}
                         >
-                          {req.status}
+                          {isCheckedIn ? 'CLOCKED IN' : req.status}
                         </span>
 
                         {req.approval_source && (
@@ -368,12 +494,67 @@ export default function WorkerDashboard() {
                       </p>
                     </div>
 
-                    <div className="flex items-center space-x-3 w-full md:w-auto justify-end">
-                      {isApproved && (
-                        <span className="px-3.5 py-2 rounded-xl bg-emerald-950 text-emerald-400 border border-emerald-800 text-xs font-bold">
-                          Ready for Shift ✓
+                    {/* Action buttons */}
+                    <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-end">
+                      {/* Discussion Board button for confirmed shifts */}
+                      {(isApproved || isCheckedIn || isCompleted) && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveDiscussionShift(shift)}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition flex items-center space-x-1"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Board</span>
+                        </button>
+                      )}
+
+                      {/* Transfer Shift button */}
+                      {isApproved && !isCheckedIn && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTransferShiftId(shiftId);
+                            setTransferModalOpen(true);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 text-xs font-semibold transition flex items-center space-x-1"
+                        >
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                          <span>Transfer</span>
+                        </button>
+                      )}
+
+                      {/* Time Tracking Clock In / Clock Out Button */}
+                      {(isApproved || isCheckedIn) && (
+                        isCheckedIn ? (
+                          <button
+                            type="button"
+                            onClick={() => handleClockOut(shiftId)}
+                            disabled={isClockLoading}
+                            className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-rose-600/20 disabled:opacity-50"
+                          >
+                            <Timer className="w-3.5 h-3.5" />
+                            <span>{isClockLoading ? 'Saving...' : 'Clock Out'}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleClockIn(shiftId)}
+                            disabled={isClockLoading}
+                            className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                          >
+                            <Timer className="w-3.5 h-3.5" />
+                            <span>{isClockLoading ? 'Saving...' : 'Clock In'}</span>
+                          </button>
+                        )
+                      )}
+
+                      {isCompleted && (
+                        <span className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-emerald-400 border border-emerald-800/40 text-xs font-bold flex items-center space-x-1">
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Completed</span>
                         </span>
                       )}
+
                       {isPending && (
                         <span className="text-xs text-amber-400 bg-amber-950/40 border border-amber-800/40 px-3.5 py-2 rounded-xl font-medium">
                           Awaiting Venue Manager Review
@@ -386,7 +567,120 @@ export default function WorkerDashboard() {
             )}
           </div>
         )}
+
+        {/* TAB 3: Pending Shift Transfers */}
+        {activeTab === 'transfers' && (
+          <div className="mt-6 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <ArrowRightLeft className="w-5 h-5 text-amber-400" />
+                <h2 className="text-base font-bold text-white">
+                  Incoming Shift Transfer Offers ({incomingTransfers.length})
+                </h2>
+              </div>
+              <span className="text-xs text-slate-400">
+                Peers proposing to transfer confirmed shifts to you
+              </span>
+            </div>
+
+            {incomingTransfers.length === 0 ? (
+              <div className="text-center py-20 bg-slate-900/40 rounded-2xl border border-slate-800">
+                <ArrowRightLeft className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-slate-300">No incoming transfer offers</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  When other workers propose shift transfers to you, they will appear here.
+                </p>
+              </div>
+            ) : (
+              incomingTransfers.map((transfer) => {
+                const shift = transfer.shift;
+                const fromWorker = transfer.from_worker;
+                const isActionLoading = transferActionLoading === transfer.id;
+
+                return (
+                  <div
+                    key={transfer.id}
+                    className="p-5 bg-slate-900 border border-slate-800 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl"
+                  >
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-bold uppercase px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                          Transfer Offer
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          From: <strong className="text-white">{fromWorker?.first_name} {fromWorker?.last_name}</strong> ({fromWorker?.email})
+                        </span>
+                      </div>
+
+                      <h3 className="text-base font-bold text-white mt-1.5">{shift?.title}</h3>
+                      <p className="text-xs text-slate-400 flex items-center space-x-2 mt-1">
+                        <span className="text-slate-300 font-medium">{shift?.venue?.name}</span>
+                        <span>•</span>
+                        <span>{shift?.role_type}</span>
+                        <span>•</span>
+                        <span className="text-emerald-400 font-semibold">${shift?.hourly_rate}/hr</span>
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {new Date(shift?.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center space-x-2.5 w-full md:w-auto justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleAcceptTransfer(transfer.id)}
+                        disabled={isActionLoading}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>{isActionLoading ? 'Processing...' : 'Accept Transfer'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRejectTransfer(transfer.id)}
+                        disabled={isActionLoading}
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-slate-300 hover:text-rose-300 border border-slate-700 text-xs font-semibold transition disabled:opacity-50"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
       </main>
+
+      {/* Transfer Proposal Modal */}
+      {transferModalOpen && (
+        <TransferModal
+          isOpen={transferModalOpen}
+          onClose={() => setTransferModalOpen(false)}
+          myConfirmedShifts={confirmedShifts}
+          preselectedShiftId={transferShiftId}
+          onTransferSuccess={() => {
+            setNotification({
+              type: 'success',
+              message: 'Transfer proposal sent to peer worker! Awaiting their acceptance.',
+            });
+            fetchWorkerData();
+          }}
+        />
+      )}
+
+      {/* Shift Discussion Board Modal */}
+      {activeDiscussionShift && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-2xl w-full">
+            <ShiftBoard
+              shiftId={activeDiscussionShift.id}
+              shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.venue?.name || ''})`}
+              onClose={() => setActiveDiscussionShift(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -246,4 +246,57 @@ class CheckOutRequest(BaseModel):
     latitude: float
     longitude: float
 
+# ------------------------------------------------------------------------------
+# Time Tracking Schemas
+# ------------------------------------------------------------------------------
+class TimeEntryResponse(BaseModel):
+    id: UUID
+    worker_id: UUID
+    shift_id: UUID
+    clock_in_time: datetime
+    clock_out_time: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+# ------------------------------------------------------------------------------
+# Shift Transfer Schemas
+# ------------------------------------------------------------------------------
+class ShiftTransferCreate(BaseModel):
+    shift_id: UUID
+    to_worker_id: UUID
+
+class ShiftTransferResponse(BaseModel):
+    id: UUID
+    shift_id: UUID
+    from_worker_id: UUID
+    to_worker_id: UUID
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    shift: Optional[ShiftResponse] = None
+    from_worker: Optional[UserBrief] = None
+    to_worker: Optional[UserBrief] = None
+
+    class Config:
+        from_attributes = True
+
+# ------------------------------------------------------------------------------
+# Shift Board Message Schemas
+# ------------------------------------------------------------------------------
+class ShiftBoardMessageCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=5000)
+
+class ShiftBoardMessageResponse(BaseModel):
+    id: UUID
+    shift_id: UUID
+    author_id: UUID
+    content: str
+    created_at: datetime
+    author: Optional[UserBrief] = None
+
+    class Config:
+        from_attributes = True
+
 TokenResponse.model_rebuild()
+

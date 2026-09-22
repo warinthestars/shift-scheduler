@@ -1,11 +1,54 @@
 import logging
 from typing import Tuple, Optional
 from datetime import datetime
+from uuid import UUID
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.models import Shift, Venue, VenueWhitelist, ShiftRequest, User, RequestStatus
 
 logger = logging.getLogger("shiftboard.auto_confirm")
+
+async def check_double_booking(
+    db: AsyncSession,
+    worker_id: UUID,
+    start_time: datetime,
+    end_time: datetime,
+    exclude_shift_id: Optional[UUID] = None
+) -> None:
+    """
+    Checks if a worker already has an approved or active shift overlapping with the time slot:
+    (existing_shift.start_time < new_shift.end_time) AND (existing_shift.end_time > new_shift.start_time).
+    
+    Raises:
+        HTTPException(status_code=400, detail="Worker is already booked for this time slot.")
+    """
+    query = (
+        select(Shift)
+        .join(ShiftRequest, ShiftRequest.shift_id == Shift.id)
+        .where(
+            ShiftRequest.worker_id == worker_id,
+            ShiftRequest.status.in_([
+                RequestStatus.APPROVED, RequestStatus.CHECKED_IN,
+                "APPROVED", "CHECKED_IN"
+            ]),
+            Shift.start_time < end_time,
+            Shift.end_time > start_time
+        )
+    )
+    if exclude_shift_id:
+        query = query.where(Shift.id != exclude_shift_id)
+
+    overlapping = await db.scalar(query)
+    if overlapping:
+        logger.warning(
+            f"[Double-Booking Check] Overlap detected for Worker {worker_id} "
+            f"with Shift {overlapping.id} ({overlapping.start_time} - {overlapping.end_time})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Worker is already booked for this time slot."
+        )
 
 async def evaluate_shift_request(
     db: AsyncSession,
@@ -39,6 +82,7 @@ async def evaluate_shift_request(
     # --------------------------------------------------------------------------
     if shift.is_shift_auto_confirm:
         logger.info(f"[Auto-Confirm Engine] Condition 1 MET: Shift is set to auto-confirm anyone.")
+        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
         return RequestStatus.APPROVED, "shift_auto_confirm"
 
     # --------------------------------------------------------------------------
@@ -53,6 +97,7 @@ async def evaluate_shift_request(
     )
     if whitelist_entry:
         logger.info(f"[Auto-Confirm Engine] Condition 2 MET: Worker is on Venue's trusted whitelist.")
+        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
         return RequestStatus.APPROVED, "venue_whitelist"
 
     # --------------------------------------------------------------------------
@@ -66,6 +111,7 @@ async def evaluate_shift_request(
                 f"[Auto-Confirm Engine] Condition 3 MET: Worker rating {worker_rating:.2f} >= "
                 f"Venue threshold {threshold:.2f}."
             )
+            await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
             return RequestStatus.APPROVED, "rating_threshold"
         else:
             logger.info(
@@ -78,3 +124,4 @@ async def evaluate_shift_request(
     # --------------------------------------------------------------------------
     logger.info("[Auto-Confirm Engine] Condition 4: Fallback to PENDING review by Venue Manager.")
     return RequestStatus.PENDING, None
+

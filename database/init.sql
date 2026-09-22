@@ -210,3 +210,52 @@ CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE 
 CREATE TRIGGER trg_venues_updated_at BEFORE UPDATE ON venues FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shifts_updated_at BEFORE UPDATE ON shifts FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shift_requests_updated_at BEFORE UPDATE ON shift_requests FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+
+-- ------------------------------------------------------------------------------
+-- 8. Time Entries Table
+-- ------------------------------------------------------------------------------
+CREATE TABLE time_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    clock_in_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    clock_out_time TIMESTAMPTZ
+);
+
+CREATE INDEX idx_time_entries_worker ON time_entries(worker_id);
+CREATE INDEX idx_time_entries_shift ON time_entries(shift_id);
+
+-- ------------------------------------------------------------------------------
+-- 9. Shift Transfers Table
+-- ------------------------------------------------------------------------------
+CREATE TABLE shift_transfers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    from_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    to_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending_worker_acceptance',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_shift_transfers_shift ON shift_transfers(shift_id);
+CREATE INDEX idx_shift_transfers_from_worker ON shift_transfers(from_worker_id);
+CREATE INDEX idx_shift_transfers_to_worker ON shift_transfers(to_worker_id);
+CREATE INDEX idx_shift_transfers_status ON shift_transfers(status);
+
+CREATE TRIGGER trg_shift_transfers_updated_at BEFORE UPDATE ON shift_transfers FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+
+-- ------------------------------------------------------------------------------
+-- 10. Shift Board Messages Table
+-- ------------------------------------------------------------------------------
+CREATE TABLE shift_board_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_shift_board_messages_shift ON shift_board_messages(shift_id);
+CREATE INDEX idx_shift_board_messages_author ON shift_board_messages(author_id);
+

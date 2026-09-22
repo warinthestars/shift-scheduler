@@ -1,20 +1,25 @@
 from uuid import UUID
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
 from sqlalchemy.orm import selectinload
 from src.database import get_db
-from src.models import Shift, ShiftRequest, Venue, VenueWhitelist, VenueManager, User, RequestStatus
+from src.models import (
+    Shift, ShiftRequest, Venue, VenueWhitelist, VenueManager,
+    User, RequestStatus, TimeEntry, ShiftBoardMessage
+)
 from src.schemas import (
     ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
-    CheckInRequest, CheckOutRequest
+    CheckInRequest, CheckOutRequest, TimeEntryResponse,
+    ShiftBoardMessageCreate, ShiftBoardMessageResponse
 )
 from src.auth import get_current_user, require_manager_or_admin, require_worker, normalize_role
-from src.services.auto_confirm import evaluate_shift_request
+from src.services.auto_confirm import evaluate_shift_request, check_double_booking
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
+
 
 @router.post("", response_model=ShiftResponse, status_code=status.HTTP_201_CREATED)
 async def create_shift(
@@ -181,7 +186,16 @@ async def request_shift(
             detail=f"You have already requested this shift (status: {existing.status})"
         )
 
-    # 3. Evaluate with Auto-Confirm Engine Service
+    # 3. Double-Booking check before evaluating or approving request
+    await check_double_booking(
+        db=db,
+        worker_id=current_user.id,
+        start_time=shift.start_time,
+        end_time=shift.end_time,
+        exclude_shift_id=shift.id
+    )
+
+    # 4. Evaluate with Auto-Confirm Engine Service
     assigned_status, approval_source = await evaluate_shift_request(
         db=db,
         worker=current_user,
@@ -189,7 +203,7 @@ async def request_shift(
         venue=shift.venue
     )
 
-    # 4. If approved immediately, adjust spots
+    # 5. If approved immediately, adjust spots
     if assigned_status == RequestStatus.APPROVED:
         shift.spots_filled += 1
         if shift.spots_filled >= shift.capacity:
@@ -258,6 +272,14 @@ async def update_shift_request_status(
     # Apply manual update
     prev_status = shift_req.status
     if target_status == "APPROVED" and prev_status != RequestStatus.APPROVED:
+        # Check double-booking before approving
+        await check_double_booking(
+            db=db,
+            worker_id=shift_req.worker_id,
+            start_time=shift.start_time,
+            end_time=shift.end_time,
+            exclude_shift_id=shift.id
+        )
         if shift.spots_filled >= shift.capacity:
             raise HTTPException(status_code=400, detail="Cannot approve: shift capacity is reached")
         shift.spots_filled += 1
@@ -272,6 +294,7 @@ async def update_shift_request_status(
             shift.spots_filled = max(0, shift.spots_filled - 1)
             shift.status = "OPEN"
         shift_req.status = RequestStatus.REJECTED
+
 
     await db.commit()
     await db.refresh(shift_req)
@@ -416,4 +439,276 @@ async def deny_request_endpoint(
         current_user=current_user,
         db=db
     )
+
+# ------------------------------------------------------------------------------
+# Phase 13: Hour Tracking (Clock In / Clock Out)
+# ------------------------------------------------------------------------------
+@router.post("/{shift_id}/clock-in", response_model=TimeEntryResponse)
+async def clock_in_shift_time(
+    shift_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 2: Verify the user is assigned to the shift.
+    Create a new TimeEntry setting clock_in_time to datetime.now(timezone.utc).
+    """
+    req = await db.scalar(
+        select(ShiftRequest).where(
+            ShiftRequest.shift_id == shift_id,
+            ShiftRequest.worker_id == current_user.id,
+            ShiftRequest.status.in_([
+                RequestStatus.APPROVED, RequestStatus.CHECKED_IN,
+                "APPROVED", "CHECKED_IN"
+            ])
+        )
+    )
+    if not req:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You are not assigned to this shift."
+        )
+
+    # Check if there is already an active clock-in
+    active_entry = await db.scalar(
+        select(TimeEntry).where(
+            TimeEntry.shift_id == shift_id,
+            TimeEntry.worker_id == current_user.id,
+            TimeEntry.clock_out_time.is_(None)
+        )
+    )
+    if active_entry:
+        return active_entry
+
+    now_utc = datetime.now(timezone.utc)
+    entry = TimeEntry(
+        worker_id=current_user.id,
+        shift_id=shift_id,
+        clock_in_time=now_utc
+    )
+    db.add(entry)
+
+    # Synchronize ShiftRequest check-in status
+    req.status = RequestStatus.CHECKED_IN
+    if not req.check_in_time:
+        req.check_in_time = now_utc
+    req.check_in_verified = True
+
+    await db.commit()
+    await db.refresh(entry)
+    return entry
+
+@router.post("/{shift_id}/clock-out", response_model=TimeEntryResponse)
+async def clock_out_shift_time(
+    shift_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 2: Find the active TimeEntry for this user and shift. Set clock_out_time to current UTC time.
+    """
+    entry = await db.scalar(
+        select(TimeEntry).where(
+            TimeEntry.shift_id == shift_id,
+            TimeEntry.worker_id == current_user.id,
+            TimeEntry.clock_out_time.is_(None)
+        )
+    )
+    if not entry:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active clock-in found for this shift."
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    entry.clock_out_time = now_utc
+
+    # Synchronize ShiftRequest check-out status
+    req = await db.scalar(
+        select(ShiftRequest).where(
+            ShiftRequest.shift_id == shift_id,
+            ShiftRequest.worker_id == current_user.id
+        )
+    )
+    if req:
+        req.status = RequestStatus.COMPLETED
+        req.check_out_time = now_utc
+        req.check_out_verified = True
+
+    current_user.total_shifts += 1
+
+    await db.commit()
+    await db.refresh(entry)
+    return entry
+
+@router.get("/{shift_id}/time-entry", response_model=Optional[TimeEntryResponse])
+async def get_shift_time_entry(
+    shift_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve active or latest time entry for the user and shift"""
+    res = await db.execute(
+        select(TimeEntry)
+        .where(TimeEntry.shift_id == shift_id, TimeEntry.worker_id == current_user.id)
+        .order_by(TimeEntry.clock_in_time.desc())
+    )
+    return res.scalar_one_or_none()
+
+@router.get("/time-entries/active", response_model=List[TimeEntryResponse])
+async def get_my_active_time_entries(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve all open clock-ins for current worker"""
+    res = await db.execute(
+        select(TimeEntry)
+        .where(
+            TimeEntry.worker_id == current_user.id,
+            TimeEntry.clock_out_time.is_(None)
+        )
+    )
+    return res.scalars().all()
+
+# ------------------------------------------------------------------------------
+# Phase 13: Event-Specific Discussion Boards
+# ------------------------------------------------------------------------------
+async def verify_shift_message_access(shift: Shift, user: User, db: AsyncSession) -> None:
+    """Ensure user is assigned to shift, or is a venue manager / super admin"""
+    user_role = normalize_role(user.role)
+    if user_role in ("platform_admin", "super_admin"):
+        return
+
+    if user_role == "venue_manager":
+        mgr = await db.scalar(
+            select(VenueManager).where(
+                VenueManager.venue_id == shift.venue_id,
+                VenueManager.user_id == user.id
+            )
+        )
+        if mgr:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to view messages for this venue."
+        )
+
+    # Worker access: Must hold an assigned / confirmed request
+    req = await db.scalar(
+        select(ShiftRequest).where(
+            ShiftRequest.shift_id == shift.id,
+            ShiftRequest.worker_id == user.id,
+            ShiftRequest.status.in_([
+                RequestStatus.APPROVED, RequestStatus.CHECKED_IN, RequestStatus.COMPLETED,
+                "APPROVED", "CHECKED_IN", "COMPLETED"
+            ])
+        )
+    )
+    if not req:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only assigned workers and venue managers may access this shift discussion board."
+        )
+
+@router.get("/{shift_id}/messages", response_model=List[ShiftBoardMessageResponse])
+async def get_shift_messages(
+    shift_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 4: Return chronological list of messages for this shift.
+    Authorization: User is assigned to shift, or is a venue manager for the parent venue.
+    """
+    shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+
+    await verify_shift_message_access(shift, current_user, db)
+
+    res = await db.execute(
+        select(ShiftBoardMessage)
+        .options(selectinload(ShiftBoardMessage.author))
+        .where(ShiftBoardMessage.shift_id == shift_id)
+        .order_by(ShiftBoardMessage.created_at.asc())
+    )
+    return res.scalars().all()
+
+@router.post("/{shift_id}/messages", response_model=ShiftBoardMessageResponse, status_code=status.HTTP_201_CREATED)
+async def post_shift_message(
+    shift_id: UUID,
+    msg_in: ShiftBoardMessageCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 4: Post a new message to the shift's discussion board.
+    """
+    shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found")
+
+    await verify_shift_message_access(shift, current_user, db)
+
+    msg = ShiftBoardMessage(
+        shift_id=shift_id,
+        author_id=current_user.id,
+        content=msg_in.content.strip()
+    )
+    db.add(msg)
+    await db.commit()
+    await db.refresh(msg)
+
+    res = await db.execute(
+        select(ShiftBoardMessage)
+        .options(selectinload(ShiftBoardMessage.author))
+        .where(ShiftBoardMessage.id == msg.id)
+    )
+    return res.scalar_one()
+
+# ------------------------------------------------------------------------------
+# Messages Deletion Router (DELETE /api/messages/{message_id})
+# ------------------------------------------------------------------------------
+messages_router = APIRouter(prefix="/api/messages", tags=["Messages"])
+
+@messages_router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_shift_message(
+    message_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 4: Allows Venue Managers (or Admins) to delete any message.
+    """
+    res = await db.execute(
+        select(ShiftBoardMessage)
+        .options(selectinload(ShiftBoardMessage.shift))
+        .where(ShiftBoardMessage.id == message_id)
+    )
+    msg = res.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    user_role = normalize_role(current_user.role)
+    if user_role not in ("platform_admin", "super_admin"):
+        if user_role != "venue_manager":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only Venue Managers can delete messages."
+            )
+        mgr = await db.scalar(
+            select(VenueManager).where(
+                VenueManager.venue_id == msg.shift.venue_id,
+                VenueManager.user_id == current_user.id
+            )
+        )
+        if not mgr:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not manage the venue for this shift's board."
+            )
+
+    await db.delete(msg)
+    await db.commit()
+
 

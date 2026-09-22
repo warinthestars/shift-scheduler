@@ -3,18 +3,23 @@ import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
   Calendar, Clock, DollarSign, Users, Plus, Trash2, Check, X,
-  Building2, Star, AlertCircle, ShieldCheck, Zap, ArrowRight
+  Building2, Star, AlertCircle, ShieldCheck, Zap, ArrowRight,
+  Download, ArrowRightLeft, MessageSquare, FileText
 } from 'lucide-react';
+import ShiftBoard from '../components/ShiftBoard';
 
 export default function VenueManagerDashboard() {
   const { user } = useAuth();
   const [venueShifts, setVenueShifts] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
+  const [pendingTransfers, setPendingTransfers] = useState([]);
   const [currentVenueId, setCurrentVenueId] = useState(user?.venue_id || null);
   const [venueDetails, setVenueDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
+  const [exportingCSV, setExportingCSV] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [notification, setNotification] = useState(null);
 
   // Form state for Shift Creation Modal
@@ -30,7 +35,6 @@ export default function VenueManagerDashboard() {
   const fetchVenueData = async (venueId) => {
     try {
       setLoading(true);
-      // If venueId is not known, fetch available venues first
       let activeId = venueId;
       if (!activeId) {
         const vRes = await api.get('/venues');
@@ -45,20 +49,22 @@ export default function VenueManagerDashboard() {
         return;
       }
 
-      const [shiftsRes, requestsRes, venueRes] = await Promise.all([
+      const [shiftsRes, requestsRes, venueRes, transfersRes] = await Promise.all([
         api.get(`/venues/${activeId}/shifts`),
         api.get(`/venues/${activeId}/requests/pending`),
         api.get(`/venues/${activeId}`),
+        api.get(`/transfers/venue/${activeId}/pending`).catch(() => ({ data: [] })),
       ]);
 
       setVenueShifts(shiftsRes.data || []);
       setPendingRequests(requestsRes.data || []);
       setVenueDetails(venueRes.data || null);
+      setPendingTransfers(transfersRes.data || []);
     } catch (err) {
       console.error('Error fetching venue manager dashboard:', err);
       setNotification({
         type: 'error',
-        message: 'Could not load venue shifts or approval queue from backend.',
+        message: 'Could not load venue shifts, approval queue, or transfers from backend.',
       });
     } finally {
       setLoading(false);
@@ -106,6 +112,79 @@ export default function VenueManagerDashboard() {
       });
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  // Shift Transfer Approval actions
+  const handleApproveTransfer = async (transferId) => {
+    try {
+      setActionLoading(`transfer-approve-${transferId}`);
+      await api.post(`/transfers/${transferId}/approve`);
+      setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId));
+      setNotification({
+        type: 'success',
+        message: 'Shift transfer approved! Spot reassigned to new worker.',
+      });
+      fetchVenueData(currentVenueId);
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to approve shift transfer.',
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDenyTransfer = async (transferId) => {
+    try {
+      setActionLoading(`transfer-deny-${transferId}`);
+      await api.post(`/transfers/${transferId}/reject`);
+      setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId));
+      setNotification({
+        type: 'info',
+        message: 'Shift transfer request rejected.',
+      });
+      fetchVenueData(currentVenueId);
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to deny transfer.',
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // CSV Export for Payroll / Hour Tracking
+  const handleExportCSV = async () => {
+    if (!currentVenueId) return;
+    try {
+      setExportingCSV(true);
+      const res = await api.get(`/venues/${currentVenueId}/export-hours`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${venueDetails?.name || 'venue'}_payroll_hours.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setNotification({
+        type: 'success',
+        message: '📊 Payroll hours CSV downloaded successfully!',
+      });
+    } catch (err) {
+      console.error('Error exporting CSV:', err);
+      setNotification({
+        type: 'error',
+        message: 'Failed to download payroll CSV.',
+      });
+    } finally {
+      setExportingCSV(false);
     }
   };
 
@@ -187,8 +266,21 @@ export default function VenueManagerDashboard() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Export Payroll CSV Button */}
             <button
+              type="button"
+              onClick={handleExportCSV}
+              disabled={exportingCSV || !currentVenueId}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
+            >
+              <Download className="w-4 h-4 text-emerald-400" />
+              <span>{exportingCSV ? 'Exporting...' : 'Export Payroll CSV'}</span>
+            </button>
+
+            {/* Create New Shift Button */}
+            <button
+              type="button"
               onClick={() => setShowCreateModal(true)}
               className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-emerald-500/20"
             >
@@ -225,7 +317,91 @@ export default function VenueManagerDashboard() {
           </div>
         )}
 
-        {/* Section 1: Approval Queue */}
+        {/* Section 1: Shift Transfer Approvals */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-2">
+              <ArrowRightLeft className="w-5 h-5 text-amber-400" />
+              <h2 className="text-base font-bold text-white">
+                Transfer Approvals ({pendingTransfers.length} pending)
+              </h2>
+            </div>
+            <span className="text-xs text-slate-400">
+              Worker-to-worker shift swaps awaiting manager verification
+            </span>
+          </div>
+
+          {pendingTransfers.length === 0 ? (
+            <div className="text-center py-8 bg-slate-950/50 rounded-xl border border-slate-800">
+              <Check className="w-6 h-6 text-emerald-500/60 mx-auto mb-1.5" />
+              <p className="text-xs text-slate-400">No shift transfer requests waiting for approval.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {pendingTransfers.map((transfer) => {
+                const shift = transfer.shift;
+                const fromWorker = transfer.from_worker;
+                const toWorker = transfer.to_worker;
+                const isActionLoading = actionLoading?.includes(transfer.id);
+
+                return (
+                  <div
+                    key={transfer.id}
+                    className="p-4 bg-slate-950 border border-slate-800 rounded-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 text-xs font-semibold border border-amber-500/30">
+                          Swap Request
+                        </span>
+                        <span className="text-xs text-slate-300">
+                          From: <strong className="text-white">{fromWorker?.first_name} {fromWorker?.last_name}</strong>
+                        </span>
+                        <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="text-xs text-slate-300">
+                          To: <strong className="text-white">{toWorker?.first_name} {toWorker?.last_name}</strong>
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-slate-400 mt-1 flex items-center space-x-2">
+                        <span className="text-emerald-400 font-semibold">{shift?.title}</span>
+                        <span>•</span>
+                        <span>{shift?.role_type}</span>
+                        <span>•</span>
+                        <span>${shift?.hourly_rate}/hr</span>
+                        <span>•</span>
+                        <span>{new Date(shift?.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleApproveTransfer(transfer.id)}
+                        disabled={isActionLoading}
+                        className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1 shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Approve</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDenyTransfer(transfer.id)}
+                        disabled={isActionLoading}
+                        className="px-3.5 py-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold transition flex items-center space-x-1 border border-rose-600/30 disabled:opacity-50"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Deny</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Section 2: Shift Application Approval Queue */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-2">
@@ -280,6 +456,7 @@ export default function VenueManagerDashboard() {
 
                     <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
                       <button
+                        type="button"
                         onClick={() => handleApprove(req.id)}
                         disabled={actionLoading === `approve-${req.id}`}
                         className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1 shadow-md shadow-emerald-600/20 disabled:opacity-50"
@@ -288,6 +465,7 @@ export default function VenueManagerDashboard() {
                         <span>Approve</span>
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleDeny(req.id)}
                         disabled={actionLoading === `deny-${req.id}`}
                         className="px-3.5 py-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold transition flex items-center space-x-1 border border-rose-600/30 disabled:opacity-50"
@@ -303,7 +481,7 @@ export default function VenueManagerDashboard() {
           )}
         </div>
 
-        {/* Section 2: Venue Shifts */}
+        {/* Section 3: Scheduled Venue Shifts */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-2">
@@ -342,21 +520,22 @@ export default function VenueManagerDashboard() {
                       <span>{new Date(shift.start_time).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                     </p>
 
-                    <div className="text-xs text-slate-400">
+                    <div className="text-xs text-slate-400 mb-2">
                       Spots: <span className="text-white font-semibold">{shift.spots_filled} / {shift.capacity} filled</span>
                     </div>
                   </div>
 
-                  <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                    {shift.is_shift_auto_confirm ? (
-                      <span className="text-emerald-400 flex items-center space-x-1 font-medium">
-                        <Zap className="w-3 h-3" />
-                        <span>Auto-Confirm Anyone</span>
-                      </span>
-                    ) : (
-                      <span className="text-slate-500">Standard Review</span>
-                    )}
-                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-xs">
+                  <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setActiveDiscussionShift(shift)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 flex items-center space-x-1 font-medium transition"
+                    >
+                      <MessageSquare className="w-3 h-3 text-indigo-400" />
+                      <span>Discussion Board</span>
+                    </button>
+
+                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[11px]">
                       {shift.status}
                     </span>
                   </div>
@@ -374,6 +553,7 @@ export default function VenueManagerDashboard() {
             <div className="flex justify-between items-center pb-2 border-b border-slate-800">
               <h3 className="text-base font-bold text-white">Create New Shift</h3>
               <button
+                type="button"
                 onClick={() => setShowCreateModal(false)}
                 className="text-slate-400 hover:text-white"
               >
@@ -510,6 +690,19 @@ export default function VenueManagerDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Discussion Board Modal */}
+      {activeDiscussionShift && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-2xl w-full">
+            <ShiftBoard
+              shiftId={activeDiscussionShift.id}
+              shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.role_type})`}
+              onClose={() => setActiveDiscussionShift(null)}
+            />
           </div>
         </div>
       )}

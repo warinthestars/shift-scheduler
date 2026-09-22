@@ -249,3 +249,43 @@ class Rating(Base):
     shift_request = relationship("ShiftRequest", back_populates="rating")
     venue = relationship("Venue")
     worker = relationship("User", back_populates="ratings_received", foreign_keys=[worker_id])
+
+class TimeEntry(Base):
+    __tablename__ = "time_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    clock_in_time = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    clock_out_time = Column(DateTime(timezone=True), nullable=True)
+
+    worker = relationship("User", foreign_keys=[worker_id])
+    shift = relationship("Shift", foreign_keys=[shift_id])
+
+class ShiftTransfer(Base):
+    __tablename__ = "shift_transfers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    to_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(50), nullable=False, default="pending_worker_acceptance", index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    shift = relationship("Shift", foreign_keys=[shift_id])
+    from_worker = relationship("User", foreign_keys=[from_worker_id])
+    to_worker = relationship("User", foreign_keys=[to_worker_id])
+
+class ShiftBoardMessage(Base):
+    __tablename__ = "shift_board_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    shift = relationship("Shift", foreign_keys=[shift_id])
+    author = relationship("User", foreign_keys=[author_id])
+

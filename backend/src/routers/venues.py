@@ -1,13 +1,16 @@
+import csv
+import io
 from uuid import UUID
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
     Venue, VenueManager, VenueWhitelist, User, UserRole,
-    Shift, ShiftRequest, RequestStatus
+    Shift, ShiftRequest, RequestStatus, TimeEntry
 )
 from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
@@ -17,6 +20,7 @@ from src.schemas import (
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
+
 
 async def verify_venue_manager_access(venue_id: UUID, user: User, db: AsyncSession) -> Venue:
     """Verify that user is either a SUPER_ADMIN or an assigned manager for this venue"""
@@ -237,3 +241,55 @@ async def delete_venue(
 
     await db.delete(venue)
     await db.commit()
+
+@router.get("/{venue_id}/export-hours")
+async def export_venue_hours_csv(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Task 2: Query all TimeEntry records for the venue. Join with the User and Shift tables.
+    Use the Python csv module and io.StringIO to format columns:
+    Worker Name, Shift Date, Role, Clock In, Clock Out, Total Hours.
+    Return a FastAPI StreamingResponse with media_type="text/csv" and a Content-Disposition header.
+    """
+    await verify_venue_manager_access(venue_id, current_user, db)
+
+    query = (
+        select(TimeEntry, User, Shift)
+        .join(Shift, TimeEntry.shift_id == Shift.id)
+        .join(User, TimeEntry.worker_id == User.id)
+        .where(Shift.venue_id == venue_id)
+        .order_by(TimeEntry.clock_in_time.desc())
+    )
+    result = await db.execute(query)
+    records = result.all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Worker Name", "Shift Date", "Role", "Clock In", "Clock Out", "Total Hours"])
+
+    for entry, worker, shift in records:
+        worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
+        shift_date = shift.start_time.strftime("%Y-%m-%d") if shift.start_time else ""
+        role = shift.role_type or ""
+        clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
+        clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "In Progress"
+
+        if entry.clock_in_time and entry.clock_out_time:
+            diff_seconds = (entry.clock_out_time - entry.clock_in_time).total_seconds()
+            total_hours = f"{diff_seconds / 3600.0:.2f}"
+        else:
+            total_hours = "0.00"
+
+        writer.writerow([worker_name, shift_date, role, clock_in, clock_out, total_hours])
+
+    output.seek(0)
+    filename = f"venue_{venue_id}_hours.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
