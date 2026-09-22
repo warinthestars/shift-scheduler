@@ -2,8 +2,9 @@
 .env
 *.env
 !.env.template
-.secrets/
-*.secrets
+.secrets/*
+!.secrets/*.template
+!.secrets/.secrets.env.template
 *.pem
 *.key
 

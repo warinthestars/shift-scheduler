@@ -270,28 +270,29 @@ async def approve_shift_transfer(
     # 1. Update transfer status
     transfer.status = "approved"
 
-    # 2. Modify original ShiftRequest from from_worker: mark REJECTED / delete
+    # 2. Safely update worker_id on the original ShiftRequest row
     orig_req = await db.scalar(
         select(ShiftRequest).where(
             ShiftRequest.shift_id == transfer.shift_id,
             ShiftRequest.worker_id == transfer.from_worker_id
         )
     )
-    if orig_req:
-        await db.delete(orig_req)
-
-    # 3. Create or update ShiftRequest for to_worker as APPROVED
-    to_req = await db.scalar(
+    existing_to_req = await db.scalar(
         select(ShiftRequest).where(
             ShiftRequest.shift_id == transfer.shift_id,
             ShiftRequest.worker_id == transfer.to_worker_id
         )
     )
-    if to_req:
-        to_req.status = "approved"
-        to_req.approval_source = "shift_transfer"
-        to_req.approved_by_user_id = current_user.id
-        to_req.approved_at = datetime.now(timezone.utc)
+    if existing_to_req and orig_req and existing_to_req.id != orig_req.id:
+        await db.delete(existing_to_req)
+        await db.flush()
+
+    if orig_req:
+        orig_req.worker_id = transfer.to_worker_id
+        orig_req.status = "approved"
+        orig_req.approval_source = "shift_transfer"
+        orig_req.approved_by_user_id = current_user.id
+        orig_req.approved_at = datetime.now(timezone.utc)
     else:
         new_req = ShiftRequest(
             shift_id=transfer.shift_id,

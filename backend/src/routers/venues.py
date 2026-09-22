@@ -18,7 +18,7 @@ from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
     WhitelistAddRequest, WhitelistResponse,
     ShiftResponse, ShiftRequestResponse,
-    WorkerContactSchema, ShiftRosterResponse
+    WorkerContactSchema, ShiftRosterResponse, UserBrief
 )
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 
@@ -300,6 +300,79 @@ async def export_venue_hours_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+@router.get("/{venue_id}/payroll/export")
+async def export_venue_payroll_csv(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 19: Hour Tracking & Payroll CSV Export.
+    Calculates hours worked for workers at this venue.
+    """
+    await verify_venue_manager_access(venue_id, current_user, db)
+
+    query = (
+        select(TimeEntry, User, Shift)
+        .join(Shift, TimeEntry.shift_id == Shift.id)
+        .join(User, TimeEntry.worker_id == User.id)
+        .where(Shift.venue_id == venue_id)
+        .order_by(TimeEntry.clock_in_time.desc())
+    )
+    result = await db.execute(query)
+    records = result.all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Worker Name", "Email", "Shift Title", "Date", "Clock In", "Clock Out", "Total Hours"])
+
+    for entry, worker, shift in records:
+        worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
+        email = worker.email or ""
+        shift_title = shift.title or ""
+        shift_date = shift.start_time.strftime("%Y-%m-%d") if shift.start_time else ""
+        clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
+        clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "Did not clock out"
+
+        if entry.clock_in_time and entry.clock_out_time:
+            diff_seconds = (entry.clock_out_time - entry.clock_in_time).total_seconds()
+            total_hours = f"{diff_seconds / 3600.0:.2f}"
+        else:
+            total_hours = "0"
+
+        writer.writerow([worker_name, email, shift_title, shift_date, clock_in, clock_out, total_hours])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=payroll.csv"}
+    )
+
+@router.get("/{venue_id}/workers", response_model=List[UserBrief])
+async def get_venue_workers(
+    venue_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 19: Retrieve active workers eligible for shift assignments and transfers at this venue.
+    """
+    v = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if not v:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    result = await db.execute(
+        select(User)
+        .where(
+            User.role == "worker",
+            User.is_active == True,
+            User.id != current_user.id
+        )
+        .order_by(User.first_name.asc(), User.last_name.asc())
+    )
+    return result.scalars().all()
 
 @router.get("/{venue_id}/roster", response_model=List[ShiftRosterResponse])
 async def get_venue_roster(

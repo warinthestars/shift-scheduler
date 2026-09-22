@@ -737,6 +737,7 @@ export default function WorkerDashboard() {
             <ShiftBoard
               shiftId={activeDiscussionShift.id}
               shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.venue?.name || ''})`}
+              currentUserRole={user?.role}
               onClose={() => setActiveDiscussionShift(null)}
             />
           </div>

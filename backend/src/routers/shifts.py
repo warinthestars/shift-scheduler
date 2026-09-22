@@ -751,6 +751,17 @@ async def post_shift_message(
     )
     return res.scalar_one()
 
+@router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{shift_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_shift_message_from_shift(
+    message_id: UUID,
+    shift_id: Optional[UUID] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a shift message (moderation)"""
+    return await delete_shift_message(message_id=message_id, current_user=current_user, db=db)
+
 # ------------------------------------------------------------------------------
 # Messages Deletion Router (DELETE /api/messages/{message_id})
 # ------------------------------------------------------------------------------

@@ -27,7 +27,23 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
       try {
         setLoadingWorkers(true);
         setError(null);
-        const res = await api.get(`/transfers/eligible-workers/${selectedShiftId}`);
+
+        const currentShift = myConfirmedShifts.find(
+          (item) => (item.shift_id || item.shift?.id) === selectedShiftId
+        )?.shift;
+        const venueId = currentShift?.venue_id || currentShift?.venue?.id;
+
+        let res;
+        if (venueId) {
+          try {
+            res = await api.get(`/venues/${venueId}/workers`);
+          } catch (venueErr) {
+            res = await api.get(`/transfers/eligible-workers/${selectedShiftId}`);
+          }
+        } else {
+          res = await api.get(`/transfers/eligible-workers/${selectedShiftId}`);
+        }
+
         setEligibleWorkers(res.data || []);
         if (res.data && res.data.length > 0) {
           setSelectedWorkerId(res.data[0].id);

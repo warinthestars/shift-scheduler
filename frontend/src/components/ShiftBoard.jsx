@@ -5,8 +5,9 @@ import {
   MessageSquare, Send, Trash2, X, Clock, User, AlertCircle, RefreshCw
 } from 'lucide-react';
 
-export default function ShiftBoard({ shiftId, shiftTitle, onClose }) {
+export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClose }) {
   const { user } = useAuth();
+  const effectiveRole = currentUserRole || user?.role;
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -14,7 +15,7 @@ export default function ShiftBoard({ shiftId, shiftTitle, onClose }) {
   const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
 
-  const isManagerOrAdmin = ['venue_manager', 'platform_admin', 'super_admin'].includes(user?.role);
+  const isManagerOrAdmin = ['venue_manager', 'platform_admin', 'super_admin'].includes(effectiveRole);
 
   const fetchMessages = async () => {
     if (!shiftId) return;
@@ -210,7 +211,7 @@ export default function ShiftBoard({ shiftId, shiftTitle, onClose }) {
           className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition disabled:opacity-40 flex items-center space-x-1 shadow-md shadow-indigo-600/20"
         >
           <Send className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">{sending ? 'Sending...' : 'Send'}</span>
+          <span className="hidden sm:inline">{sending ? 'Posting...' : 'Post'}</span>
         </button>
       </form>
     </div>
