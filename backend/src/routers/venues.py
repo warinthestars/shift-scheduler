@@ -2,10 +2,12 @@ import csv
 import io
 from uuid import UUID
 from typing import List, Optional
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
@@ -15,7 +17,8 @@ from src.models import (
 from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
     WhitelistAddRequest, WhitelistResponse,
-    ShiftResponse, ShiftRequestResponse
+    ShiftResponse, ShiftRequestResponse,
+    WorkerContactSchema, ShiftRosterResponse
 )
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 
@@ -145,7 +148,12 @@ async def get_venue_pending_requests(
             selectinload(ShiftRequest.shift).selectinload(Shift.venue),
             selectinload(ShiftRequest.worker)
         )
-        .where(Shift.venue_id == venue_id, ShiftRequest.status == RequestStatus.PENDING)
+        .where(
+            Shift.venue_id == venue_id,
+            func.lower(ShiftRequest.status).in_([
+                "pending", "pending_manager_approval"
+            ])
+        )
         .order_by(ShiftRequest.created_at.asc())
     )
     return result.scalars().all()
@@ -292,4 +300,116 @@ async def export_venue_hours_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+@router.get("/{venue_id}/roster", response_model=List[ShiftRosterResponse])
+async def get_venue_roster(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 16 & 17: Venue Manager Roster Endpoint.
+    Aggregates shift data with contact details of approved/confirmed workers.
+    Does not expose sensitive user data.
+    """
+    await verify_venue_manager_access(venue_id, current_user, db)
+
+    try:
+        # 1. Query future and recent past shifts for this venue
+        now_utc = datetime.now(timezone.utc)
+        recent_cutoff = now_utc - timedelta(days=60)
+
+        shifts_query = (
+            select(Shift)
+            .options(selectinload(Shift.venue))
+            .where(Shift.venue_id == venue_id, Shift.start_time >= recent_cutoff)
+            .order_by(Shift.start_time.asc())
+        )
+        result = await db.execute(shifts_query)
+        shifts = result.scalars().all()
+
+        # Fallback to all shifts if none found within cutoff
+        if not shifts:
+            fallback_query = (
+                select(Shift)
+                .options(selectinload(Shift.venue))
+                .where(Shift.venue_id == venue_id)
+                .order_by(Shift.start_time.asc())
+            )
+            shifts = (await db.execute(fallback_query)).scalars().all()
+
+        if not shifts:
+            return []
+
+        shift_ids = [s.id for s in shifts]
+
+        # 2. Query approved / confirmed worker assignments
+        assignments_query = (
+            select(ShiftRequest, User)
+            .join(User, ShiftRequest.worker_id == User.id)
+            .where(
+                ShiftRequest.shift_id.in_(shift_ids),
+                func.lower(ShiftRequest.status).in_([
+                    "approved", "confirmed", "checked_in", "completed"
+                ])
+            )
+        )
+        assignments_res = await db.execute(assignments_query)
+        workers_by_shift = defaultdict(list)
+        for req, worker in assignments_res.all():
+            rating = 5.0
+            if worker.aggregate_rating is not None:
+                try:
+                    rating = float(worker.aggregate_rating)
+                except (ValueError, TypeError):
+                    rating = 5.0
+
+            contact = WorkerContactSchema(
+                id=worker.id,
+                first_name=worker.first_name or "",
+                last_name=worker.last_name or "",
+                email=worker.email,
+                phone=worker.phone,
+                avatar_url=worker.avatar_url,
+                bio=worker.bio,
+                aggregate_rating=rating
+            )
+            workers_by_shift[req.shift_id].append(contact)
+
+        # 3. Construct and return list of ShiftRosterResponse
+        roster = []
+        for s in shifts:
+            rate = 25.0
+            if s.hourly_rate is not None:
+                try:
+                    rate = float(s.hourly_rate)
+                except (ValueError, TypeError):
+                    rate = 25.0
+
+            roster_item = ShiftRosterResponse(
+                id=s.id,
+                venue_id=s.venue_id,
+                title=s.title or "Shift",
+                name=s.title or "Shift",
+                role_type=s.role_type or "Worker",
+                start_time=s.start_time,
+                end_time=s.end_time,
+                capacity=s.capacity if s.capacity is not None else 1,
+                spots_filled=s.spots_filled if s.spots_filled is not None else 0,
+                available_spots=s.available_spots,
+                is_shift_auto_confirm=bool(s.is_shift_auto_confirm),
+                hourly_rate=rate,
+                description=s.description,
+                status=s.status or "OPEN",
+                created_at=s.created_at,
+                venue=s.venue,
+                assigned_workers=workers_by_shift[s.id]
+            )
+            roster.append(roster_item)
+
+        return roster
+    except Exception as e:
+        print(f"Roster Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 

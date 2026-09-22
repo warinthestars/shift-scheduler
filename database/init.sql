@@ -11,19 +11,6 @@
 -- Enable UUID Extension
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- ------------------------------------------------------------------------------
--- Custom ENUM Types
--- ------------------------------------------------------------------------------
-CREATE TYPE request_status AS ENUM (
-    'PENDING',
-    'APPROVED',
-    'REJECTED',
-    'CHECKED_IN',
-    'COMPLETED',
-    'dropped',
-    'DROPPED'
-);
-
 
 -- ------------------------------------------------------------------------------
 -- 1. Users Table
@@ -135,7 +122,7 @@ CREATE TABLE shift_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
     worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status request_status NOT NULL DEFAULT 'PENDING',
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
     approval_source VARCHAR(50),
     approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     approved_at TIMESTAMPTZ,

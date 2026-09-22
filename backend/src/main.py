@@ -25,9 +25,22 @@ async def lifespan(app: FastAPI):
     """Application startup & shutdown lifecycle: seeds database on startup"""
     logger.info("Initializing ShiftBoard Backend Application...")
 
-    # Ensure tables exist in database (fallback if init.sql wasn't pre-run)
+    # Ensure tables and standard VARCHAR columns exist in database
     try:
+        from sqlalchemy import text
         async with engine.begin() as conn:
+            try:
+                await conn.execute(text("ALTER TABLE shift_requests ALTER COLUMN status TYPE VARCHAR(50) USING status::text;"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE shifts ALTER COLUMN status TYPE VARCHAR(50) USING status::text;"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE shift_transfers ALTER COLUMN status TYPE VARCHAR(50) USING status::text;"))
+            except Exception:
+                pass
             await conn.run_sync(Base.metadata.create_all)
     except Exception as e:
         logger.warning(f"Metadata create_all check: {e}")

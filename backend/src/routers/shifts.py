@@ -203,8 +203,14 @@ async def request_shift(
         venue=shift.venue
     )
 
+    status_val = (
+        assigned_status.value
+        if hasattr(assigned_status, "value")
+        else str(assigned_status)
+    ).lower()
+
     # 5. If approved immediately, adjust spots
-    if assigned_status == RequestStatus.APPROVED:
+    if status_val == "approved":
         shift.spots_filled += 1
         if shift.spots_filled >= shift.capacity:
             shift.status = "FILLED"
@@ -212,9 +218,9 @@ async def request_shift(
     req = ShiftRequest(
         shift_id=shift.id,
         worker_id=current_user.id,
-        status=assigned_status,
+        status=status_val,
         approval_source=approval_source,
-        approved_at=datetime.utcnow() if assigned_status == RequestStatus.APPROVED else None
+        approved_at=datetime.utcnow() if status_val == "approved" else None
     )
     db.add(req)
     await db.commit()
@@ -231,21 +237,20 @@ async def request_shift(
     )
     return res.scalar_one()
 
-@router.put("/requests/{request_id}", response_model=ShiftRequestResponse)
+# ------------------------------------------------------------------------------
+# Request Management Functions
+# ------------------------------------------------------------------------------
 async def update_shift_request_status(
     request_id: UUID,
     status_update: ShiftRequestStatusUpdate,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Task 4: Allow Venue Managers to manually update a pending request to APPROVED or REJECTED.
-    """
+    current_user: User,
+    db: AsyncSession
+) -> ShiftRequest:
+    """Core update handler for manual approval or rejection of shift requests"""
     target_status = status_update.status.upper()
     if target_status not in ("APPROVED", "REJECTED"):
         raise HTTPException(status_code=400, detail="Status must be APPROVED or REJECTED")
 
-    # Fetch request with shift & venue
     query = await db.execute(
         select(ShiftRequest)
         .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
@@ -270,8 +275,9 @@ async def update_shift_request_status(
             raise HTTPException(status_code=403, detail="Not authorized to manage requests for this venue")
 
     # Apply manual update
-    prev_status = shift_req.status
-    if target_status == "APPROVED" and prev_status != RequestStatus.APPROVED:
+    prev_status = str(shift_req.status).lower()
+    target_clean = target_status.lower()
+    if target_clean == "approved" and prev_status != "approved":
         # Check double-booking before approving
         await check_double_booking(
             db=db,
@@ -285,15 +291,15 @@ async def update_shift_request_status(
         shift.spots_filled += 1
         if shift.spots_filled >= shift.capacity:
             shift.status = "FILLED"
-        shift_req.status = RequestStatus.APPROVED
+        shift_req.status = "approved"
         shift_req.approval_source = "manager_manual"
         shift_req.approved_by_user_id = current_user.id
         shift_req.approved_at = datetime.utcnow()
-    elif target_status == "REJECTED":
-        if prev_status == RequestStatus.APPROVED:
+    elif target_clean == "rejected":
+        if prev_status == "approved":
             shift.spots_filled = max(0, shift.spots_filled - 1)
             shift.status = "OPEN"
-        shift_req.status = RequestStatus.REJECTED
+        shift_req.status = "rejected"
 
 
     await db.commit()
@@ -343,9 +349,9 @@ async def get_worker_dashboard_stats(
     )
     user_requests = user_requests_res.scalars().all()
 
-    pending_count = sum(1 for r in user_requests if r.status in (RequestStatus.PENDING, "PENDING"))
-    upcoming_count = sum(1 for r in user_requests if r.status in (RequestStatus.APPROVED, "APPROVED"))
-    completed_count = sum(1 for r in user_requests if r.status in (RequestStatus.COMPLETED, "COMPLETED")) or current_user.total_shifts
+    pending_count = sum(1 for r in user_requests if str(r.status).lower() in ("pending", "pending_manager_approval"))
+    upcoming_count = sum(1 for r in user_requests if str(r.status).lower() in ("approved", "confirmed"))
+    completed_count = sum(1 for r in user_requests if str(r.status).lower() in ("completed", "checked_in")) or current_user.total_shifts
 
     return {
         "available_shifts_count": open_shifts_count,
@@ -370,10 +376,10 @@ async def check_in_shift(
         .where(ShiftRequest.shift_id == shift_id, ShiftRequest.worker_id == current_user.id)
     )
     shift_req = res.scalar_one_or_none()
-    if not shift_req or shift_req.status not in (RequestStatus.APPROVED, "APPROVED"):
+    if not shift_req or str(shift_req.status).lower() not in ("approved", "confirmed"):
         raise HTTPException(status_code=400, detail="Only approved shifts can be checked into")
 
-    shift_req.status = RequestStatus.CHECKED_IN
+    shift_req.status = "checked_in"
     shift_req.check_in_time = datetime.utcnow()
     shift_req.check_in_verified = True
     await db.commit()
@@ -397,7 +403,7 @@ async def check_out_shift(
     if not shift_req:
         raise HTTPException(status_code=404, detail="Shift request not found")
 
-    shift_req.status = RequestStatus.COMPLETED
+    shift_req.status = "completed"
     shift_req.check_out_time = datetime.utcnow()
     shift_req.check_out_verified = True
     current_user.total_shifts += 1
@@ -411,15 +417,14 @@ async def check_out_shift(
 @router.post("/{shift_id}/drop")
 async def drop_shift(
     shift_id: UUID,
-    current_user: User = Depends(require_worker),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Phase 14: Drop a confirmed shift.
-    1. Verify current_user has worker role and is assigned to the shift.
-    2. Enforce 24-hour drop deadline.
-    3. Update ShiftRequest status to 'dropped'.
-    4. Increment Shift available capacity (available_spots = available_spots + 1).
+    Phase 14, 15, 17: Drop a confirmed shift.
+    1. Verify current_user is assigned to the shift.
+    2. Datetime Normalization: Compare start_time with now_utc.
+    3. Explicitly execute shift.available_spots += 1 and update status to 'dropped'.
     """
     # 1. Fetch shift
     shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
@@ -430,11 +435,7 @@ async def drop_shift(
     shift_req = await db.scalar(
         select(ShiftRequest).where(
             ShiftRequest.shift_id == shift_id,
-            ShiftRequest.worker_id == current_user.id,
-            ShiftRequest.status.in_([
-                RequestStatus.APPROVED, RequestStatus.CHECKED_IN,
-                "APPROVED", "CHECKED_IN", "approved"
-            ])
+            ShiftRequest.worker_id == current_user.id
         )
     )
     if not shift_req:
@@ -443,14 +444,21 @@ async def drop_shift(
             detail="Shift assignment not found."
         )
 
-    # 3. Time constraint logic: Compare start_time with datetime.now(timezone.utc)
+    if str(shift_req.status).lower() == "dropped":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Shift is already dropped."
+        )
+
+    # 3. Datetime Normalization
+    now_utc = datetime.now(timezone.utc)
+    # Ensure shift_start is aware
     shift_start = shift.start_time
+    if isinstance(shift_start, str):
+        shift_start = datetime.fromisoformat(shift_start.replace("Z", "+00:00"))
     if shift_start.tzinfo is None:
         shift_start = shift_start.replace(tzinfo=timezone.utc)
-    else:
-        shift_start = shift_start.astimezone(timezone.utc)
 
-    now_utc = datetime.now(timezone.utc)
     time_to_start = (shift_start - now_utc).total_seconds()
     if time_to_start < 24 * 3600:
         raise HTTPException(
@@ -463,8 +471,8 @@ async def drop_shift(
         # Step 1: Update status of worker's ShiftRequest record to "dropped"
         shift_req.status = "dropped"
 
-        # Step 2: Increment Shift available capacity (available_spots = available_spots + 1)
-        shift.spots_filled = max(0, shift.spots_filled - 1)
+        # Step 2: Capacity Increment
+        shift.available_spots += 1
         if shift.status == "FILLED":
             shift.status = "OPEN"
 
@@ -472,9 +480,10 @@ async def drop_shift(
         await db.commit()
         await db.refresh(shift_req)
         await db.refresh(shift)
-    except Exception:
+    except Exception as e:
         await db.rollback()
-        raise
+        print(f"Drop shift transaction error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "message": "Shift successfully dropped and returned to open marketplace.",
@@ -535,9 +544,8 @@ async def clock_in_shift_time(
         select(ShiftRequest).where(
             ShiftRequest.shift_id == shift_id,
             ShiftRequest.worker_id == current_user.id,
-            ShiftRequest.status.in_([
-                RequestStatus.APPROVED, RequestStatus.CHECKED_IN,
-                "APPROVED", "CHECKED_IN"
+            func.lower(ShiftRequest.status).in_([
+                "approved", "checked_in", "confirmed"
             ])
         )
     )
@@ -567,7 +575,7 @@ async def clock_in_shift_time(
     db.add(entry)
 
     # Synchronize ShiftRequest check-in status
-    req.status = RequestStatus.CHECKED_IN
+    req.status = "checked_in"
     if not req.check_in_time:
         req.check_in_time = now_utc
     req.check_in_verified = True
@@ -609,7 +617,7 @@ async def clock_out_shift_time(
         )
     )
     if req:
-        req.status = RequestStatus.COMPLETED
+        req.status = "completed"
         req.check_out_time = now_utc
         req.check_out_verified = True
 
@@ -676,9 +684,8 @@ async def verify_shift_message_access(shift: Shift, user: User, db: AsyncSession
         select(ShiftRequest).where(
             ShiftRequest.shift_id == shift.id,
             ShiftRequest.worker_id == user.id,
-            ShiftRequest.status.in_([
-                RequestStatus.APPROVED, RequestStatus.CHECKED_IN, RequestStatus.COMPLETED,
-                "APPROVED", "CHECKED_IN", "COMPLETED"
+            func.lower(ShiftRequest.status).in_([
+                "approved", "checked_in", "completed", "confirmed"
             ])
         )
     )

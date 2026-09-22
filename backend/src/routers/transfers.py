@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import Shift, ShiftRequest, Venue, VenueManager, User, RequestStatus, ShiftTransfer
@@ -51,9 +51,8 @@ async def propose_shift_transfer(
         select(ShiftRequest).where(
             ShiftRequest.shift_id == transfer_in.shift_id,
             ShiftRequest.worker_id == current_user.id,
-            ShiftRequest.status.in_([
-                RequestStatus.APPROVED, RequestStatus.CHECKED_IN,
-                "APPROVED", "CHECKED_IN"
+            func.lower(ShiftRequest.status).in_([
+                "approved", "checked_in", "confirmed"
             ])
         )
     )
@@ -289,7 +288,7 @@ async def approve_shift_transfer(
         )
     )
     if to_req:
-        to_req.status = RequestStatus.APPROVED
+        to_req.status = "approved"
         to_req.approval_source = "shift_transfer"
         to_req.approved_by_user_id = current_user.id
         to_req.approved_at = datetime.now(timezone.utc)
@@ -297,7 +296,7 @@ async def approve_shift_transfer(
         new_req = ShiftRequest(
             shift_id=transfer.shift_id,
             worker_id=transfer.to_worker_id,
-            status=RequestStatus.APPROVED,
+            status="approved",
             approval_source="shift_transfer",
             approved_by_user_id=current_user.id,
             approved_at=datetime.now(timezone.utc)

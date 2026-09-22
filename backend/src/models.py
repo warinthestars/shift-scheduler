@@ -27,6 +27,19 @@ class RequestStatus(str, Enum):
     COMPLETED = "COMPLETED"
     DROPPED = "dropped"
     dropped = "dropped"
+    pending_manager_approval = "pending_manager_approval"
+    approved = "approved"
+    confirmed = "confirmed"
+
+class ShiftStatus(str, Enum):
+    OPEN = "OPEN"
+    FILLED = "FILLED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    open = "open"
+    filled = "filled"
+    completed = "completed"
+    cancelled = "cancelled"
 
 
 class User(Base):
@@ -206,11 +219,18 @@ class Shift(Base):
 
     @property
     def available_spots(self):
-        return max(0, self.capacity - self.spots_filled)
+        cap = self.capacity if self.capacity is not None else 1
+        filled = self.spots_filled if self.spots_filled is not None else 0
+        return max(0, cap - filled)
 
     @available_spots.setter
     def available_spots(self, val):
-        self.spots_filled = max(0, self.capacity - int(val))
+        new_val = int(val) if val is not None else 0
+        if self.capacity is None:
+            self.capacity = new_val
+            self.spots_filled = 0
+        else:
+            self.spots_filled = max(0, self.capacity - new_val)
 
 
     venue = relationship("Venue", back_populates="shifts")
@@ -222,12 +242,7 @@ class ShiftRequest(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
     worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    status = Column(
-        SQLEnum(RequestStatus, name="request_status", native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
-        nullable=False,
-        default=RequestStatus.PENDING,
-        index=True
-    )
+    status = Column(String(50), nullable=False, default="pending", index=True)
     approval_source = Column(String(50), nullable=True)
     approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)

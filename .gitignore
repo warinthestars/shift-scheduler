@@ -70,3 +70,7 @@ Thumbs.db
 # Cloudflared credentials (runtime generated)
 cloudflared/cert.pem
 cloudflared/*.json
+
+# Antigravity CLI
+.antigravitycli/
+

@@ -25,6 +25,23 @@ class RequestStatusEnum(str, Enum):
     COMPLETED = "COMPLETED"
     DROPPED = "dropped"
     dropped = "dropped"
+    pending_manager_approval = "pending_manager_approval"
+    approved = "approved"
+    confirmed = "confirmed"
+
+RequestStatus = RequestStatusEnum
+
+class ShiftStatus(str, Enum):
+    OPEN = "OPEN"
+    FILLED = "FILLED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    open = "open"
+    filled = "filled"
+    completed = "completed"
+    cancelled = "cancelled"
+
+ShiftStatusEnum = ShiftStatus
 
 
 # ------------------------------------------------------------------------------
@@ -191,34 +208,53 @@ class ShiftCreate(BaseModel):
 class ShiftResponse(BaseModel):
     id: UUID
     venue_id: UUID
-    title: str
-    role_type: str
+    title: Optional[str] = "Shift"
+    name: Optional[str] = None
+    role_type: Optional[str] = "Worker"
     start_time: datetime
     end_time: datetime
-    capacity: int
-    spots_filled: int
-    is_shift_auto_confirm: bool
-    hourly_rate: float
+    capacity: Optional[int] = 1
+    spots_filled: Optional[int] = 0
+    available_spots: Optional[int] = None
+    is_shift_auto_confirm: Optional[bool] = False
+    hourly_rate: Optional[float] = 25.00
     description: Optional[str] = None
-    status: str
-    created_at: datetime
+    status: Optional[str] = "OPEN"
+    created_at: Optional[datetime] = None
     venue: Optional[VenueResponse] = None
 
     # Aliases
     @property
     def role_required(self) -> str:
-        return self.role_type
+        return self.role_type or "Worker"
 
     @property
     def spots_needed(self) -> int:
-        return self.capacity
+        return self.capacity or 1
 
     @property
     def auto_confirm_anyone(self) -> bool:
-        return self.is_shift_auto_confirm
+        return bool(self.is_shift_auto_confirm)
 
     class Config:
         from_attributes = True
+
+class WorkerContactSchema(BaseModel):
+    id: UUID
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    aggregate_rating: Optional[float] = 5.0
+
+    class Config:
+        from_attributes = True
+
+class ShiftRosterResponse(ShiftResponse):
+    name: Optional[str] = None
+    assigned_workers: Optional[List[WorkerContactSchema]] = []
 
 class ShiftRequestResponse(BaseModel):
     id: UUID

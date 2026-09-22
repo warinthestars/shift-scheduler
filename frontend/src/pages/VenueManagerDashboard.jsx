@@ -1,12 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
-  Calendar, Clock, DollarSign, Users, Plus, Trash2, Check, X,
+  Calendar as CalendarIcon, Clock, DollarSign, Users, Plus, Trash2, Check, X,
   Building2, Star, AlertCircle, ShieldCheck, Zap, ArrowRight,
-  Download, ArrowRightLeft, MessageSquare, FileText
+  Download, ArrowRightLeft, MessageSquare, FileText, List as ListIcon
 } from 'lucide-react';
+import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
+import { format, parse, startOfWeek, getDay } from 'date-fns';
+import { enUS } from 'date-fns/locale';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
 import ShiftBoard from '../components/ShiftBoard';
+import ShiftRosterModal from '../components/ShiftRosterModal';
+
+const locales = {
+  'en-US': enUS,
+};
+
+const localizer = dateFnsLocalizer({
+  format,
+  parse,
+  startOfWeek,
+  getDay,
+  locales,
+});
 
 export default function VenueManagerDashboard() {
   const { user } = useAuth();
@@ -21,6 +38,11 @@ export default function VenueManagerDashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [notification, setNotification] = useState(null);
+
+  // Phase 16: Roster & Calendar Views state
+  const [viewMode, setViewMode] = useState("calendar"); // Toggles between "list" and "calendar".
+  const [roster, setRoster] = useState([]); // Holds the data from `/api/venues/{venue_id}/roster`.
+  const [selectedShift, setSelectedShift] = useState(null); // Triggers the drill-down modal.
 
   // Form state for Shift Creation Modal
   const [eventName, setEventName] = useState('');
@@ -49,17 +71,19 @@ export default function VenueManagerDashboard() {
         return;
       }
 
-      const [shiftsRes, requestsRes, venueRes, transfersRes] = await Promise.all([
+      const [shiftsRes, requestsRes, venueRes, transfersRes, rosterRes] = await Promise.all([
         api.get(`/venues/${activeId}/shifts`),
         api.get(`/venues/${activeId}/requests/pending`),
         api.get(`/venues/${activeId}`),
         api.get(`/transfers/venue/${activeId}/pending`).catch(() => ({ data: [] })),
+        api.get(`/venues/${activeId}/roster`).catch(() => ({ data: [] })),
       ]);
 
       setVenueShifts(shiftsRes.data || []);
       setPendingRequests(requestsRes.data || []);
       setVenueDetails(venueRes.data || null);
       setPendingTransfers(transfersRes.data || []);
+      setRoster(rosterRes.data || []);
     } catch (err) {
       console.error('Error fetching venue manager dashboard:', err);
       setNotification({
@@ -74,6 +98,48 @@ export default function VenueManagerDashboard() {
   useEffect(() => {
     fetchVenueData(user?.venue_id);
   }, [user?.venue_id]);
+
+  // Phase 16: Fetch roster data when currentVenueId changes
+  useEffect(() => {
+    if (!currentVenueId) return;
+    const fetchRoster = async () => {
+      try {
+        const res = await api.get(`/venues/${currentVenueId}/roster`);
+        setRoster(res.data || []);
+      } catch (err) {
+        console.error('Error fetching venue roster:', err);
+      }
+    };
+    fetchRoster();
+  }, [currentVenueId]);
+
+  // Transform roster into react-big-calendar events
+  const calendarEvents = useMemo(() => {
+    return (roster || []).map((shift) => ({
+      id: shift.id,
+      title: shift.name || shift.title,
+      start: new Date(shift.start_time),
+      end: new Date(shift.end_time),
+      resource: shift,
+    }));
+  }, [roster]);
+
+  // Group roster shifts by Date for List view
+  const shiftsByDate = useMemo(() => {
+    return (roster || []).reduce((acc, shift) => {
+      const dateKey = shift.start_time
+        ? new Date(shift.start_time).toLocaleDateString([], {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })
+        : 'Unscheduled';
+      if (!acc[dateKey]) acc[dateKey] = [];
+      acc[dateKey].push(shift);
+      return acc;
+    }, {});
+  }, [roster]);
 
   // Approval queue actions
   const handleApprove = async (requestId) => {
@@ -481,66 +547,171 @@ export default function VenueManagerDashboard() {
           )}
         </div>
 
-        {/* Section 3: Scheduled Venue Shifts */}
+        {/* Section 3: Scheduled Venue Shifts & Roster Overview */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
             <div className="flex items-center space-x-2">
-              <Calendar className="w-5 h-5 text-emerald-400" />
-              <h2 className="text-base font-bold text-white">
-                Scheduled Venue Shifts ({venueShifts.length})
-              </h2>
+              <CalendarIcon className="w-5 h-5 text-emerald-400" />
+              <div>
+                <h2 className="text-base font-bold text-white">
+                  Scheduled Venue Shifts ({roster.length})
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Comprehensive scheduling overview & worker contact drill-down
+                </p>
+              </div>
+            </div>
+
+            {/* Toggle Control: Calendar vs List */}
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 self-stretch sm:self-auto justify-center">
+              <button
+                type="button"
+                onClick={() => setViewMode('calendar')}
+                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  viewMode === 'calendar'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <CalendarIcon className="w-3.5 h-3.5" />
+                <span>Calendar</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('list')}
+                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  viewMode === 'list'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <ListIcon className="w-3.5 h-3.5" />
+                <span>List</span>
+              </button>
             </div>
           </div>
 
-          {venueShifts.length === 0 ? (
-            <div className="text-center py-12 bg-slate-950/50 rounded-xl border border-slate-800">
-              <Calendar className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-              <p className="text-xs text-slate-400">No shifts created yet for this venue.</p>
+          {/* Calendar View (react-big-calendar) */}
+          {viewMode === 'calendar' && (
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-h-[620px]">
+              <Calendar
+                localizer={localizer}
+                events={calendarEvents}
+                startAccessor="start"
+                endAccessor="end"
+                style={{ height: 600 }}
+                onSelectEvent={(event) => setSelectedShift(event.resource)}
+                views={['month', 'week', 'day', 'agenda']}
+                defaultView="month"
+                popup
+                eventPropGetter={() => ({
+                  style: {
+                    backgroundColor: '#059669',
+                    borderColor: '#10b981',
+                    color: '#ffffff',
+                    borderRadius: '6px',
+                    padding: '2px 6px',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                  },
+                })}
+              />
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {venueShifts.map((shift) => (
-                <div
-                  key={shift.id}
-                  className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col justify-between"
-                >
-                  <div>
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="text-xs font-bold text-slate-300 uppercase px-2 py-0.5 rounded bg-slate-800">
-                        {shift.role_type}
-                      </span>
-                      <span className="text-sm font-black text-emerald-400">
-                        ${Number(shift.hourly_rate).toFixed(2)}/hr
-                      </span>
-                    </div>
+          )}
 
-                    <h4 className="text-sm font-bold text-white mb-1">{shift.title}</h4>
-                    <p className="text-xs text-slate-400 flex items-center space-x-1 mb-2">
-                      <Clock className="w-3 h-3 text-slate-500" />
-                      <span>{new Date(shift.start_time).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                    </p>
-
-                    <div className="text-xs text-slate-400 mb-2">
-                      Spots: <span className="text-white font-semibold">{shift.spots_filled} / {shift.capacity} filled</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setActiveDiscussionShift(shift)}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 flex items-center space-x-1 font-medium transition"
-                    >
-                      <MessageSquare className="w-3 h-3 text-indigo-400" />
-                      <span>Discussion Board</span>
-                    </button>
-
-                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[11px]">
-                      {shift.status}
-                    </span>
-                  </div>
+          {/* List View: Table grouped by Date */}
+          {viewMode === 'list' && (
+            <div className="space-y-6">
+              {Object.keys(shiftsByDate).length === 0 ? (
+                <div className="text-center py-12 bg-slate-950/50 rounded-xl border border-slate-800">
+                  <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                  <p className="text-xs text-slate-400">No shifts scheduled yet for this venue.</p>
                 </div>
-              ))}
+              ) : (
+                Object.entries(shiftsByDate).map(([dateStr, dateShifts]) => (
+                  <div key={dateStr} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="bg-slate-800/40 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
+                      <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
+                        <CalendarIcon className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>{dateStr}</span>
+                      </h3>
+                      <span className="text-[11px] text-slate-400 font-medium">
+                        {dateShifts.length} {dateShifts.length === 1 ? 'shift' : 'shifts'}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-800/80 text-[11px] font-semibold text-slate-400 bg-slate-900/30 uppercase">
+                            <th className="py-2.5 px-4">Shift Name</th>
+                            <th className="py-2.5 px-4">Time</th>
+                            <th className="py-2.5 px-4">Role Requirements</th>
+                            <th className="py-2.5 px-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/50 text-xs">
+                          {dateShifts.map((shift) => {
+                            const timeFormatted = shift.start_time && shift.end_time
+                              ? `${new Date(shift.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(shift.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                              : 'TBD';
+                            const assignedCount = shift.assigned_workers ? shift.assigned_workers.length : shift.spots_filled;
+
+                            return (
+                              <tr key={shift.id} className="hover:bg-slate-900/40 transition">
+                                <td className="py-3 px-4 font-semibold text-white">
+                                  <div>{shift.title || shift.name}</div>
+                                  <div className="text-[11px] text-emerald-400 font-normal">
+                                    ${Number(shift.hourly_rate).toFixed(2)}/hr
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 text-slate-300">
+                                  <span className="flex items-center space-x-1 text-xs">
+                                    <Clock className="w-3.5 h-3.5 text-slate-500" />
+                                    <span>{timeFormatted}</span>
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px] font-semibold uppercase">
+                                      {shift.role_type}
+                                    </span>
+                                    <span className="text-slate-400 text-xs">
+                                      ({assignedCount} / {shift.capacity} filled)
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 text-right">
+                                  <div className="inline-flex items-center space-x-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveDiscussionShift(shift)}
+                                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white font-medium text-xs border border-slate-700 transition inline-flex items-center space-x-1"
+                                      title="Discussion Board"
+                                    >
+                                      <MessageSquare className="w-3 h-3 text-indigo-400" />
+                                      <span>Board</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedShift(shift)}
+                                      className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-semibold text-xs border border-emerald-600/30 transition inline-flex items-center space-x-1.5 shadow-sm"
+                                    >
+                                      <Users className="w-3.5 h-3.5" />
+                                      <span>View Staff</span>
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>
@@ -705,6 +876,15 @@ export default function VenueManagerDashboard() {
             />
           </div>
         </div>
+      )}
+
+      {/* Drill-Down Modal: Shift Staff Roster Details */}
+      {selectedShift && (
+        <ShiftRosterModal
+          selectedShift={selectedShift}
+          onClose={() => setSelectedShift(null)}
+          setSelectedShift={setSelectedShift}
+        />
       )}
     </div>
   );

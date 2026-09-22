@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from src.models import Shift, Venue, VenueWhitelist, ShiftRequest, User, RequestStatus
 
 logger = logging.getLogger("shiftboard.auto_confirm")
@@ -28,9 +28,8 @@ async def check_double_booking(
         .join(ShiftRequest, ShiftRequest.shift_id == Shift.id)
         .where(
             ShiftRequest.worker_id == worker_id,
-            ShiftRequest.status.in_([
-                RequestStatus.APPROVED, RequestStatus.CHECKED_IN,
-                "APPROVED", "CHECKED_IN"
+            func.lower(ShiftRequest.status).in_([
+                "approved", "checked_in", "confirmed"
             ]),
             Shift.start_time < end_time,
             Shift.end_time > start_time
