@@ -41,6 +41,10 @@ async def lifespan(app: FastAPI):
                 await conn.execute(text("ALTER TABLE shift_transfers ALTER COLUMN status TYPE VARCHAR(50) USING status::text;"))
             except Exception:
                 pass
+            try:
+                await conn.execute(text("ALTER TABLE shift_transfers ADD COLUMN IF NOT EXISTS notes TEXT;"))
+            except Exception:
+                pass
             await conn.run_sync(Base.metadata.create_all)
     except Exception as e:
         logger.warning(f"Metadata create_all check: {e}")

@@ -52,7 +52,7 @@ export default function App() {
             <Route
               path="/worker"
               element={
-                <ProtectedRoute allowedRoles={['worker']}>
+                <ProtectedRoute allowedRoles={['worker', 'platform_admin']}>
                   <Navbar />
                   <WorkerDashboard />
                 </ProtectedRoute>
@@ -63,7 +63,7 @@ export default function App() {
             <Route
               path="/venue"
               element={
-                <ProtectedRoute allowedRoles={['venue_manager']}>
+                <ProtectedRoute allowedRoles={['venue_manager', 'platform_admin']}>
                   <Navbar />
                   <VenueManagerDashboard />
                 </ProtectedRoute>

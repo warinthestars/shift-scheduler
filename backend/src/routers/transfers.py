@@ -8,9 +8,10 @@ from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import Shift, ShiftRequest, Venue, VenueManager, User, RequestStatus, ShiftTransfer
 from src.schemas import (
-    ShiftTransferCreate, ShiftTransferResponse, UserBrief
+    ShiftTransferCreate, ShiftTransferResponse, UserBrief,
+    ShiftTransferRespond, ShiftTransferManagerReview
 )
-from src.auth import get_current_user, require_manager_or_admin, normalize_role
+from src.auth import get_current_user, require_manager_or_admin, normalize_role, verify_venue_access
 from src.services.auto_confirm import check_double_booking
 
 router = APIRouter(prefix="/api/transfers", tags=["Shift Transfers"])
@@ -90,6 +91,7 @@ async def propose_shift_transfer(
         shift_id=transfer_in.shift_id,
         from_worker_id=current_user.id,
         to_worker_id=transfer_in.to_worker_id,
+        notes=getattr(transfer_in, "notes", None),
         status="pending_worker_acceptance"
     )
     db.add(transfer)
@@ -108,16 +110,15 @@ async def propose_shift_transfer(
     )
     return res.scalar_one()
 
-@router.post("/{id}/accept", response_model=ShiftTransferResponse)
-async def accept_shift_transfer(
-    id: UUID,
+@router.post("/{transfer_id}/respond", response_model=ShiftTransferResponse)
+async def respond_to_shift_transfer(
+    transfer_id: UUID,
+    body: ShiftTransferRespond,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Worker-to-Worker Transfer Step 2:
-    The recipient worker accepts the proposed transfer.
-    Status transitions from 'pending_worker_acceptance' to 'pending_manager_approval'.
+    Phase 20: Worker response to transfer proposal ('accept' or 'decline').
     """
     res = await db.execute(
         select(ShiftTransfer)
@@ -126,7 +127,7 @@ async def accept_shift_transfer(
             selectinload(ShiftTransfer.from_worker),
             selectinload(ShiftTransfer.to_worker)
         )
-        .where(ShiftTransfer.id == id)
+        .where(ShiftTransfer.id == transfer_id)
     )
     transfer = res.scalar_one_or_none()
     if not transfer:
@@ -135,29 +136,47 @@ async def accept_shift_transfer(
     if transfer.to_worker_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the target worker can accept this transfer offer."
+            detail="Only the target worker can respond to this transfer offer."
         )
 
-    if transfer.status != "pending_worker_acceptance":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot accept transfer in '{transfer.status}' status."
+    action = body.action.lower().strip()
+    if action == "accept":
+        if transfer.status != "pending_worker_acceptance":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot accept transfer in '{transfer.status}' status."
+            )
+        shift = transfer.shift
+        await check_double_booking(
+            db=db,
+            worker_id=current_user.id,
+            start_time=shift.start_time,
+            end_time=shift.end_time,
+            exclude_shift_id=shift.id
         )
+        transfer.status = "pending_manager_approval"
+    elif action in ("decline", "reject"):
+        transfer.status = "declined"
+    else:
+        raise HTTPException(status_code=400, detail="Action must be 'accept' or 'decline'.")
 
-    # Double check double-booking before proceeding
-    shift = transfer.shift
-    await check_double_booking(
-        db=db,
-        worker_id=current_user.id,
-        start_time=shift.start_time,
-        end_time=shift.end_time,
-        exclude_shift_id=shift.id
-    )
-
-    transfer.status = "pending_manager_approval"
     await db.commit()
     await db.refresh(transfer)
     return transfer
+
+@router.post("/{id}/accept", response_model=ShiftTransferResponse)
+async def accept_shift_transfer(
+    id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Legacy route alias for accepting shift transfer"""
+    return await respond_to_shift_transfer(
+        transfer_id=id,
+        body=ShiftTransferRespond(action="accept"),
+        current_user=current_user,
+        db=db
+    )
 
 @router.post("/{id}/reject", response_model=ShiftTransferResponse)
 async def reject_shift_transfer(
@@ -165,9 +184,7 @@ async def reject_shift_transfer(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Reject/Cancel a transfer: Can be rejected by the recipient worker, from_worker, or a venue manager.
-    """
+    """Reject/Cancel a transfer"""
     res = await db.execute(
         select(ShiftTransfer)
         .options(
@@ -195,16 +212,100 @@ async def reject_shift_transfer(
         is_manager = bool(mgr)
 
     if current_user.id == transfer.to_worker_id:
-        transfer.status = "rejected_by_worker"
+        transfer.status = "declined"
     elif current_user.id == transfer.from_worker_id:
         transfer.status = "cancelled_by_sender"
     elif is_manager:
-        transfer.status = "rejected_by_manager"
+        transfer.status = "denied"
     else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You are not authorized to reject this transfer."
         )
+
+    await db.commit()
+    await db.refresh(transfer)
+    return transfer
+
+@router.post("/{transfer_id}/manager-review", response_model=ShiftTransferResponse)
+async def manager_review_shift_transfer(
+    transfer_id: UUID,
+    body: ShiftTransferManagerReview,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 20: Venue Manager review of transfer ('approve' or 'deny').
+    Uses verify_venue_access.
+    """
+    res = await db.execute(
+        select(ShiftTransfer)
+        .options(
+            selectinload(ShiftTransfer.shift).selectinload(Shift.venue),
+            selectinload(ShiftTransfer.from_worker),
+            selectinload(ShiftTransfer.to_worker)
+        )
+        .where(ShiftTransfer.id == transfer_id)
+    )
+    transfer = res.scalar_one_or_none()
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found.")
+
+    # Uses verify_venue_access dependency logic
+    await verify_venue_access(transfer.shift.venue_id, current_user, db)
+
+    action = body.action.lower().strip()
+    if action == "approve":
+        shift = transfer.shift
+
+        # Double check double-booking before proceeding
+        await check_double_booking(
+            db=db,
+            worker_id=transfer.to_worker_id,
+            start_time=shift.start_time,
+            end_time=shift.end_time,
+            exclude_shift_id=shift.id
+        )
+
+        # 1. Update transfer status
+        transfer.status = "approved"
+
+        # 2. Update original ShiftRequest for from_worker_id to status "transferred"
+        orig_req = await db.scalar(
+            select(ShiftRequest).where(
+                ShiftRequest.shift_id == transfer.shift_id,
+                ShiftRequest.worker_id == transfer.from_worker_id
+            )
+        )
+        if orig_req:
+            orig_req.status = "transferred"
+
+        # 3. Create or update ShiftRequest for to_worker_id with status "approved", approval_source="transfer"
+        to_req = await db.scalar(
+            select(ShiftRequest).where(
+                ShiftRequest.shift_id == transfer.shift_id,
+                ShiftRequest.worker_id == transfer.to_worker_id
+            )
+        )
+        if to_req:
+            to_req.status = "approved"
+            to_req.approval_source = "transfer"
+            to_req.approved_by_user_id = current_user.id
+            to_req.approved_at = datetime.now(timezone.utc)
+        else:
+            to_req = ShiftRequest(
+                shift_id=transfer.shift_id,
+                worker_id=transfer.to_worker_id,
+                status="approved",
+                approval_source="transfer",
+                approved_by_user_id=current_user.id,
+                approved_at=datetime.now(timezone.utc)
+            )
+            db.add(to_req)
+    elif action in ("deny", "reject"):
+        transfer.status = "denied"
+    else:
+        raise HTTPException(status_code=400, detail="Action must be 'approve' or 'deny'.")
 
     await db.commit()
     await db.refresh(transfer)
@@ -216,97 +317,13 @@ async def approve_shift_transfer(
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Worker-to-Worker Transfer Step 3:
-    Venue Manager gives final approval for the swap.
-    Status transitions to 'approved'.
-    Reassigns shift spot from from_worker to to_worker.
-    """
-    res = await db.execute(
-        select(ShiftTransfer)
-        .options(
-            selectinload(ShiftTransfer.shift).selectinload(Shift.venue),
-            selectinload(ShiftTransfer.from_worker),
-            selectinload(ShiftTransfer.to_worker)
-        )
-        .where(ShiftTransfer.id == id)
+    """Legacy route alias for approving shift transfer"""
+    return await manager_review_shift_transfer(
+        transfer_id=id,
+        body=ShiftTransferManagerReview(action="approve"),
+        current_user=current_user,
+        db=db
     )
-    transfer = res.scalar_one_or_none()
-    if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found.")
-
-    if transfer.status != "pending_manager_approval":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Transfer must be in 'pending_manager_approval' status (currently '{transfer.status}')."
-        )
-
-    # Verify current user manages this venue
-    user_role = normalize_role(current_user.role)
-    if user_role not in ("platform_admin", "super_admin"):
-        mgr = await db.scalar(
-            select(VenueManager).where(
-                VenueManager.venue_id == transfer.shift.venue_id,
-                VenueManager.user_id == current_user.id
-            )
-        )
-        if not mgr:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not manage the venue for this shift."
-            )
-
-    shift = transfer.shift
-
-    # Final double-booking check for recipient
-    await check_double_booking(
-        db=db,
-        worker_id=transfer.to_worker_id,
-        start_time=shift.start_time,
-        end_time=shift.end_time,
-        exclude_shift_id=shift.id
-    )
-
-    # 1. Update transfer status
-    transfer.status = "approved"
-
-    # 2. Safely update worker_id on the original ShiftRequest row
-    orig_req = await db.scalar(
-        select(ShiftRequest).where(
-            ShiftRequest.shift_id == transfer.shift_id,
-            ShiftRequest.worker_id == transfer.from_worker_id
-        )
-    )
-    existing_to_req = await db.scalar(
-        select(ShiftRequest).where(
-            ShiftRequest.shift_id == transfer.shift_id,
-            ShiftRequest.worker_id == transfer.to_worker_id
-        )
-    )
-    if existing_to_req and orig_req and existing_to_req.id != orig_req.id:
-        await db.delete(existing_to_req)
-        await db.flush()
-
-    if orig_req:
-        orig_req.worker_id = transfer.to_worker_id
-        orig_req.status = "approved"
-        orig_req.approval_source = "shift_transfer"
-        orig_req.approved_by_user_id = current_user.id
-        orig_req.approved_at = datetime.now(timezone.utc)
-    else:
-        new_req = ShiftRequest(
-            shift_id=transfer.shift_id,
-            worker_id=transfer.to_worker_id,
-            status="approved",
-            approval_source="shift_transfer",
-            approved_by_user_id=current_user.id,
-            approved_at=datetime.now(timezone.utc)
-        )
-        db.add(new_req)
-
-    await db.commit()
-    await db.refresh(transfer)
-    return transfer
 
 @router.get("/my-incoming", response_model=List[ShiftTransferResponse])
 async def get_my_incoming_transfers(

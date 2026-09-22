@@ -12,6 +12,8 @@ import { enUS } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import ShiftBoard from '../components/ShiftBoard';
 import ShiftRosterModal from '../components/ShiftRosterModal';
+import TipBadge from '../components/TipBadge';
+import ReliabilityBadge from '../components/ReliabilityBadge';
 
 const locales = {
   'en-US': enUS,
@@ -27,10 +29,15 @@ const localizer = dateFnsLocalizer({
 
 export default function VenueManagerDashboard() {
   const { user } = useAuth();
+  const isPlatformAdmin = ['platform_admin', 'super_admin'].includes((user?.role || '').toLowerCase());
+  const initialVenue = isPlatformAdmin
+    ? (localStorage.getItem('shiftboard_admin_venue_id') || user?.venue_id || null)
+    : (user?.venue_id || null);
+
   const [venueShifts, setVenueShifts] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
   const [pendingTransfers, setPendingTransfers] = useState([]);
-  const [currentVenueId, setCurrentVenueId] = useState(user?.venue_id || null);
+  const [currentVenueId, setCurrentVenueId] = useState(initialVenue);
   const [venueDetails, setVenueDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
@@ -48,18 +55,21 @@ export default function VenueManagerDashboard() {
   const [eventName, setEventName] = useState('');
   const [startDateTime, setStartDateTime] = useState('');
   const [endDateTime, setEndDateTime] = useState('');
-  const [hourlyRate, setHourlyRate] = useState('35.00');
   const [isAutoConfirm, setIsAutoConfirm] = useState(false);
   const [roleRequirements, setRoleRequirements] = useState([
-    { role: 'Bartender', quantity: 2 },
+    { role: 'Bartender', quantity: 2, hourly_rate: '25.00', tips_eligible: false, tip_pool: false },
   ]);
+  const [reliabilityMap, setReliabilityMap] = useState({});
 
   const fetchVenueData = async (venueId) => {
     try {
       setLoading(true);
       let activeId = venueId;
+      if (!activeId && isPlatformAdmin) {
+        activeId = localStorage.getItem('shiftboard_admin_venue_id');
+      }
       if (!activeId) {
-        const vRes = await api.get('/venues');
+        const vRes = await api.get('/admin/venues').catch(() => api.get('/venues'));
         if (vRes.data && vRes.data.length > 0) {
           activeId = vRes.data[0].id;
           setCurrentVenueId(activeId);
@@ -71,12 +81,13 @@ export default function VenueManagerDashboard() {
         return;
       }
 
-      const [shiftsRes, requestsRes, venueRes, transfersRes, rosterRes] = await Promise.all([
+      const [shiftsRes, requestsRes, venueRes, transfersRes, rosterRes, reliabilityRes] = await Promise.all([
         api.get(`/venues/${activeId}/shifts`),
         api.get(`/venues/${activeId}/requests/pending`),
         api.get(`/venues/${activeId}`),
         api.get(`/transfers/venue/${activeId}/pending`).catch(() => ({ data: [] })),
         api.get(`/venues/${activeId}/roster`).catch(() => ({ data: [] })),
+        api.get(`/venues/${activeId}/reliability`).catch(() => ({ data: {} })),
       ]);
 
       setVenueShifts(shiftsRes.data || []);
@@ -84,8 +95,9 @@ export default function VenueManagerDashboard() {
       setVenueDetails(venueRes.data || null);
       setPendingTransfers(transfersRes.data || []);
       setRoster(rosterRes.data || []);
+      setReliabilityMap(reliabilityRes.data || {});
     } catch (err) {
-      console.error('Error fetching venue manager dashboard:', err);
+      console.error('Failed to load venue manager data:', err);
       setNotification({
         type: 'error',
         message: 'Could not load venue shifts, approval queue, or transfers from backend.',
@@ -96,8 +108,21 @@ export default function VenueManagerDashboard() {
   };
 
   useEffect(() => {
-    fetchVenueData(user?.venue_id);
+    fetchVenueData(currentVenueId || user?.venue_id);
   }, [user?.venue_id]);
+
+  // Listen to Super Admin venue switcher from Navbar
+  useEffect(() => {
+    const handleAdminVenueSwitch = (e) => {
+      const newVenueId = e.detail;
+      if (newVenueId) {
+        setCurrentVenueId(newVenueId);
+        fetchVenueData(newVenueId);
+      }
+    };
+    window.addEventListener('admin_venue_changed', handleAdminVenueSwitch);
+    return () => window.removeEventListener('admin_venue_changed', handleAdminVenueSwitch);
+  }, []);
 
   // Phase 16: Fetch roster data when currentVenueId changes
   useEffect(() => {
@@ -181,11 +206,11 @@ export default function VenueManagerDashboard() {
     }
   };
 
-  // Shift Transfer Approval actions
+  // Shift Transfer Approval actions (Phase 20)
   const handleApproveTransfer = async (transferId) => {
     try {
       setActionLoading(`transfer-approve-${transferId}`);
-      await api.post(`/transfers/${transferId}/approve`);
+      await api.post(`/transfers/${transferId}/manager-review`, { action: 'approve' });
       setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId));
       setNotification({
         type: 'success',
@@ -205,7 +230,7 @@ export default function VenueManagerDashboard() {
   const handleDenyTransfer = async (transferId) => {
     try {
       setActionLoading(`transfer-deny-${transferId}`);
-      await api.post(`/transfers/${transferId}/reject`);
+      await api.post(`/transfers/${transferId}/manager-review`, { action: 'deny' });
       setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId));
       setNotification({
         type: 'info',
@@ -257,7 +282,7 @@ export default function VenueManagerDashboard() {
 
   // Dynamic role requirements helpers
   const handleAddRoleRow = () => {
-    setRoleRequirements([...roleRequirements, { role: 'Server', quantity: 1 }]);
+    setRoleRequirements([...roleRequirements, { role: 'Server', quantity: 1, hourly_rate: '25.00', tips_eligible: false, tip_pool: false }]);
   };
 
   const handleRemoveRoleRow = (index) => {
@@ -266,14 +291,39 @@ export default function VenueManagerDashboard() {
   };
 
   const handleRoleChange = (index, field, value) => {
-    const updated = [...roleRequirements];
-    updated[index][field] = field === 'quantity' ? parseInt(value, 10) || 1 : value;
+    const updated = roleRequirements.map((row, i) => {
+      if (i !== index) return row;
+      const next = { ...row };
+      if (field === 'quantity') {
+        next.quantity = parseInt(value, 10) || 1;
+      } else if (field === 'tips_eligible') {
+        next.tips_eligible = Boolean(value);
+        if (!value) next.tip_pool = false;
+      } else if (field === 'tip_pool') {
+        next.tip_pool = Boolean(value);
+      } else {
+        next[field] = value; // 'role' or 'hourly_rate' (kept as string while typing)
+      }
+      return next;
+    });
     setRoleRequirements(updated);
   };
 
   const handleCreateShiftSubmit = async (e) => {
     e.preventDefault();
     try {
+      const payloadRoles = roleRequirements.map((r) => ({
+        role: r.role,
+        quantity: r.quantity,
+        hourly_rate: parseFloat(r.hourly_rate),
+        tips_eligible: r.tips_eligible,
+        tip_pool: r.tips_eligible ? r.tip_pool : false,
+      }));
+      if (payloadRoles.some((r) => !r.hourly_rate || r.hourly_rate <= 0)) {
+        setNotification({ type: 'error', message: 'Every role needs an hourly rate greater than $0.' });
+        return;
+      }
+
       const now = new Date();
       const start = startDateTime
         ? new Date(startDateTime).toISOString()
@@ -287,9 +337,8 @@ export default function VenueManagerDashboard() {
         title: eventName,
         start_time: start,
         end_time: end,
-        hourly_rate: parseFloat(hourlyRate),
         is_shift_auto_confirm: isAutoConfirm,
-        role_requirements: roleRequirements,
+        role_requirements: payloadRoles,
       });
 
       setNotification({
@@ -299,7 +348,7 @@ export default function VenueManagerDashboard() {
 
       setShowCreateModal(false);
       setEventName('');
-      setRoleRequirements([{ role: 'Bartender', quantity: 2 }]);
+      setRoleRequirements([{ role: 'Bartender', quantity: 2, hourly_rate: '25.00', tips_eligible: false, tip_pool: false }]);
       fetchVenueData(currentVenueId);
     } catch (err) {
       setNotification({
@@ -435,10 +484,18 @@ export default function VenueManagerDashboard() {
                         <span>•</span>
                         <span>{shift?.role_type}</span>
                         <span>•</span>
-                        <span>${shift?.hourly_rate}/hr</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span>${shift?.hourly_rate}/hr</span>
+                          <TipBadge shift={shift} />
+                        </span>
                         <span>•</span>
                         <span>{new Date(shift?.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
                       </div>
+                      {transfer.notes && (
+                        <p className="text-xs text-amber-300/90 mt-1.5 italic bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">
+                          Notes: "{transfer.notes}"
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
@@ -507,6 +564,7 @@ export default function VenueManagerDashboard() {
                           <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
                           <span>{Number(worker?.aggregate_rating || 5.0).toFixed(1)}</span>
                         </span>
+                        <ReliabilityBadge data={reliabilityMap[worker?.id]} />
                         <span className="text-xs text-slate-500">
                           {worker?.email}
                         </span>
@@ -517,7 +575,10 @@ export default function VenueManagerDashboard() {
                         <span>•</span>
                         <span>{shift?.role_type}</span>
                         <span>•</span>
-                        <span>${shift?.hourly_rate}/hr</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span>${shift?.hourly_rate}/hr</span>
+                          <TipBadge shift={shift} />
+                        </span>
                       </div>
                     </div>
 
@@ -663,8 +724,9 @@ export default function VenueManagerDashboard() {
                               <tr key={shift.id} className="hover:bg-slate-900/40 transition">
                                 <td className="py-3 px-4 font-semibold text-white">
                                   <div>{shift.title || shift.name}</div>
-                                  <div className="text-[11px] text-emerald-400 font-normal">
-                                    ${Number(shift.hourly_rate).toFixed(2)}/hr
+                                  <div className="text-[11px] text-emerald-400 font-normal flex items-center gap-1.5">
+                                    <span>${Number(shift.hourly_rate).toFixed(2)}/hr</span>
+                                    <TipBadge shift={shift} />
                                   </div>
                                 </td>
                                 <td className="py-3 px-4 text-slate-300">
@@ -767,23 +829,11 @@ export default function VenueManagerDashboard() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Hourly Rate ($)</label>
-                <input
-                  type="number"
-                  step="0.5"
-                  required
-                  value={hourlyRate}
-                  onChange={(e) => setHourlyRate(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              {/* Dynamic List for Role Requirements */}
+              {/* Dynamic List for Positions */}
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <label className="block text-xs font-semibold text-slate-300">
-                    Role Requirements (Dynamic List)
+                    Positions
                   </label>
                   <button
                     type="button"
@@ -797,37 +847,74 @@ export default function VenueManagerDashboard() {
 
                 <div className="space-y-2">
                   {roleRequirements.map((row, idx) => (
-                    <div key={idx} className="flex items-center space-x-2">
-                      <select
-                        value={row.role}
-                        onChange={(e) => handleRoleChange(idx, 'role', e.target.value)}
-                        className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                      >
-                        <option value="Bartender">Bartender</option>
-                        <option value="Server">Server</option>
-                        <option value="Dishwasher">Dishwasher</option>
-                        <option value="Barback">Barback</option>
-                        <option value="AV Tech">AV Tech</option>
-                      </select>
-
-                      <input
-                        type="number"
-                        min="1"
-                        value={row.quantity}
-                        onChange={(e) => handleRoleChange(idx, 'quantity', e.target.value)}
-                        className="w-20 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                        placeholder="Qty"
-                      />
-
-                      {roleRequirements.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRoleRow(idx)}
-                          className="p-2 text-slate-500 hover:text-rose-400"
+                    <div key={idx} className="p-3 bg-slate-800/50 border border-slate-700 rounded-xl space-y-2">
+                      <div className="flex items-center space-x-2">
+                        <select
+                          value={row.role}
+                          onChange={(e) => handleRoleChange(idx, 'role', e.target.value)}
+                          className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
                         >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                          <option value="Bartender">Bartender</option>
+                          <option value="Server">Server</option>
+                          <option value="Dishwasher">Dishwasher</option>
+                          <option value="Barback">Barback</option>
+                          <option value="AV Tech">AV Tech</option>
+                        </select>
+                        <input
+                          type="number"
+                          min="1"
+                          value={row.quantity}
+                          onChange={(e) => handleRoleChange(idx, 'quantity', e.target.value)}
+                          className="w-16 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                          placeholder="Qty"
+                          title="Quantity"
+                        />
+                        <div className="relative w-24">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            required
+                            value={row.hourly_rate}
+                            onChange={(e) => handleRoleChange(idx, 'hourly_rate', e.target.value)}
+                            className="w-full pl-6 pr-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                            placeholder="Rate"
+                            title="Hourly rate"
+                          />
+                        </div>
+                        {roleRequirements.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRoleRow(idx)}
+                            className="p-2 text-slate-500 hover:text-rose-400"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-4 pl-1">
+                        <label className="flex items-center space-x-2 text-xs text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={row.tips_eligible}
+                            onChange={(e) => handleRoleChange(idx, 'tips_eligible', e.target.checked)}
+                            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-amber-500"
+                          />
+                          <span>Tips eligible</span>
+                        </label>
+                        {row.tips_eligible && (
+                          <label className="flex items-center space-x-2 text-xs text-amber-300 cursor-pointer pl-4 border-l border-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={row.tip_pool}
+                              onChange={(e) => handleRoleChange(idx, 'tip_pool', e.target.checked)}
+                              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-amber-500"
+                            />
+                            <span>Tip pool</span>
+                          </label>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -886,6 +973,7 @@ export default function VenueManagerDashboard() {
           selectedShift={selectedShift}
           onClose={() => setSelectedShift(null)}
           setSelectedShift={setSelectedShift}
+          reliabilityMap={reliabilityMap}
         />
       )}
     </div>

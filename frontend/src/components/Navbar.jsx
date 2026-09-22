@@ -1,12 +1,18 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Calendar, Shield, User, LogOut, Star, Building2, Briefcase } from 'lucide-react';
+import api from '../api/client';
+import { Calendar, Shield, User, LogOut, Star, Building2, Briefcase, ChevronDown } from 'lucide-react';
 
 export default function Navbar() {
   const { user, logout, isAdmin, isManager, isWorker } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  const [adminVenues, setAdminVenues] = useState([]);
+  const [selectedVenueId, setSelectedVenueId] = useState(
+    localStorage.getItem('shiftboard_admin_venue_id') || ''
+  );
 
   const handleLogout = () => {
     logout();
@@ -14,12 +20,44 @@ export default function Navbar() {
   };
 
   const userRole = (user?.role || '').toLowerCase();
+  const isPlatformAdmin = userRole === 'platform_admin' || isAdmin;
+
+  // Phase 20: Fetch all venues for Super Admin venue switcher
+  useEffect(() => {
+    if (isPlatformAdmin) {
+      api.get('/admin/venues')
+        .then((res) => {
+          const list = res.data || [];
+          setAdminVenues(list);
+          const saved = localStorage.getItem('shiftboard_admin_venue_id');
+          if (saved && list.some((v) => v.id === saved)) {
+            setSelectedVenueId(saved);
+          } else if (list.length > 0) {
+            setSelectedVenueId(list[0].id);
+            localStorage.setItem('shiftboard_admin_venue_id', list[0].id);
+          }
+        })
+        .catch((err) => console.error('Failed to load admin venues for switcher:', err));
+    }
+  }, [isPlatformAdmin]);
+
+  const handleVenueChange = (e) => {
+    const newId = e.target.value;
+    setSelectedVenueId(newId);
+    localStorage.setItem('shiftboard_admin_venue_id', newId);
+    window.dispatchEvent(new CustomEvent('admin_venue_changed', { detail: newId }));
+    if (location.pathname === '/venue') {
+      // Reload on venue page
+    } else {
+      navigate('/venue');
+    }
+  };
 
   return (
     <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center">
-          {/* Brand Logo */}
+          {/* Brand Logo & Navigation */}
           <div className="flex items-center space-x-3">
             <Link to="/" className="flex items-center space-x-2">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
@@ -31,9 +69,9 @@ export default function Navbar() {
               </div>
             </Link>
 
-            {/* Navigation links based on role */}
-            <nav className="hidden md:flex ml-8 space-x-2">
-              {(isWorker || isAdmin) && (
+            {/* Direct links for: Worker View, Venue Manager View, Platform Admin */}
+            <nav className="hidden md:flex ml-6 space-x-2">
+              {(isWorker || isPlatformAdmin) && (
                 <Link
                   to="/worker"
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
@@ -43,11 +81,11 @@ export default function Navbar() {
                   }`}
                 >
                   <Briefcase className="w-4 h-4" />
-                  <span>Worker Call-Board</span>
+                  <span>Worker View</span>
                 </Link>
               )}
 
-              {(userRole === 'venue_manager' || isAdmin) && (
+              {(userRole === 'venue_manager' || isPlatformAdmin) && (
                 <Link
                   to="/venue"
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
@@ -57,11 +95,11 @@ export default function Navbar() {
                   }`}
                 >
                   <Building2 className="w-4 h-4" />
-                  <span>Venue Portal</span>
+                  <span>Venue Manager View</span>
                 </Link>
               )}
 
-              {isAdmin && (
+              {isPlatformAdmin && (
                 <Link
                   to="/admin"
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center space-x-1.5 transition ${
@@ -71,11 +109,34 @@ export default function Navbar() {
                   }`}
                 >
                   <Shield className="w-4 h-4" />
-                  <span>Super Admin</span>
+                  <span>Platform Admin</span>
                 </Link>
               )}
             </nav>
           </div>
+
+          {/* Center/Right: Super Admin Venue Switcher */}
+          {isPlatformAdmin && adminVenues.length > 0 && (
+            <div className="hidden lg:flex items-center space-x-2 bg-slate-950/70 border border-indigo-500/30 px-3 py-1.5 rounded-xl shadow-inner">
+              <Building2 className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+              <label htmlFor="admin-venue-switcher" className="text-xs text-indigo-300 font-semibold whitespace-nowrap">
+                Viewing Venue:
+              </label>
+              <select
+                id="admin-venue-switcher"
+                value={selectedVenueId}
+                onChange={handleVenueChange}
+                className="bg-slate-900 border border-slate-700 text-white text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
+              >
+                <option value="" disabled>Select Venue</option>
+                {adminVenues.map((v) => (
+                  <option key={v.id} value={v.id} className="bg-slate-900 text-white">
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* User Info & Actions */}
           <div className="flex items-center space-x-4">

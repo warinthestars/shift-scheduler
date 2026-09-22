@@ -52,48 +52,64 @@ async def create_shift(
                 detail="You are not authorized to create shifts for this venue"
             )
 
-    # Handle dynamic role requirements list if provided
-    if shift_in.role_requirements and len(shift_in.role_requirements) > 0:
-        first_shift = None
-        for req in shift_in.role_requirements:
-            s = Shift(
+    try:
+        if shift_in.role_requirements and len(shift_in.role_requirements) > 0:
+            first_shift = None
+            for req in shift_in.role_requirements:
+                rate = req.hourly_rate if req.hourly_rate is not None else (shift_in.hourly_rate or 25.0)
+                if rate <= 0:
+                    raise HTTPException(status_code=400, detail=f"Hourly rate for '{req.role}' must be greater than 0.")
+                s = Shift(
+                    venue_id=shift_in.venue_id,
+                    created_by_user_id=current_user.id,
+                    title=shift_in.title,
+                    role_type=req.role,
+                    start_time=shift_in.start_time,
+                    end_time=shift_in.end_time,
+                    capacity=max(1, req.quantity),
+                    spots_filled=0,
+                    is_shift_auto_confirm=shift_in.is_shift_auto_confirm or False,
+                    hourly_rate=rate,
+                    tips_eligible=bool(req.tips_eligible),
+                    tip_pool=bool(req.tips_eligible and req.tip_pool),
+                    description=shift_in.description,
+                    status="OPEN"
+                )
+                db.add(s)
+                if first_shift is None:
+                    first_shift = s
+            await db.commit()
+            await db.refresh(first_shift)
+            shift = first_shift
+        else:
+            rate = shift_in.hourly_rate or 25.0
+            if rate <= 0:
+                raise HTTPException(status_code=400, detail="Hourly rate must be greater than 0.")
+            shift = Shift(
                 venue_id=shift_in.venue_id,
                 created_by_user_id=current_user.id,
                 title=shift_in.title,
-                role_type=req.role,
+                role_type=shift_in.role_type or "Worker",
                 start_time=shift_in.start_time,
                 end_time=shift_in.end_time,
-                capacity=req.quantity,
+                capacity=shift_in.capacity or 1,
                 spots_filled=0,
                 is_shift_auto_confirm=shift_in.is_shift_auto_confirm or False,
-                hourly_rate=shift_in.hourly_rate or 25.0,
+                hourly_rate=rate,
+                tips_eligible=bool(shift_in.tips_eligible),
+                tip_pool=bool(shift_in.tips_eligible and shift_in.tip_pool),
                 description=shift_in.description,
                 status="OPEN"
             )
-            db.add(s)
-            if first_shift is None:
-                first_shift = s
-        await db.commit()
-        await db.refresh(first_shift)
-        shift = first_shift
-    else:
-        shift = Shift(
-            venue_id=shift_in.venue_id,
-            created_by_user_id=current_user.id,
-            title=shift_in.title,
-            role_type=shift_in.role_type or "Worker",
-            start_time=shift_in.start_time,
-            end_time=shift_in.end_time,
-            capacity=shift_in.capacity or 1,
-            spots_filled=0,
-            is_shift_auto_confirm=shift_in.is_shift_auto_confirm or False,
-            hourly_rate=shift_in.hourly_rate or 25.0,
-            description=shift_in.description,
-            status="OPEN"
-        )
-        db.add(shift)
-        await db.commit()
-        await db.refresh(shift)
+            db.add(shift)
+            await db.commit()
+            await db.refresh(shift)
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create shift: {str(e)}")
 
     # Reload with venue relation
     result = await db.execute(
@@ -435,24 +451,18 @@ async def drop_shift(
     shift_req = await db.scalar(
         select(ShiftRequest).where(
             ShiftRequest.shift_id == shift_id,
-            ShiftRequest.worker_id == current_user.id
+            ShiftRequest.worker_id == current_user.id,
+            func.lower(ShiftRequest.status).in_(["approved", "confirmed"])
         )
     )
     if not shift_req:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Shift assignment not found."
-        )
-
-    if str(shift_req.status).lower() == "dropped":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Shift is already dropped."
+            detail="Shift assignment not found or not in approved status."
         )
 
     # 3. Datetime Normalization
     now_utc = datetime.now(timezone.utc)
-    # Ensure shift_start is aware
     shift_start = shift.start_time
     if isinstance(shift_start, str):
         shift_start = datetime.fromisoformat(shift_start.replace("Z", "+00:00"))
@@ -460,23 +470,24 @@ async def drop_shift(
         shift_start = shift_start.replace(tzinfo=timezone.utc)
 
     time_to_start = (shift_start - now_utc).total_seconds()
-    if time_to_start < 24 * 3600:
+    if time_to_start < 86400:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Shifts cannot be dropped within 24 hours of the start time. Please request a transfer or contact the manager."
+            detail="Cannot drop shift within 24 hours of start time."
         )
 
-    # 4. Database Transaction (Strict Ordering)
+    # 4. Database Transaction
     try:
         # Step 1: Update status of worker's ShiftRequest record to "dropped"
         shift_req.status = "dropped"
+        shift_req.dropped_at = now_utc
 
-        # Step 2: Capacity Increment
-        shift.available_spots += 1
+        # Step 2: Decrement spots_filled
+        shift.spots_filled = max(0, (shift.spots_filled or 1) - 1)
         if shift.status == "FILLED":
             shift.status = "OPEN"
 
-        # Step 3: Commit transaction (all or nothing)
+        # Step 3: Commit transaction
         await db.commit()
         await db.refresh(shift_req)
         await db.refresh(shift)
@@ -486,7 +497,8 @@ async def drop_shift(
         raise HTTPException(status_code=500, detail=str(e))
 
     return {
-        "message": "Shift successfully dropped and returned to open marketplace.",
+        "detail": "Shift successfully dropped.",
+        "message": "Shift successfully dropped.",
         "shift_id": str(shift_id),
         "status": "dropped"
     }

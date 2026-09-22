@@ -100,6 +100,8 @@ CREATE TABLE shifts (
     start_time TIMESTAMPTZ NOT NULL,
     end_time TIMESTAMPTZ NOT NULL,
     hourly_rate NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+    tips_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+    tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
     capacity INT NOT NULL DEFAULT 1,
     spots_filled INT NOT NULL DEFAULT 0,
     is_shift_auto_confirm BOOLEAN NOT NULL DEFAULT FALSE,
@@ -108,7 +110,8 @@ CREATE TABLE shifts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_shift_time CHECK (end_time > start_time),
-    CONSTRAINT chk_spots CHECK (spots_filled <= capacity)
+    CONSTRAINT chk_spots CHECK (spots_filled <= capacity),
+    CONSTRAINT chk_tip_pool CHECK (tip_pool = FALSE OR tips_eligible = TRUE)
 );
 
 CREATE INDEX idx_shifts_venue ON shifts(venue_id);
@@ -131,6 +134,7 @@ CREATE TABLE shift_requests (
     check_out_time TIMESTAMPTZ,
     check_out_verified BOOLEAN NOT NULL DEFAULT FALSE,
     notes TEXT,
+    dropped_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_shift_worker UNIQUE (shift_id, worker_id)
@@ -224,6 +228,7 @@ CREATE TABLE shift_transfers (
     from_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     to_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(50) NOT NULL DEFAULT 'pending_worker_acceptance',
+    notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import TransferModal from '../components/TransferModal';
 import ShiftBoard from '../components/ShiftBoard';
+import TipBadge from '../components/TipBadge';
 
 export default function WorkerDashboard() {
   const { user } = useAuth();
@@ -69,7 +70,7 @@ export default function WorkerDashboard() {
       const res = await api.post(`/shifts/${shiftId}/request`);
       const newRequest = res.data;
 
-      if (newRequest.status === 'APPROVED') {
+      if (['approved', 'confirmed'].includes(String(newRequest.status || '').toLowerCase())) {
         setMyShifts((prev) => [newRequest, ...prev]);
         setAvailableShifts((prev) => prev.filter((s) => s.id !== shiftId));
         setNotification({
@@ -205,8 +206,7 @@ export default function WorkerDashboard() {
   };
 
   const confirmedShifts = myShifts.filter((s) =>
-
-    ['APPROVED', 'CHECKED_IN'].includes(s.status)
+    ['approved', 'checked_in', 'confirmed'].includes(String(s.status || '').toLowerCase())
   );
 
   // Set of shift IDs currently requested
@@ -379,11 +379,14 @@ export default function WorkerDashboard() {
                           <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-800 text-slate-200 border border-slate-700 uppercase tracking-wide">
                             {shift.role_type || shift.role_required}
                           </span>
-                          <div className="text-right">
-                            <span className="text-lg font-black text-emerald-400">
-                              ${Number(shift.hourly_rate).toFixed(2)}
-                            </span>
-                            <span className="text-xs text-slate-400">/hr</span>
+                          <div className="text-right flex flex-col items-end">
+                            <div className="flex items-center space-x-1">
+                              <span className="text-lg font-black text-emerald-400">
+                                ${Number(shift.hourly_rate).toFixed(2)}
+                              </span>
+                              <span className="text-xs text-slate-400">/hr</span>
+                            </div>
+                            <TipBadge shift={shift} />
                           </div>
                         </div>
 
@@ -435,11 +438,11 @@ export default function WorkerDashboard() {
                           {(shift.capacity ?? shift.spots_needed ?? 1) - (shift.spots_filled ?? 0)} spot(s) remaining
                         </span>
 
-                        {existingStatus === 'PENDING' ? (
+                        {['pending', 'pending_manager_approval'].includes(String(existingStatus || '').toLowerCase()) ? (
                           <span className="px-3.5 py-1.5 rounded-xl bg-amber-500/10 text-amber-400 text-xs font-bold border border-amber-500/20">
                             Pending
                           </span>
-                        ) : existingStatus === 'APPROVED' ? (
+                        ) : ['approved', 'confirmed'].includes(String(existingStatus || '').toLowerCase()) ? (
                           <span className="px-3.5 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-400 text-xs font-bold border border-emerald-500/20">
                             Confirmed ✓
                           </span>
@@ -474,10 +477,11 @@ export default function WorkerDashboard() {
               myShifts.map((req) => {
                 const shift = req.shift;
                 const shiftId = req.shift_id || shift?.id;
-                const isApproved = req.status === 'APPROVED';
-                const isCheckedIn = req.status === 'CHECKED_IN' || activeClockIns.has(shiftId);
-                const isCompleted = req.status === 'COMPLETED';
-                const isPending = req.status === 'PENDING';
+                const statusLower = String(req.status || '').toLowerCase();
+                const isApproved = ['approved', 'confirmed'].includes(statusLower);
+                const isCheckedIn = statusLower === 'checked_in' || activeClockIns.has(shiftId);
+                const isCompleted = statusLower === 'completed';
+                const isPending = ['pending', 'pending_manager_approval'].includes(statusLower);
                 const isClockLoading = clockActionLoading === shiftId;
 
                 return (
@@ -517,6 +521,7 @@ export default function WorkerDashboard() {
                         <span>{shift?.role_type || shift?.role_required}</span>
                         <span>•</span>
                         <span>${shift?.hourly_rate}/hr</span>
+                        <TipBadge shift={shift} />
                       </p>
                       <p className="text-xs text-slate-500">
                         {new Date(shift?.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
@@ -680,6 +685,7 @@ export default function WorkerDashboard() {
                         <span>{shift?.role_type}</span>
                         <span>•</span>
                         <span className="text-emerald-400 font-semibold">${shift?.hourly_rate}/hr</span>
+                        <TipBadge shift={shift} />
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
                         {new Date(shift?.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}

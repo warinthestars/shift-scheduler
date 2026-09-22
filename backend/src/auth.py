@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.config import settings
 from src.database import get_db
-from src.models import User, UserRole
+from src.models import User, UserRole, VenueManager
 
 logger = logging.getLogger("shiftboard.auth")
 
@@ -190,3 +190,32 @@ require_super_admin = require_admin
 require_venue_manager = require_role(["venue_manager", "platform_admin"])
 require_manager_or_admin = require_venue_manager
 require_worker = require_role(["worker", "platform_admin"])
+
+async def verify_venue_access(
+    venue_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> bool:
+    """
+    Dependency helper to verify user has manager access to venue_id.
+    Platform Admin / Super Admin always bypasses and returns True.
+    """
+    user_role = normalize_role(current_user.role)
+    if user_role in ("platform_admin", "super_admin"):
+        return True
+
+    res = await db.execute(
+        select(VenueManager).where(
+            VenueManager.venue_id == venue_id,
+            VenueManager.user_id == current_user.id
+        )
+    )
+    if res.scalar_one_or_none():
+        return True
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized to manage this venue."
+    )
+
+require_venue_access = verify_venue_access

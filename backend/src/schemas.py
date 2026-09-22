@@ -91,6 +91,8 @@ class UserBase(BaseModel):
 class UserResponse(UserBase):
     id: UUID
     venue_id: Optional[str] = None
+    venue_ids: Optional[List[UUID]] = []
+    venue_names: Optional[List[str]] = []
     aggregate_rating: float
     rating_count: int
     total_shifts: int
@@ -108,6 +110,23 @@ class UserResponse(UserBase):
 
     class Config:
         from_attributes = True
+
+class UserCreateAdmin(BaseModel):
+    email: EmailStr
+    password: str
+    first_name: str
+    last_name: str
+    phone: Optional[str] = None
+    role: str = "worker"
+    venue_ids: Optional[List[UUID]] = []
+
+class UserUpdateAdmin(BaseModel):
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    venue_ids: Optional[List[UUID]] = None
 
 class UserUpdateMe(BaseModel):
     first_name: Optional[str] = None
@@ -166,6 +185,10 @@ class VenueResponse(VenueBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    total_shifts: Optional[int] = 0
+    total_managers: Optional[int] = 0
+    assigned_workers_count: Optional[int] = 0
+    total_assigned_workers: Optional[int] = 0
 
     class Config:
         from_attributes = True
@@ -192,6 +215,9 @@ class WhitelistResponse(BaseModel):
 class RoleRequirement(BaseModel):
     role: str
     quantity: int = 1
+    hourly_rate: Optional[float] = None
+    tips_eligible: bool = False
+    tip_pool: bool = False
 
 class ShiftCreate(BaseModel):
     venue_id: UUID
@@ -202,6 +228,8 @@ class ShiftCreate(BaseModel):
     capacity: Optional[int] = 1
     is_shift_auto_confirm: Optional[bool] = False
     hourly_rate: Optional[float] = 25.00
+    tips_eligible: Optional[bool] = False
+    tip_pool: Optional[bool] = False
     description: Optional[str] = None
     role_requirements: Optional[List[RoleRequirement]] = None
 
@@ -218,6 +246,8 @@ class ShiftResponse(BaseModel):
     available_spots: Optional[int] = None
     is_shift_auto_confirm: Optional[bool] = False
     hourly_rate: Optional[float] = 25.00
+    tips_eligible: Optional[bool] = False
+    tip_pool: Optional[bool] = False
     description: Optional[str] = None
     status: Optional[str] = "OPEN"
     created_at: Optional[datetime] = None
@@ -274,6 +304,16 @@ class ShiftRequestResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class WorkerReliability(BaseModel):
+    worker_id: UUID
+    score: Optional[float] = None   # None = no commitments yet ("New")
+    commitments: int = 0
+    completed: int = 0
+    on_time: int = 0
+    late: int = 0
+    no_show: int = 0
+    late_drop: int = 0
+
 class ShiftRequestStatusUpdate(BaseModel):
     status: str = Field(description="Must be APPROVED or REJECTED")
 
@@ -304,6 +344,13 @@ class TimeEntryResponse(BaseModel):
 class ShiftTransferCreate(BaseModel):
     shift_id: UUID
     to_worker_id: UUID
+    notes: Optional[str] = None
+
+class ShiftTransferRespond(BaseModel):
+    action: str = Field(..., description="'accept' or 'decline'")
+
+class ShiftTransferManagerReview(BaseModel):
+    action: str = Field(..., description="'approve' or 'deny'")
 
 class ShiftTransferResponse(BaseModel):
     id: UUID

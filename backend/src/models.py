@@ -184,6 +184,8 @@ class Shift(Base):
     start_time = Column(DateTime(timezone=True), nullable=False, index=True)
     end_time = Column(DateTime(timezone=True), nullable=False)
     hourly_rate = Column(Numeric(10, 2), nullable=False, default=25.00)
+    tips_eligible = Column(Boolean, nullable=False, default=False)
+    tip_pool = Column(Boolean, nullable=False, default=False)
     capacity = Column(Integer, nullable=False, default=1)
     spots_filled = Column(Integer, nullable=False, default=0)
     is_shift_auto_confirm = Column(Boolean, nullable=False, default=False)
@@ -252,6 +254,7 @@ class ShiftRequest(Base):
     check_out_time = Column(DateTime(timezone=True), nullable=True)
     check_out_verified = Column(Boolean, nullable=False, default=False)
     notes = Column(Text, nullable=True)
+    dropped_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -297,6 +300,7 @@ class ShiftTransfer(Base):
     from_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     to_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String(50), nullable=False, default="pending_worker_acceptance", index=True)
+    notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

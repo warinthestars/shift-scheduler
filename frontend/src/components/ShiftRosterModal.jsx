@@ -1,7 +1,9 @@
 import React from 'react';
 import { X, Star, Phone, Mail, User, Clock, Users } from 'lucide-react';
+import TipBadge from './TipBadge';
+import ReliabilityBadge from './ReliabilityBadge';
 
-export default function ShiftRosterModal({ selectedShift, onClose, setSelectedShift }) {
+export default function ShiftRosterModal({ selectedShift, onClose, setSelectedShift, reliabilityMap = {} }) {
   if (!selectedShift) return null;
 
   const handleClose = () => {
@@ -49,6 +51,7 @@ export default function ShiftRosterModal({ selectedShift, onClose, setSelectedSh
                   ${Number(selectedShift.hourly_rate).toFixed(2)}/hr
                 </span>
               )}
+              <TipBadge shift={selectedShift} />
               <span className="text-slate-400">
                 Staff: <strong className="text-white">{assignedWorkers.length} / {selectedShift.capacity || 1}</strong>
               </span>
@@ -106,6 +109,7 @@ export default function ShiftRosterModal({ selectedShift, onClose, setSelectedSh
                           <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
                           <span>{rating}</span>
                         </span>
+                        <ReliabilityBadge data={reliabilityMap[worker.id]} />
                       </div>
                       <div className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-3">
                         {worker.email && (

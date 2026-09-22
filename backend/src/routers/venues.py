@@ -1,13 +1,13 @@
 import csv
 import io
 from uuid import UUID
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete, func, distinct
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
@@ -18,9 +18,11 @@ from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
     WhitelistAddRequest, WhitelistResponse,
     ShiftResponse, ShiftRequestResponse,
-    WorkerContactSchema, ShiftRosterResponse, UserBrief
+    WorkerContactSchema, ShiftRosterResponse, UserBrief,
+    WorkerReliability
 )
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
+from src.services.reliability import compute_reliability
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -157,6 +159,22 @@ async def get_venue_pending_requests(
         .order_by(ShiftRequest.created_at.asc())
     )
     return result.scalars().all()
+
+@router.get("/{venue_id}/reliability", response_model=Dict[str, WorkerReliability])
+async def get_venue_reliability(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 21: Reliability scores for every worker who has requested a shift at this venue."""
+    await verify_venue_manager_access(venue_id, current_user, db)
+    worker_ids = (await db.execute(
+        select(distinct(ShiftRequest.worker_id))
+        .join(Shift, ShiftRequest.shift_id == Shift.id)
+        .where(Shift.venue_id == venue_id)
+    )).scalars().all()
+    data = await compute_reliability(db, list(worker_ids))
+    return {str(wid): WorkerReliability(worker_id=wid, **vals) for wid, vals in data.items()}
 
 @router.put("/{venue_id}/settings", response_model=VenueResponse)
 async def update_venue_settings(
@@ -325,7 +343,7 @@ async def export_venue_payroll_csv(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Worker Name", "Email", "Shift Title", "Date", "Clock In", "Clock Out", "Total Hours"])
+    writer.writerow(["Worker Name", "Email", "Shift Title", "Role", "Date", "Clock In", "Clock Out", "Total Hours", "Hourly Rate", "Gross Pay", "Tips Eligible", "Tip Pool"])
 
     for entry, worker, shift in records:
         worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
@@ -335,13 +353,17 @@ async def export_venue_payroll_csv(
         clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
         clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "Did not clock out"
 
+        rate = float(shift.hourly_rate) if shift.hourly_rate is not None else 0.0
         if entry.clock_in_time and entry.clock_out_time:
-            diff_seconds = (entry.clock_out_time - entry.clock_in_time).total_seconds()
-            total_hours = f"{diff_seconds / 3600.0:.2f}"
+            hours = (entry.clock_out_time - entry.clock_in_time).total_seconds() / 3600.0
         else:
-            total_hours = "0"
-
-        writer.writerow([worker_name, email, shift_title, shift_date, clock_in, clock_out, total_hours])
+            hours = 0.0
+        writer.writerow([
+            worker_name, email, shift_title, shift.role_type or "", shift_date, clock_in, clock_out,
+            f"{hours:.2f}", f"{rate:.2f}", f"{hours * rate:.2f}",
+            "Yes" if shift.tips_eligible else "No",
+            "Yes" if shift.tip_pool else "No",
+        ])
 
     output.seek(0)
     return StreamingResponse(
@@ -472,6 +494,8 @@ async def get_venue_roster(
                 available_spots=s.available_spots,
                 is_shift_auto_confirm=bool(s.is_shift_auto_confirm),
                 hourly_rate=rate,
+                tips_eligible=bool(s.tips_eligible),
+                tip_pool=bool(s.tip_pool),
                 description=s.description,
                 status=s.status or "OPEN",
                 created_at=s.created_at,

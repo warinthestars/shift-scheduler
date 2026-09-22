@@ -10,6 +10,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
   const [selectedWorkerId, setSelectedWorkerId] = useState('');
   const [loadingWorkers, setLoadingWorkers] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [notes, setNotes] = useState('');
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -79,6 +80,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
       await api.post('/transfers/propose', {
         shift_id: selectedShiftId,
         to_worker_id: selectedWorkerId,
+        notes: notes.trim() || undefined,
       });
 
       if (onTransferSuccess) {
@@ -176,6 +178,19 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
                 ))}
               </select>
             )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">
+              Reason / Transfer Notes (Optional)
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Schedule conflict, family emergency..."
+              rows={2}
+              className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 resize-none"
+            />
           </div>
 
           <p className="text-[11px] text-slate-400 bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-xl">
