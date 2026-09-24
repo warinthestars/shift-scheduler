@@ -11,6 +11,7 @@ from src.schemas import VenueResponse, UserResponse, UserCreateAdmin, UserUpdate
 from src.auth import require_admin, get_password_hash, normalize_role
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
+VALID_ROLES = ("worker", "venue_manager", "platform_admin")
 
 def _build_user_response(user: User, venue_ids: list, venue_names: list) -> UserResponse:
     """Build UserResponse from column attributes only. Never touches ORM relationships."""
@@ -200,16 +201,56 @@ async def update_admin_user(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Phase 20: Update roles, active status, or assign/unassign venues.
-    """
+    """Phase 23: Update role, active status, profile fields, and venue assignments."""
     try:
         user = await db.scalar(select(User).where(User.id == user_id))
         if not user:
             raise HTTPException(status_code=404, detail="User not found.")
 
-        if user_update.role is not None:
-            user.role = normalize_role(user_update.role)
+        old_role = normalize_role(user.role)
+        new_role = normalize_role(user_update.role) if user_update.role is not None else old_role
+        if new_role not in VALID_ROLES:
+            raise HTTPException(status_code=400, detail=f"Invalid role '{user_update.role}'.")
+        role_changed = new_role != old_role
+        is_self = user.id == current_user.id
+
+        if is_self and role_changed:
+            raise HTTPException(status_code=400, detail="You cannot change your own role.")
+        if is_self and user_update.is_active is False:
+            raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
+
+        losing_admin = old_role == "platform_admin" and (role_changed or user_update.is_active is False)
+        if losing_admin:
+            admin_count = await db.scalar(
+                select(func.count(User.id)).where(
+                    func.lower(User.role).in_(["platform_admin", "super_admin"]),
+                    User.is_active == True
+                )
+            )
+            if (admin_count or 0) <= 1:
+                raise HTTPException(status_code=400, detail="Cannot remove the last active platform admin.")
+
+        # Venue assignments are rebuilt whenever the role changes or venue_ids is sent.
+        rebuild_venues = role_changed or user_update.venue_ids is not None
+        target_ids = []
+        if rebuild_venues and new_role != "platform_admin":
+            seen = set()
+            for vid in (user_update.venue_ids or []):
+                if vid not in seen:
+                    seen.add(vid)
+                    target_ids.append(vid)
+            if target_ids:
+                found = (await db.execute(select(Venue.id).where(Venue.id.in_(target_ids)))).scalars().all()
+                missing = [str(v) for v in target_ids if v not in set(found)]
+                if missing:
+                    raise HTTPException(status_code=400, detail=f"Unknown venue id(s): {', '.join(missing)}")
+            if new_role == "venue_manager" and not target_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Assign at least one venue when making someone a Venue Manager."
+                )
+
+        user.role = new_role
         if user_update.is_active is not None:
             user.is_active = user_update.is_active
         if user_update.first_name is not None:
@@ -219,17 +260,13 @@ async def update_admin_user(
         if user_update.phone is not None:
             user.phone = user_update.phone.strip()
 
-        # Update venue assignments if venue_ids provided
-        if user_update.venue_ids is not None:
-            u_role = normalize_role(user.role)
-            # Clear previous associations
+        if rebuild_venues:
             await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id))
             await db.execute(delete(VenueWhitelist).where(VenueWhitelist.worker_id == user.id))
-
-            for vid in user_update.venue_ids:
-                if u_role == "venue_manager":
-                    db.add(VenueManager(venue_id=vid, user_id=user.id, is_primary=False))
-                elif u_role == "worker":
+            for idx, vid in enumerate(target_ids):
+                if new_role == "venue_manager":
+                    db.add(VenueManager(venue_id=vid, user_id=user.id, is_primary=(idx == 0)))
+                elif new_role == "worker":
                     db.add(VenueWhitelist(venue_id=vid, worker_id=user.id, is_active=True))
 
         await db.commit()

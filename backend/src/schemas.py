@@ -387,3 +387,43 @@ class ShiftBoardMessageResponse(BaseModel):
 
 TokenResponse.model_rebuild()
 
+# ------------------------------------------------------------------------------
+# Phase 23: Posted Shifts board (event-grouped roster)
+# ------------------------------------------------------------------------------
+class RosterPerson(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    aggregate_rating: float = 5.0
+    status: str
+    requested_at: Optional[datetime] = None
+    clocked_in: bool = False
+    clocked_out: bool = False
+
+
+class EventPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    hourly_rate: float
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    capacity: int
+    spots_filled: int
+    status: str
+    assigned: List[RosterPerson] = []
+    requested: List[RosterPerson] = []
+
+
+class VenueEventResponse(BaseModel):
+    event_key: str
+    title: str
+    start_time: datetime
+    end_time: datetime
+    description: Optional[str] = None
+    total_capacity: int
+    total_assigned: int
+    total_requested: int
+    positions: List[EventPosition]

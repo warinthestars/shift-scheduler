@@ -4,7 +4,7 @@ from uuid import UUID
 from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, distinct
@@ -19,7 +19,7 @@ from src.schemas import (
     WhitelistAddRequest, WhitelistResponse,
     ShiftResponse, ShiftRequestResponse,
     WorkerContactSchema, ShiftRosterResponse, UserBrief,
-    WorkerReliability
+    WorkerReliability, VenueEventResponse, EventPosition, RosterPerson
 )
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 from src.services.reliability import compute_reliability
@@ -56,6 +56,23 @@ async def verify_venue_manager_access(venue_id: UUID, user: User, db: AsyncSessi
 async def list_venues(db: AsyncSession = Depends(get_db)):
     """List all registered venues"""
     result = await db.execute(select(Venue).order_by(Venue.name))
+    return result.scalars().all()
+
+@router.get("/managed", response_model=List[VenueResponse])
+async def list_managed_venues(
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 23: Venues the current user can manage (platform admins: all venues)."""
+    if normalize_role(current_user.role) in ("platform_admin", "super_admin"):
+        result = await db.execute(select(Venue).order_by(Venue.name))
+    else:
+        result = await db.execute(
+            select(Venue)
+            .join(VenueManager, VenueManager.venue_id == Venue.id)
+            .where(VenueManager.user_id == current_user.id)
+            .order_by(Venue.name)
+        )
     return result.scalars().all()
 
 @router.post("", response_model=VenueResponse, status_code=status.HTTP_201_CREATED)
@@ -508,5 +525,122 @@ async def get_venue_roster(
     except Exception as e:
         print(f"Roster Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
+REQUESTED_STATUSES = ("pending", "pending_manager_approval")
+
+
+@router.get("/{venue_id}/events", response_model=List[VenueEventResponse])
+async def get_venue_events(
+    venue_id: UUID,
+    scope: str = Query("upcoming", pattern="^(upcoming|past|all)$"),
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
+    Shift row per role; rows sharing (title, start_time, end_time) are one event.
+    Each position lists assigned workers and pending requests.
+    """
+    await verify_venue_manager_access(venue_id, current_user, db)
+    now_utc = datetime.now(timezone.utc)
+
+    q = select(Shift).where(Shift.venue_id == venue_id)
+    if scope == "upcoming":
+        q = q.where(Shift.end_time >= now_utc).order_by(Shift.start_time.asc(), Shift.role_type.asc())
+    elif scope == "past":
+        q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
+    else:
+        q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
+    shifts = (await db.execute(q)).scalars().all()
+    if not shifts:
+        return []
+
+    shift_ids = [s.id for s in shifts]
+
+    req_rows = (await db.execute(
+        select(ShiftRequest, User)
+        .join(User, ShiftRequest.worker_id == User.id)
+        .where(
+            ShiftRequest.shift_id.in_(shift_ids),
+            func.lower(ShiftRequest.status).in_(ASSIGNED_STATUSES + REQUESTED_STATUSES)
+        )
+        .order_by(ShiftRequest.created_at.asc())
+    )).all()
+
+    te_rows = (await db.execute(
+        select(
+            TimeEntry.shift_id,
+            TimeEntry.worker_id,
+            func.count(TimeEntry.id),
+            func.count(TimeEntry.clock_out_time),
+        )
+        .where(TimeEntry.shift_id.in_(shift_ids))
+        .group_by(TimeEntry.shift_id, TimeEntry.worker_id)
+    )).all()
+    clock_state = {(sid, wid): (n > 0, n_out > 0 and n_out >= n) for sid, wid, n, n_out in te_rows}
+
+    assigned_by_shift = defaultdict(list)
+    requested_by_shift = defaultdict(list)
+    for req, worker in req_rows:
+        clocked_in, clocked_out = clock_state.get((req.shift_id, req.worker_id), (False, False))
+        person = RosterPerson(
+            request_id=req.id,
+            worker_id=worker.id,
+            first_name=worker.first_name or "",
+            last_name=worker.last_name or "",
+            email=worker.email,
+            phone=worker.phone,
+            aggregate_rating=float(worker.aggregate_rating) if worker.aggregate_rating is not None else 5.0,
+            status=(req.status or "").lower(),
+            requested_at=req.created_at,
+            clocked_in=clocked_in or req.check_in_time is not None,
+            clocked_out=clocked_out or req.check_out_time is not None,
+        )
+        if person.status in ASSIGNED_STATUSES:
+            assigned_by_shift[req.shift_id].append(person)
+        else:
+            requested_by_shift[req.shift_id].append(person)
+
+    events = {}
+    order = []
+    for s in shifts:
+        key = f"{s.title}|{s.start_time.isoformat()}|{s.end_time.isoformat()}"
+        if key not in events:
+            events[key] = {
+                "event_key": key,
+                "title": s.title or "Shift",
+                "start_time": s.start_time,
+                "end_time": s.end_time,
+                "description": s.description,
+                "positions": [],
+            }
+            order.append(key)
+        events[key]["positions"].append(EventPosition(
+            shift_id=s.id,
+            role_type=s.role_type or "Worker",
+            hourly_rate=float(s.hourly_rate) if s.hourly_rate is not None else 0.0,
+            tips_eligible=bool(s.tips_eligible),
+            tip_pool=bool(s.tip_pool),
+            capacity=s.capacity if s.capacity is not None else 1,
+            spots_filled=s.spots_filled if s.spots_filled is not None else 0,
+            status=s.status or "OPEN",
+            assigned=assigned_by_shift[s.id],
+            requested=requested_by_shift[s.id],
+        ))
+
+    result = []
+    for key in order:
+        ev = events[key]
+        positions = ev["positions"]
+        result.append(VenueEventResponse(
+            **ev,
+            total_capacity=sum(p.capacity for p in positions),
+            total_assigned=sum(len(p.assigned) for p in positions),
+            total_requested=sum(len(p.requested) for p in positions),
+        ))
+    return result
+
 
 

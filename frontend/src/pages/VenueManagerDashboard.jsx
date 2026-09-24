@@ -14,6 +14,7 @@ import ShiftBoard from '../components/ShiftBoard';
 import ShiftRosterModal from '../components/ShiftRosterModal';
 import TipBadge from '../components/TipBadge';
 import ReliabilityBadge from '../components/ReliabilityBadge';
+import PostedShiftsBoard from '../components/PostedShiftsBoard';
 
 const locales = {
   'en-US': enUS,
@@ -60,6 +61,8 @@ export default function VenueManagerDashboard() {
     { role: 'Bartender', quantity: 2, hourly_rate: '25.00', tips_eligible: false, tip_pool: false },
   ]);
   const [reliabilityMap, setReliabilityMap] = useState({});
+  const [managedVenues, setManagedVenues] = useState([]);
+  const [boardRefreshKey, setBoardRefreshKey] = useState(0);
 
   const fetchVenueData = async (venueId) => {
     try {
@@ -68,13 +71,16 @@ export default function VenueManagerDashboard() {
       if (!activeId && isPlatformAdmin) {
         activeId = localStorage.getItem('shiftboard_admin_venue_id');
       }
-      if (!activeId) {
-        const vRes = await api.get('/admin/venues').catch(() => api.get('/venues'));
-        if (vRes.data && vRes.data.length > 0) {
-          activeId = vRes.data[0].id;
-          setCurrentVenueId(activeId);
-        }
+      const mvRes = await api.get('/venues/managed').catch(() => ({ data: [] }));
+      const mine = mvRes.data || [];
+      setManagedVenues(mine);
+      if (!isPlatformAdmin && activeId && !mine.some((v) => String(v.id) === String(activeId))) {
+        activeId = null;
       }
+      if (!activeId && mine.length > 0) {
+        activeId = mine[0].id;
+      }
+      setCurrentVenueId(activeId || null);
 
       if (!activeId) {
         setLoading(false);
@@ -96,6 +102,7 @@ export default function VenueManagerDashboard() {
       setPendingTransfers(transfersRes.data || []);
       setRoster(rosterRes.data || []);
       setReliabilityMap(reliabilityRes.data || {});
+      setBoardRefreshKey((k) => k + 1);
     } catch (err) {
       console.error('Failed to load venue manager data:', err);
       setNotification({
@@ -196,6 +203,7 @@ export default function VenueManagerDashboard() {
         type: 'info',
         message: 'Shift application declined.',
       });
+      fetchVenueData(currentVenueId);
     } catch (err) {
       setNotification({
         type: 'error',
@@ -358,6 +366,26 @@ export default function VenueManagerDashboard() {
     }
   };
 
+  const handleManagerVenueChange = (e) => {
+    const newId = e.target.value;
+    setCurrentVenueId(newId);
+    fetchVenueData(newId);
+  };
+
+  if (!loading && !currentVenueId) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md text-center bg-slate-900 border border-slate-800 rounded-2xl p-8">
+          <Building2 className="w-10 h-10 text-amber-400 mx-auto mb-3" />
+          <h1 className="text-lg font-bold text-white mb-1">No venue assigned yet</h1>
+          <p className="text-sm text-slate-400">
+            Your account is a Venue Manager but isn't linked to a venue. Ask a platform admin to assign you one in the Admin Panel.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-16">
       {/* Header Banner */}
@@ -379,6 +407,17 @@ export default function VenueManagerDashboard() {
               <p className="text-xs text-slate-400 mt-1">
                 {venueDetails?.address || 'Review applicant queue, approve workers, and publish shifts.'}
               </p>
+              {!isPlatformAdmin && managedVenues.length > 1 && (
+                <select
+                  value={currentVenueId || ''}
+                  onChange={handleManagerVenueChange}
+                  className="mt-2 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-amber-500"
+                >
+                  {managedVenues.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -609,175 +648,16 @@ export default function VenueManagerDashboard() {
           )}
         </div>
 
-        {/* Section 3: Scheduled Venue Shifts & Roster Overview */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-            <div className="flex items-center space-x-2">
-              <CalendarIcon className="w-5 h-5 text-emerald-400" />
-              <div>
-                <h2 className="text-base font-bold text-white">
-                  Scheduled Venue Shifts ({roster.length})
-                </h2>
-                <p className="text-xs text-slate-400">
-                  Comprehensive scheduling overview & worker contact drill-down
-                </p>
-              </div>
-            </div>
-
-            {/* Toggle Control: Calendar vs List */}
-            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 self-stretch sm:self-auto justify-center">
-              <button
-                type="button"
-                onClick={() => setViewMode('calendar')}
-                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  viewMode === 'calendar'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <CalendarIcon className="w-3.5 h-3.5" />
-                <span>Calendar</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('list')}
-                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  viewMode === 'list'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <ListIcon className="w-3.5 h-3.5" />
-                <span>List</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Calendar View (react-big-calendar) */}
-          {viewMode === 'calendar' && (
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-h-[620px]">
-              <Calendar
-                localizer={localizer}
-                events={calendarEvents}
-                startAccessor="start"
-                endAccessor="end"
-                style={{ height: 600 }}
-                onSelectEvent={(event) => setSelectedShift(event.resource)}
-                views={['month', 'week', 'day', 'agenda']}
-                defaultView="month"
-                popup
-                eventPropGetter={() => ({
-                  style: {
-                    backgroundColor: '#059669',
-                    borderColor: '#10b981',
-                    color: '#ffffff',
-                    borderRadius: '6px',
-                    padding: '2px 6px',
-                    fontSize: '12px',
-                    fontWeight: '600',
-                    cursor: 'pointer',
-                  },
-                })}
-              />
-            </div>
-          )}
-
-          {/* List View: Table grouped by Date */}
-          {viewMode === 'list' && (
-            <div className="space-y-6">
-              {Object.keys(shiftsByDate).length === 0 ? (
-                <div className="text-center py-12 bg-slate-950/50 rounded-xl border border-slate-800">
-                  <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                  <p className="text-xs text-slate-400">No shifts scheduled yet for this venue.</p>
-                </div>
-              ) : (
-                Object.entries(shiftsByDate).map(([dateStr, dateShifts]) => (
-                  <div key={dateStr} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-                    <div className="bg-slate-800/40 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
-                      <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
-                        <CalendarIcon className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>{dateStr}</span>
-                      </h3>
-                      <span className="text-[11px] text-slate-400 font-medium">
-                        {dateShifts.length} {dateShifts.length === 1 ? 'shift' : 'shifts'}
-                      </span>
-                    </div>
-
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="border-b border-slate-800/80 text-[11px] font-semibold text-slate-400 bg-slate-900/30 uppercase">
-                            <th className="py-2.5 px-4">Shift Name</th>
-                            <th className="py-2.5 px-4">Time</th>
-                            <th className="py-2.5 px-4">Role Requirements</th>
-                            <th className="py-2.5 px-4 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-800/50 text-xs">
-                          {dateShifts.map((shift) => {
-                            const timeFormatted = shift.start_time && shift.end_time
-                              ? `${new Date(shift.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${new Date(shift.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                              : 'TBD';
-                            const assignedCount = shift.assigned_workers ? shift.assigned_workers.length : shift.spots_filled;
-
-                            return (
-                              <tr key={shift.id} className="hover:bg-slate-900/40 transition">
-                                <td className="py-3 px-4 font-semibold text-white">
-                                  <div>{shift.title || shift.name}</div>
-                                  <div className="text-[11px] text-emerald-400 font-normal flex items-center gap-1.5">
-                                    <span>${Number(shift.hourly_rate).toFixed(2)}/hr</span>
-                                    <TipBadge shift={shift} />
-                                  </div>
-                                </td>
-                                <td className="py-3 px-4 text-slate-300">
-                                  <span className="flex items-center space-x-1 text-xs">
-                                    <Clock className="w-3.5 h-3.5 text-slate-500" />
-                                    <span>{timeFormatted}</span>
-                                  </span>
-                                </td>
-                                <td className="py-3 px-4">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px] font-semibold uppercase">
-                                      {shift.role_type}
-                                    </span>
-                                    <span className="text-slate-400 text-xs">
-                                      ({assignedCount} / {shift.capacity} filled)
-                                    </span>
-                                  </div>
-                                </td>
-                                <td className="py-3 px-4 text-right">
-                                  <div className="inline-flex items-center space-x-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => setActiveDiscussionShift(shift)}
-                                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white font-medium text-xs border border-slate-700 transition inline-flex items-center space-x-1"
-                                      title="Discussion Board"
-                                    >
-                                      <MessageSquare className="w-3 h-3 text-indigo-400" />
-                                      <span>Board</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setSelectedShift(shift)}
-                                      className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-semibold text-xs border border-emerald-600/30 transition inline-flex items-center space-x-1.5 shadow-sm"
-                                    >
-                                      <Users className="w-3.5 h-3.5" />
-                                      <span>View Staff</span>
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
+        {/* Section 3 (Phase 23): Posted Shifts board */}
+        <PostedShiftsBoard
+          venueId={currentVenueId}
+          refreshKey={boardRefreshKey}
+          reliabilityMap={reliabilityMap}
+          onApprove={handleApprove}
+          onDeny={handleDeny}
+          onOpenBoard={setActiveDiscussionShift}
+          actionLoading={actionLoading}
+        />
       </main>
 
       {/* Modal: Shift Creation */}
@@ -967,15 +847,6 @@ export default function VenueManagerDashboard() {
         </div>
       )}
 
-      {/* Drill-Down Modal: Shift Staff Roster Details */}
-      {selectedShift && (
-        <ShiftRosterModal
-          selectedShift={selectedShift}
-          onClose={() => setSelectedShift(null)}
-          setSelectedShift={setSelectedShift}
-          reliabilityMap={reliabilityMap}
-        />
-      )}
     </div>
   );
 }

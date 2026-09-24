@@ -4,7 +4,7 @@ import api from '../api/client';
 import {
   Shield, Building2, Plus, Users, Calendar, AlertCircle,
   Check, X, MapPin, Trash2, BarChart3, Briefcase, Search,
-  UserPlus, CheckCircle2, XCircle, Power, UserCheck
+  UserPlus, CheckCircle2, XCircle, Power, UserCheck, Pencil
 } from 'lucide-react';
 
 export default function AdminPanel() {
@@ -26,6 +26,10 @@ export default function AdminPanel() {
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
   const [deletingUser, setDeletingUser] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [editRole, setEditRole] = useState('worker');
+  const [editVenueIds, setEditVenueIds] = useState([]);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [notification, setNotification] = useState(null);
 
   // Form state for Create New Venue Modal
@@ -198,6 +202,50 @@ export default function AdminPanel() {
     } finally {
       setDeletingUser(false);
       setUserToDelete(null);
+    }
+  };
+
+  const normalizeRole = (r) => {
+    const v = (r || '').toLowerCase();
+    return v === 'super_admin' ? 'platform_admin' : v || 'worker';
+  };
+
+  const openEditUser = (u) => {
+    setEditingUser(u);
+    setEditRole(normalizeRole(u.role));
+    setEditVenueIds((u.venue_ids || []).map(String));
+  };
+
+  const toggleEditVenue = (venueId) => {
+    const id = String(venueId);
+    setEditVenueIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const handleSaveUserEdit = async () => {
+    if (!editingUser) return;
+    if (editRole === 'venue_manager' && editVenueIds.length === 0) {
+      setNotification({ type: 'error', message: 'Pick at least one venue for a Venue Manager.' });
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const payload = {
+        role: editRole,
+        venue_ids: editRole === 'platform_admin' ? [] : editVenueIds,
+      };
+      const res = await api.patch(`/admin/users/${editingUser.id}`, payload);
+      setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? res.data : u)));
+      const roleLabel = editRole === 'platform_admin' ? 'Platform Admin' : editRole === 'venue_manager' ? 'Venue Manager' : 'Worker';
+      setNotification({
+        type: 'success',
+        message: `${res.data.first_name} ${res.data.last_name} is now a ${roleLabel}. They'll see the change the next time they refresh or sign in.`,
+      });
+      setEditingUser(null);
+      fetchAdminData();
+    } catch (err) {
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to update user.' });
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -590,16 +638,26 @@ export default function AdminPanel() {
 
                           {/* Actions */}
                           <td className="py-3.5 px-5 text-right">
-                            {currentUser?.id !== u.id && (
+                            <div className="inline-flex items-center space-x-1">
                               <button
                                 type="button"
-                                onClick={() => setUserToDelete(u)}
-                                className="p-2 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition"
-                                title="Delete user"
+                                onClick={() => openEditUser(u)}
+                                className="p-2 text-slate-500 hover:text-amber-400 rounded-lg hover:bg-amber-500/10 transition"
+                                title="Edit role & venues"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <Pencil className="w-4 h-4" />
                               </button>
-                            )}
+                              {currentUser?.id !== u.id && (
+                                <button
+                                  type="button"
+                                  onClick={() => setUserToDelete(u)}
+                                  className="p-2 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition"
+                                  title="Delete user"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -871,6 +929,123 @@ export default function AdminPanel() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit User */}
+      {editingUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-lg font-bold text-white">Edit {editingUser.first_name} {editingUser.last_name}</h3>
+                <p className="text-xs text-slate-400 font-mono">{editingUser.email}</p>
+              </div>
+              <button type="button" onClick={() => setEditingUser(null)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-2">Role</label>
+              {currentUser?.id === editingUser.id && (
+                <p className="text-[11px] text-amber-300 mb-2">You can't change your own role.</p>
+              )}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: 'worker', label: 'Worker', cls: 'emerald' },
+                  { id: 'venue_manager', label: 'Venue Manager', cls: 'amber' },
+                  { id: 'platform_admin', label: 'Platform Admin', cls: 'indigo' },
+                ].map((opt) => {
+                  const selected = editRole === opt.id;
+                  const disabled = currentUser?.id === editingUser.id;
+                  const tone = {
+                    emerald: 'border-emerald-500 bg-emerald-500/15 text-emerald-300',
+                    amber: 'border-amber-500 bg-amber-500/15 text-amber-300',
+                    indigo: 'border-indigo-500 bg-indigo-500/15 text-indigo-300',
+                  }[opt.cls];
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setEditRole(opt.id)}
+                      className={`px-3 py-2 rounded-xl border text-xs font-semibold transition disabled:opacity-50 ${
+                        selected ? tone : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {editRole === 'platform_admin' ? (
+              <p className="text-xs text-slate-400 bg-slate-800/60 border border-slate-700 rounded-xl p-3">
+                Platform admins can access every venue. Existing venue assignments will be cleared.
+              </p>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  {editRole === 'venue_manager' ? 'Managed venues (required)' : 'Pre-approved venues (optional)'}
+                </label>
+                <p className="text-[11px] text-slate-500 mb-2">
+                  {editRole === 'venue_manager'
+                    ? 'This person will manage shifts, rosters and approvals for the selected venues.'
+                    : "Workers on a venue's whitelist are pre-approved to pick up its shifts."}
+                </p>
+                {venues.length === 0 ? (
+                  <p className="text-xs text-slate-500 italic">No venues exist yet. Create one first.</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                    {venues.map((v) => {
+                      const checked = editVenueIds.includes(String(v.id));
+                      return (
+                        <label
+                          key={v.id}
+                          className={`flex items-center space-x-2.5 p-2 rounded-lg border cursor-pointer transition ${
+                            checked ? 'border-amber-500/50 bg-amber-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-600'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleEditVenue(v.id)}
+                            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-amber-500"
+                          />
+                          <span className="text-sm text-white">{v.name}</span>
+                          <span className="text-[11px] text-slate-500 truncate">{v.address}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {editRole === 'venue_manager' && editVenueIds.length === 0 && (
+                  <p className="text-[11px] text-rose-400 mt-2">Select at least one venue.</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end space-x-3 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                disabled={savingEdit}
+                className="px-4 py-2 text-sm rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveUserEdit}
+                disabled={savingEdit || (editRole === 'venue_manager' && editVenueIds.length === 0)}
+                className="px-4 py-2 text-sm rounded-xl bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+              >
+                {savingEdit ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
           </div>
         </div>
       )}
