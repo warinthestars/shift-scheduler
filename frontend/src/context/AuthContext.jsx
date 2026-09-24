@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import api from '../api/client';
+import { signInWithGoogle, firebaseSignOut } from '../firebase';
 
 const AuthContext = createContext(null);
 
@@ -99,6 +100,19 @@ export function AuthProvider({ children }) {
     return userSession;
   };
 
+  const loginWithFirebase = async () => {
+    const idToken = await signInWithGoogle();
+    const response = await api.post('/auth/firebase-login', { firebase_token: idToken });
+    const { access_token, user: apiUser } = response.data;
+    return saveAuthSession(access_token, apiUser);
+  };
+
+  const loginWithFirebaseToken = async (idToken, profile = {}) => {
+    const response = await api.post('/auth/firebase-login', { firebase_token: idToken, ...profile });
+    const { access_token, user: apiUser } = response.data;
+    return saveAuthSession(access_token, apiUser);
+  };
+
   const register = async (userData) => {
     const response = await api.post('/auth/register', userData);
     const { access_token, user: apiUser } = response.data;
@@ -107,6 +121,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    firebaseSignOut().catch(() => {});
     setUser(null);
     setToken(null);
     localStorage.removeItem('token');
@@ -141,6 +156,8 @@ export function AuthProvider({ children }) {
         loading,
         login,
         loginWithGoogleMock,
+        loginWithFirebase,
+        loginWithFirebaseToken,
         register,
         logout,
         refreshProfile,

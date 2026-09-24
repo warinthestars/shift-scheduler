@@ -51,9 +51,12 @@ class Settings(BaseSettings):
     SUPER_ADMIN_PASSWORD: str = os.getenv("SUPER_ADMIN_PASSWORD", "SuperSecretDemo123!")
 
     # Firebase Mocking
-    USE_MOCK_FIREBASE: bool = os.getenv("USE_MOCK_FIREBASE", "true").lower() in ("true", "1", "yes")
+    USE_MOCK_FIREBASE: bool = os.getenv("USE_MOCK_FIREBASE", "false").lower() in ("true", "1", "yes")
     FIREBASE_PROJECT_ID: str = os.getenv("FIREBASE_PROJECT_ID", "shiftboard-firebase-project")
     FIREBASE_CREDENTIALS_PATH: str = os.getenv("FIREBASE_CREDENTIALS_PATH", "/app/secrets/firebase_service_account.json")
+    FIREBASE_WEB_CONFIG_PATH: str = os.getenv("FIREBASE_WEB_CONFIG_PATH", "/app/secrets/firebase-web-config.js")
+    FIREBASE_AUTH_PROVIDERS: str = os.getenv("FIREBASE_AUTH_PROVIDERS", "")
+    ALLOW_SELF_REGISTRATION: bool = os.getenv("ALLOW_SELF_REGISTRATION", "true").lower() in ("true", "1", "yes")
 
     # CORS
     CORS_ORIGINS: str = os.getenv(
