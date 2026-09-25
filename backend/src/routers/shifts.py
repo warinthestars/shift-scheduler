@@ -20,6 +20,7 @@ from src.auth import get_current_user, require_manager_or_admin, require_worker,
 from src.services.auto_confirm import evaluate_shift_request, check_double_booking
 from src.services.shift_events import create_event_with_positions
 from src.services.shift_views import to_shift_responses
+from src.services.booking import request_position, withdraw_other_pending_in_event
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
 
@@ -160,83 +161,21 @@ async def request_shift(
     3. Check if worker.aggregate_rating >= venue.auto_approve_rating_threshold -> APPROVED.
     4. Fallback -> PENDING.
     """
-    # 1. Fetch shift with its venue
-    shift_res = await db.execute(
-        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift_id)
-    )
-    shift = shift_res.scalar_one_or_none()
-    if not shift:
-        raise HTTPException(status_code=404, detail="Shift not found")
+    # Phase 26.1: all booking rules (one request per event, locking, re-request rules) live in
+    # services/booking.request_position. This legacy endpoint is kept for older screens.
+    request_id = await request_position(db, current_user, shift_id)
+    await db.refresh(current_user)
 
-    if shift.status != "OPEN":
-        raise HTTPException(status_code=400, detail=f"Shift is currently {shift.status}")
-
-    if shift.spots_filled >= shift.capacity:
-        raise HTTPException(status_code=400, detail="This shift is already filled to capacity")
-
-    # 2. Check existing request
-    existing = await db.scalar(
-        select(ShiftRequest).where(
-            ShiftRequest.shift_id == shift_id,
-            ShiftRequest.worker_id == current_user.id
-        )
-    )
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You have already requested this shift (status: {existing.status})"
-        )
-
-    # 3. Double-Booking check before evaluating or approving request
-    await check_double_booking(
-        db=db,
-        worker_id=current_user.id,
-        start_time=shift.start_time,
-        end_time=shift.end_time,
-        exclude_shift_id=shift.id
-    )
-
-    # 4. Evaluate with Auto-Confirm Engine Service
-    assigned_status, approval_source = await evaluate_shift_request(
-        db=db,
-        worker=current_user,
-        shift=shift,
-        venue=shift.venue
-    )
-
-    status_val = (
-        assigned_status.value
-        if hasattr(assigned_status, "value")
-        else str(assigned_status)
-    ).lower()
-
-    # 5. If approved immediately, adjust spots
-    if status_val == "approved":
-        shift.spots_filled += 1
-        if shift.spots_filled >= shift.capacity:
-            shift.status = "FILLED"
-
-    req = ShiftRequest(
-        shift_id=shift.id,
-        worker_id=current_user.id,
-        status=status_val,
-        approval_source=approval_source,
-        approved_at=datetime.utcnow() if status_val == "approved" else None
-    )
-    db.add(req)
-    await db.commit()
-    await db.refresh(req)
-
-    # Reload with relations
     res = await db.execute(
         select(ShiftRequest)
         .options(
             selectinload(ShiftRequest.shift).selectinload(Shift.venue),
             selectinload(ShiftRequest.worker)
         )
-        .where(ShiftRequest.id == req.id)
+        .where(ShiftRequest.id == request_id)
     )
     req_obj = res.scalar_one()
+    status_val = (req_obj.status or "").lower()
     resp = ShiftRequestResponse.model_validate(req_obj)
     if req_obj.shift is not None:
         shown = await to_shift_responses(
@@ -304,6 +243,11 @@ async def update_shift_request_status(
         shift_req.approval_source = "manager_manual"
         shift_req.approved_by_user_id = current_user.id
         shift_req.approved_at = datetime.utcnow()
+        # Phase 26.1: booked on this position -> close their other waiting requests in the event
+        await withdraw_other_pending_in_event(
+            db, shift_req.worker_id, shift.event_id, shift.id,
+            "Booked on another position for this event",
+        )
     elif target_clean == "rejected":
         if prev_status == "approved":
             shift.spots_filled = max(0, shift.spots_filled - 1)

@@ -148,6 +148,9 @@ export default function EventRosterModal({
                             <div>
                               <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
                               <div className="text-[11px] text-slate-400 mt-0.5">Requested {p.requested_at ? fmtDateTime(p.requested_at, timeZone) : ''}</div>
+                              {p.note && (
+                                <div className="text-[11px] text-slate-300 mt-1 italic whitespace-pre-line">“{p.note}”</div>
+                              )}
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-amber-400 text-xs font-bold">★ {Number(p.aggregate_rating).toFixed(1)}</span>

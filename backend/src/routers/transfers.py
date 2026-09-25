@@ -13,6 +13,7 @@ from src.schemas import (
 )
 from src.auth import get_current_user, require_manager_or_admin, normalize_role, verify_venue_access
 from src.services.auto_confirm import check_double_booking
+from src.services.booking import withdraw_other_pending_in_event
 from src.services.team import get_transfer_candidates
 
 router = APIRouter(prefix="/api/transfers", tags=["Shift Transfers"])
@@ -311,6 +312,11 @@ async def manager_review_shift_transfer(
                 approved_at=datetime.now(timezone.utc)
             )
             db.add(to_req)
+        # Phase 26.1: the new holder's other waiting requests in this event are closed
+        await withdraw_other_pending_in_event(
+            db, transfer.to_worker_id, shift.event_id, shift.id,
+            "Took over a handed-off shift for this event",
+        )
     elif action in ("deny", "reject"):
         transfer.status = "denied"
     else:

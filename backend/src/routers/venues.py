@@ -786,6 +786,7 @@ async def get_venue_events(
             requested_at=req.created_at,
             clocked_in=clocked_in or req.check_in_time is not None,
             clocked_out=clocked_out or req.check_out_time is not None,
+            note=req.notes,
         )
         if person.status in ASSIGNED_STATUSES:
             assigned_by_shift[req.shift_id].append(person)

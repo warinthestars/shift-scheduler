@@ -19,7 +19,7 @@ async def check_double_booking(
     """
     Checks if a worker already has an approved or active shift overlapping with the time slot:
     (existing_shift.start_time < new_shift.end_time) AND (existing_shift.end_time > new_shift.start_time).
-    
+
     Raises:
         HTTPException(status_code=400, detail="Worker is already booked for this time slot.")
     """
@@ -49,6 +49,48 @@ async def check_double_booking(
             detail="Worker is already booked for this time slot."
         )
 
+
+def decide_approval(
+    shift: Shift,
+    venue: Venue,
+    worker: User,
+    is_whitelisted: bool,
+) -> Tuple[RequestStatus, Optional[str]]:
+    """
+    Phase 26.1: Pure decision (no database access, no side effects).
+    Used by evaluate_shift_request AND by the worker listings ("Instant book" vs "Needs approval"),
+    so both always agree. Order:
+    1. Position approval_mode 'auto' (or legacy is_shift_auto_confirm) -> APPROVED "shift_auto_confirm"
+    2. Position approval_mode 'manual'                                 -> PENDING
+    3. Venue policy 'manual'                                           -> PENDING
+    4. Venue policy 'everyone_auto'                                    -> APPROVED "venue_everyone_auto"
+    5. Venue policy 'team_auto' AND worker on venue whitelist          -> APPROVED "venue_whitelist"
+    6. Rating threshold (worker has >= 1 rating and meets threshold)   -> APPROVED "rating_threshold"
+    7. Otherwise                                                       -> PENDING
+    """
+    shift_mode = (getattr(shift, "approval_mode", None) or "venue_default").lower()
+    if shift_mode == "auto" or (shift_mode == "venue_default" and shift.is_shift_auto_confirm):
+        return RequestStatus.APPROVED, "shift_auto_confirm"
+    if shift_mode == "manual":
+        return RequestStatus.PENDING, None
+
+    policy = (getattr(venue, "approval_policy", None) or "team_auto").lower()
+    if policy == "manual":
+        return RequestStatus.PENDING, None
+    if policy == "everyone_auto":
+        return RequestStatus.APPROVED, "venue_everyone_auto"
+    if policy == "team_auto" and is_whitelisted:
+        return RequestStatus.APPROVED, "venue_whitelist"
+
+    if venue.auto_approve_rating_threshold is not None:
+        rating_count = int(worker.rating_count or 0)
+        worker_rating = float(worker.aggregate_rating or 0.0)
+        if rating_count > 0 and worker_rating >= float(venue.auto_approve_rating_threshold):
+            return RequestStatus.APPROVED, "rating_threshold"
+
+    return RequestStatus.PENDING, None
+
+
 async def evaluate_shift_request(
     db: AsyncSession,
     worker: User,
@@ -56,87 +98,21 @@ async def evaluate_shift_request(
     venue: Venue
 ) -> Tuple[RequestStatus, Optional[str]]:
     """
-    ShiftBoard Auto-Confirm Engine
-    
-    Evaluates shift application conditions in strict hierarchical order:
-    1. Shift-level instant booking (shift.is_shift_auto_confirm)      -> APPROVED "shift_auto_confirm"
-    2. Venue policy 'everyone_auto'                                   -> APPROVED "venue_everyone_auto"
-    3. Venue policy 'team_auto' AND worker on venue whitelist         -> APPROVED "venue_whitelist"
-    4. Rating threshold (worker has >= 1 rating and meets threshold)  -> APPROVED "rating_threshold"
-    5. Otherwise                                                      -> PENDING
-    
-    Returns:
-        Tuple[RequestStatus, Optional[str]]: (Assigned status, Approval source)
+    ShiftBoard Auto-Confirm Engine. Looks up the whitelist, asks decide_approval(),
+    and runs the double-booking check when the answer is APPROVED.
     """
-    logger.info(
-        f"[Auto-Confirm Engine] Evaluating Worker {worker.id} ({worker.email}) "
-        f"for Shift {shift.id} ('{shift.title}') at Venue {venue.id} ('{venue.name}')"
-    )
-
-    # --------------------------------------------------------------------------
-    # Condition 1: Position-level approval mode (Phase 25.2)
-    # --------------------------------------------------------------------------
-    shift_mode = (getattr(shift, "approval_mode", None) or "venue_default").lower()
-    if shift_mode == "auto" or (shift_mode == "venue_default" and shift.is_shift_auto_confirm):
-        logger.info("[Auto-Confirm Engine] Position is set to instant booking.")
-        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
-        return RequestStatus.APPROVED, "shift_auto_confirm"
-    if shift_mode == "manual":
-        logger.info("[Auto-Confirm Engine] Position requires manager approval.")
-        return RequestStatus.PENDING, None
-
-    policy = (getattr(venue, "approval_policy", None) or "team_auto").lower()
-
-    # If venue policy is manual: manager reviews every shift request; auto-confirm is disabled
-    if policy == "manual":
-        logger.info("[Auto-Confirm Engine] Venue policy is manual: auto-confirm disabled.")
-        return RequestStatus.PENDING, None
-
-    # --------------------------------------------------------------------------
-    # Condition 1b: Venue policy - everyone is booked instantly
-    # --------------------------------------------------------------------------
-    if policy == "everyone_auto":
-        logger.info("[Auto-Confirm Engine] Venue policy is everyone_auto.")
-        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
-        return RequestStatus.APPROVED, "venue_everyone_auto"
-
-    # --------------------------------------------------------------------------
-    # Condition 2: Venue Whitelist
-    # --------------------------------------------------------------------------
-    whitelist_entry = await db.scalar(
-        select(VenueWhitelist).where(
+    whitelist_id = await db.scalar(
+        select(VenueWhitelist.id).where(
             VenueWhitelist.venue_id == venue.id,
             VenueWhitelist.worker_id == worker.id,
             VenueWhitelist.is_active == True
         )
     )
-    if whitelist_entry and policy == "team_auto":
-        logger.info(f"[Auto-Confirm Engine] Condition 2 MET: Worker is on Venue's trusted whitelist.")
+    decision, source = decide_approval(shift, venue, worker, whitelist_id is not None)
+    logger.info(
+        f"[Auto-Confirm Engine] Worker {worker.id} / Shift {shift.id} ('{shift.title}') "
+        f"at Venue {venue.id}: {decision.value} via {source or 'manager review'}"
+    )
+    if decision == RequestStatus.APPROVED:
         await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
-        return RequestStatus.APPROVED, "venue_whitelist"
-
-    # --------------------------------------------------------------------------
-    # Condition 3: Rating Threshold (only for workers who have real ratings)
-    # --------------------------------------------------------------------------
-    if venue.auto_approve_rating_threshold is not None:
-        rating_count = int(worker.rating_count or 0)
-        worker_rating = float(worker.aggregate_rating or 0.0)
-        threshold = float(venue.auto_approve_rating_threshold)
-        if rating_count > 0 and worker_rating >= threshold:
-            logger.info(
-                f"[Auto-Confirm Engine] Condition 3 MET: Worker rating {worker_rating:.2f} "
-                f"({rating_count} ratings) >= Venue threshold {threshold:.2f}."
-            )
-            await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
-            return RequestStatus.APPROVED, "rating_threshold"
-        logger.info(
-            f"[Auto-Confirm Engine] Condition 3 NOT MET: rating {worker_rating:.2f}, "
-            f"{rating_count} ratings, threshold {threshold:.2f}."
-        )
-
-    # --------------------------------------------------------------------------
-    # Condition 4: Fallback -> Pending Manager Review
-    # --------------------------------------------------------------------------
-    logger.info("[Auto-Confirm Engine] Condition 4: Fallback to PENDING review by Venue Manager.")
-    return RequestStatus.PENDING, None
-
+    return decision, source

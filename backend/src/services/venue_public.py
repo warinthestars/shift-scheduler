@@ -213,6 +213,7 @@ async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope:
         if key not in events:
             events[key] = {
                 "event_key": key,
+                "event_id": s.event_id,
                 "title": s.title or "Shift",
                 "start_time": s.start_time,
                 "end_time": s.end_time,

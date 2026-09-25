@@ -335,6 +335,7 @@ class ShiftRequestResponse(BaseModel):
     created_at: datetime
     status_reason: Optional[str] = None
     pay_rate: Optional[float] = None
+    notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
     shift: Optional[ShiftResponse] = None
     worker: Optional[UserBrief] = None
 
@@ -438,6 +439,7 @@ class RosterPerson(BaseModel):
     requested_at: Optional[datetime] = None
     clocked_in: bool = False
     clocked_out: bool = False
+    note: Optional[str] = None          # Phase 26.1: worker's note with their request
 
 
 class EventPosition(BaseModel):
@@ -578,6 +580,7 @@ class PublicEventPosition(BaseModel):
 
 class PublicVenueEvent(BaseModel):
     event_key: str
+    event_id: Optional[UUID] = None     # Phase 26.1: opens the worker listing modal
     title: str
     start_time: datetime
     end_time: datetime
@@ -725,4 +728,88 @@ class EventTimesheet(BaseModel):
     people: List[TimesheetPerson]
     total_hours: float
     total_pay: float
+
+
+# ------------------------------------------------------------------------------
+# Phase 26.1: Worker event listings (one card per event)
+# ------------------------------------------------------------------------------
+class ListingVenue(BaseModel):
+    id: UUID
+    name: str
+    address: Optional[str] = None
+    timezone: str = "America/New_York"
+    logo_url: Optional[str] = None
+    phone: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    dress_code: Optional[str] = None
+    arrival_instructions: Optional[str] = None
+    default_shift_notes: Optional[str] = None
+
+
+class ListingPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    role_notes: Optional[str] = None
+    hourly_rate: Optional[float] = None        # None = hidden from this viewer
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    capacity: int
+    spots_left: int
+    status: str                                # OPEN | FILLED
+    booking: str                               # instant | approval  (for THIS viewer)
+    est_pay_min: Optional[float] = None        # hours x rate, None when pay is hidden
+    est_pay_max: Optional[float] = None
+    my_status: Optional[str] = None            # viewer's request status on this position
+    my_status_reason: Optional[str] = None
+
+
+class ListingMyRequest(BaseModel):
+    request_id: UUID
+    shift_id: UUID
+    role_type: str
+    status: str
+    note: Optional[str] = None
+
+
+class EventListing(BaseModel):
+    event_id: UUID
+    title: str
+    notes: Optional[str] = None
+    start_time: datetime
+    end_time: datetime
+    hours: float
+    venue: ListingVenue
+    positions: List[ListingPosition]
+    total_capacity: int
+    total_spots_left: int
+    open_positions: int
+    pay_min: Optional[float] = None
+    pay_max: Optional[float] = None
+    any_tips: bool = False
+    any_instant: bool = False
+    on_team: bool = False
+    my_request: Optional[ListingMyRequest] = None     # the viewer's ACTIVE request in this event
+    conflict: Optional[str] = None                    # "Blue Bar · Friday Service" when it overlaps a booked shift
+    cancelled: bool = False
+    cancel_reason: Optional[str] = None
+    started: bool = False
+    can_request: bool = True
+
+
+class PositionRequestBody(BaseModel):
+    shift_id: UUID
+    note: Optional[str] = Field(None, max_length=500)
+    switch: bool = False
+
+
+class PositionRequestResult(BaseModel):
+    request_id: UUID
+    status: str
+    instant: bool
+    message: str
+    listing: Optional[EventListing] = None
+
 

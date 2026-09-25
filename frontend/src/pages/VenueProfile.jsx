@@ -9,6 +9,7 @@ import TipBadge from '../components/TipBadge';
 import PayLabel from '../components/PayLabel';
 import { VenueAvatar } from './VenuesDirectory';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
+import EventListingModal from '../components/EventListingModal';
 
 const MY_STATUS = {
   pending: { label: 'Requested', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
@@ -20,7 +21,10 @@ const MY_STATUS = {
   rejected: { label: 'Not selected', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
   dropped: { label: 'Released', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
   transferred: { label: 'Handed off', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  withdrawn: { label: 'Withdrawn', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
 };
+
+const ACTIVE_MY_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in', 'completed'];
 
 export default function VenueProfile() {
   const { venueId } = useParams();
@@ -34,8 +38,8 @@ export default function VenueProfile() {
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [requestingId, setRequestingId] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [openEventId, setOpenEventId] = useState(null); // Phase 26.1
 
   useEffect(() => {
     setLoading(true);
@@ -59,24 +63,6 @@ export default function VenueProfile() {
   useEffect(() => {
     loadEvents();
   }, [loadEvents, refreshKey]);
-
-  const handleRequest = async (shiftId) => {
-    setRequestingId(shiftId);
-    setNotice(null);
-    try {
-      const res = await api.post(`/shifts/${shiftId}/request`);
-      const st = String(res.data?.status || '').toLowerCase();
-      setNotice({
-        type: 'success',
-        message: st === 'approved' ? "You're booked! It's on your schedule." : 'Request sent. The manager will review it.',
-      });
-      setRefreshKey((k) => k + 1);
-    } catch (err) {
-      setNotice({ type: 'error', message: err.response?.data?.detail || 'Could not request this shift.' });
-    } finally {
-      setRequestingId(null);
-    }
-  };
 
   if (loading && !profile) {
     return <div className="min-h-screen bg-slate-950 text-slate-500 text-sm text-center py-24">Loading venue…</div>;
@@ -254,15 +240,29 @@ export default function VenueProfile() {
                         <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{fmtTimeRange(ev.start_time, ev.end_time, tz)}</span>
                       </div>
                     </div>
-                    <span className="text-xs text-slate-400 inline-flex items-center gap-1">
-                      <Users className="w-3.5 h-3.5" /> {ev.total_filled}/{ev.total_capacity} staffed
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-slate-400 inline-flex items-center gap-1">
+                        <Users className="w-3.5 h-3.5" /> {ev.total_filled}/{ev.total_capacity} staffed
+                      </span>
+                      {scope === 'upcoming' && isWorker && ev.event_id && (() => {
+                        const hasMine = ev.positions.some((x) => ACTIVE_MY_STATUSES.includes(x.my_status));
+                        const anyOpen = ev.positions.some((x) => x.status === 'OPEN' && x.spots_left > 0);
+                        if (!hasMine && !anyOpen) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setOpenEventId(ev.event_id)}
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold"
+                          >
+                            {hasMine ? 'View details' : 'View & request'}
+                          </button>
+                        );
+                      })()}
+                    </div>
                   </div>
                   <div className="divide-y divide-slate-800/60">
                     {ev.positions.map((p) => {
                       const mine = p.my_status ? MY_STATUS[p.my_status] : null;
-                      const canRequest =
-                        scope === 'upcoming' && isWorker && !p.my_status && p.status === 'OPEN' && p.spots_left > 0;
                       return (
                         <div key={p.shift_id} className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -275,15 +275,6 @@ export default function VenueProfile() {
                           <div>
                             {mine ? (
                               <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${mine.cls}`}>{mine.label}</span>
-                            ) : canRequest ? (
-                              <button
-                                type="button"
-                                onClick={() => handleRequest(p.shift_id)}
-                                disabled={requestingId === p.shift_id}
-                                className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50"
-                              >
-                                {requestingId === p.shift_id ? 'Sending…' : 'Pick up shift'}
-                              </button>
                             ) : scope === 'upcoming' && p.spots_left === 0 ? (
                               <span className="text-xs text-slate-500">Full</span>
                             ) : scope === 'past' ? (
@@ -302,6 +293,14 @@ export default function VenueProfile() {
           )}
         </div>
       </main>
+
+      {openEventId && (
+        <EventListingModal
+          eventId={openEventId}
+          onClose={() => setOpenEventId(null)}
+          onChanged={() => setRefreshKey((k) => k + 1)}
+        />
+      )}
     </div>
   );
 }
