@@ -72,7 +72,7 @@ async def create_shift(
                     hourly_rate=rate,
                     tips_eligible=bool(req.tips_eligible),
                     tip_pool=bool(req.tips_eligible and req.tip_pool),
-                    description=shift_in.description,
+                    description=shift_in.description or venue.default_shift_notes,
                     status="OPEN"
                 )
                 db.add(s)
@@ -98,7 +98,7 @@ async def create_shift(
                 hourly_rate=rate,
                 tips_eligible=bool(shift_in.tips_eligible),
                 tip_pool=bool(shift_in.tips_eligible and shift_in.tip_pool),
-                description=shift_in.description,
+                description=shift_in.description or venue.default_shift_notes,
                 status="OPEN"
             )
             db.add(shift)

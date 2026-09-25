@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
@@ -9,6 +9,7 @@ import {
 import TransferModal from '../components/TransferModal';
 import ShiftBoard from '../components/ShiftBoard';
 import TipBadge from '../components/TipBadge';
+import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';
 
 export default function WorkerDashboard() {
   const { user } = useAuth();
@@ -215,6 +216,11 @@ export default function WorkerDashboard() {
     requestedMap.set(req.shift_id, req.status);
   });
 
+  const roleOptions = useMemo(
+    () => Array.from(new Set(availableShifts.map((s) => s.role_type).filter(Boolean))).sort(),
+    [availableShifts]
+  );
+
   const filteredAvailable = availableShifts.filter((shift) => {
     if (roleFilter === 'ALL') return true;
     const roleName = shift.role_type || shift.role_required || '';
@@ -341,11 +347,9 @@ export default function WorkerDashboard() {
                 className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-emerald-500"
               >
                 <option value="ALL">All Roles</option>
-                <option value="Bartender">Bartender</option>
-                <option value="Server">Server</option>
-                <option value="Dishwasher">Dishwasher</option>
-                <option value="Barback">Barback</option>
-                <option value="AV Tech">AV Tech</option>
+                {roleOptions.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
               </select>
             </div>
           )}
@@ -402,21 +406,11 @@ export default function WorkerDashboard() {
                         <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/60 space-y-1.5 text-xs text-slate-300 mb-4">
                           <div className="flex items-center space-x-2">
                             <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>
-                              {new Date(shift.start_time).toLocaleDateString(undefined, {
-                                weekday: 'short',
-                                month: 'short',
-                                day: 'numeric',
-                              })}
-                            </span>
+                            <span>{fmtDate(shift.start_time, shift.venue?.timezone)}</span>
                           </div>
                           <div className="flex items-center space-x-2">
                             <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>
-                              {new Date(shift.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              {' - '}
-                              {new Date(shift.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
+                            <span>{fmtTimeRange(shift.start_time, shift.end_time, shift.venue?.timezone)}</span>
                           </div>
                         </div>
 
@@ -524,7 +518,7 @@ export default function WorkerDashboard() {
                         <TipBadge shift={shift} />
                       </p>
                       <p className="text-xs text-slate-500">
-                        {new Date(shift?.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                        {fmtDateTime(shift?.start_time, shift?.venue?.timezone)}
                       </p>
                     </div>
 
@@ -688,7 +682,7 @@ export default function WorkerDashboard() {
                         <TipBadge shift={shift} />
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
-                        {new Date(shift?.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                        {fmtDateTime(shift?.start_time, shift?.venue?.timezone)}
                       </p>
                     </div>
 
@@ -780,7 +774,7 @@ export default function WorkerDashboard() {
                     {shiftToDrop.shift.venue?.name} • {shiftToDrop.shift.role_type} • ${shiftToDrop.shift.hourly_rate}/hr
                   </p>
                   <p className="text-slate-500 text-[11px]">
-                    {new Date(shiftToDrop.shift.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                    {fmtDateTime(shiftToDrop.shift.start_time, shiftToDrop.shift.venue?.timezone)}
                   </p>
                 </div>
               )}

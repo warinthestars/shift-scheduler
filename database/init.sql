@@ -52,6 +52,12 @@ CREATE TABLE venues (
     geofence_radius_meters INT NOT NULL DEFAULT 100,
     auto_approve_rating_threshold DOUBLE PRECISION,
     logo_url TEXT,
+    timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
+    phone VARCHAR(30),
+    arrival_instructions TEXT,
+    dress_code TEXT,
+    default_shift_notes TEXT,
+    approval_policy VARCHAR(20) NOT NULL DEFAULT 'team_auto',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -87,6 +93,27 @@ CREATE TABLE venue_whitelists (
 
 CREATE INDEX idx_whitelist_venue ON venue_whitelists(venue_id);
 CREATE INDEX idx_whitelist_worker ON venue_whitelists(worker_id);
+
+-- ------------------------------------------------------------------------------
+-- 4b. Venue Positions (Phase 25): per-venue roles with default pay
+-- ------------------------------------------------------------------------------
+CREATE TABLE venue_positions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    default_rate NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+    tips_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+    tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
+    sort_order INT NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_venue_position_name UNIQUE (venue_id, name),
+    CONSTRAINT chk_position_tip_pool CHECK (tip_pool = FALSE OR tips_eligible = TRUE),
+    CONSTRAINT chk_position_rate CHECK (default_rate > 0)
+);
+
+CREATE INDEX idx_venue_positions_venue ON venue_positions(venue_id);
 
 -- ------------------------------------------------------------------------------
 -- 5. Shifts Table
@@ -202,6 +229,7 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_venues_updated_at BEFORE UPDATE ON venues FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+CREATE TRIGGER trg_venue_positions_updated_at BEFORE UPDATE ON venue_positions FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shifts_updated_at BEFORE UPDATE ON shifts FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shift_requests_updated_at BEFORE UPDATE ON shift_requests FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 

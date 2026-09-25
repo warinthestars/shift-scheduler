@@ -2,6 +2,7 @@ import React from 'react';
 import { X, Users, Clock, Check, MessageSquare, Phone, Mail, UserPlus } from 'lucide-react';
 import TipBadge from './TipBadge';
 import ReliabilityBadge from './ReliabilityBadge';
+import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';
 
 const STATUS_LABEL = {
   approved: 'Confirmed',
@@ -28,13 +29,12 @@ export default function EventRosterModal({
   onDeny,
   onOpenBoard,
   actionLoading,
+  timeZone,
 }) {
   if (!event) return null;
 
-  const start = new Date(event.start_time);
-  const end = new Date(event.end_time);
-  const dateStr = start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-  const timeStr = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const dateStr = fmtDate(event.start_time, timeZone);
+  const timeStr = fmtTimeRange(event.start_time, event.end_time, timeZone);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -148,7 +148,7 @@ export default function EventRosterModal({
                               <div>
                                 <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
                                 <div className="text-[11px] text-slate-400 mt-0.5">
-                                  Requested {p.requested_at ? new Date(p.requested_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                                  Requested {fmtDateTime(p.requested_at, timeZone)}
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">

@@ -8,6 +8,7 @@ from src.models import (
     User, Venue, Shift, ShiftRequest, VenueManager, VenueWhitelist,
     UserRole, RequestStatus
 )
+from src.services.venue_positions import ensure_default_positions
 
 logger = logging.getLogger("shiftboard.seed")
 
@@ -89,6 +90,8 @@ async def seed_initial_data(db: AsyncSession):
             db.add(demo_venue)
             await db.commit()
             await db.refresh(demo_venue)
+            await ensure_default_positions(db, demo_venue.id)
+            await db.commit()
             logger.info(f"Demo Venue created with ID: {demo_venue.id}")
         else:
             logger.info(f"Demo Venue already exists: {demo_venue.name} ({demo_venue.id})")
@@ -402,6 +405,8 @@ async def seed_initial_data(db: AsyncSession):
             db.add(venue1)
             await db.commit()
             await db.refresh(venue1)
+            await ensure_default_positions(db, venue1.id)
+            await db.commit()
             db.add(VenueManager(venue_id=venue1.id, user_id=manager_user.id, is_primary=False))
             await db.commit()
     except Exception as e:

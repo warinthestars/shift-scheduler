@@ -112,6 +112,12 @@ class Venue(Base):
     geofence_radius_meters = Column(Integer, nullable=False, default=100)
     auto_approve_rating_threshold = Column(Float, nullable=True, default=None)
     logo_url = Column(Text, nullable=True)
+    timezone = Column(String(64), nullable=False, default="America/New_York")
+    phone = Column(String(30), nullable=True)
+    arrival_instructions = Column(Text, nullable=True)
+    dress_code = Column(Text, nullable=True)
+    default_shift_notes = Column(Text, nullable=True)
+    approval_policy = Column(String(20), nullable=False, default="team_auto")
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -144,6 +150,7 @@ class Venue(Base):
     managers = relationship("VenueManager", back_populates="venue", cascade="all, delete-orphan")
     shifts = relationship("Shift", back_populates="venue", cascade="all, delete-orphan")
     whitelists = relationship("VenueWhitelist", back_populates="venue", cascade="all, delete-orphan")
+    positions = relationship("VenuePosition", back_populates="venue", cascade="all, delete-orphan")
 
 class VenueManager(Base):
     __tablename__ = "venue_managers"
@@ -172,6 +179,28 @@ class VenueWhitelist(Base):
 
     venue = relationship("Venue", back_populates="whitelists")
     worker = relationship("User", back_populates="whitelist_entries")
+
+class VenuePosition(Base):
+    __tablename__ = "venue_positions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    default_rate = Column(Numeric(10, 2), nullable=False, default=25.00)
+    tips_eligible = Column(Boolean, nullable=False, default=False)
+    tip_pool = Column(Boolean, nullable=False, default=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("venue_id", "name", name="uq_venue_position_name"),
+        CheckConstraint("tip_pool = FALSE OR tips_eligible = TRUE", name="chk_position_tip_pool"),
+        CheckConstraint("default_rate > 0", name="chk_position_rate"),
+    )
+
+    venue = relationship("Venue", back_populates="positions")
 
 class Shift(Base):
     __tablename__ = "shifts"

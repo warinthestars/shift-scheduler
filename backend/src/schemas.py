@@ -160,6 +160,12 @@ class VenueBase(BaseModel):
     auto_approve_rating_threshold: Optional[float] = None
     description: Optional[str] = None
     logo_url: Optional[str] = None
+    timezone: str = "America/New_York"
+    phone: Optional[str] = None
+    arrival_instructions: Optional[str] = None
+    dress_code: Optional[str] = None
+    default_shift_notes: Optional[str] = None
+    approval_policy: str = "team_auto"
 
 class VenueCreate(BaseModel):
     name: str
@@ -170,17 +176,31 @@ class VenueCreate(BaseModel):
     auto_approve_rating_threshold: Optional[float] = None
     description: Optional[str] = None
     logo_url: Optional[str] = None
+    timezone: Optional[str] = "America/New_York"
+    phone: Optional[str] = None
+    arrival_instructions: Optional[str] = None
+    dress_code: Optional[str] = None
+    default_shift_notes: Optional[str] = None
+    approval_policy: Optional[str] = "team_auto"
     manager_email: Optional[EmailStr] = None
     initial_manager_email: Optional[EmailStr] = None
 
 class VenueUpdateSettings(BaseModel):
-    auto_approve_rating_threshold: Optional[float] = None
-    geofence_radius_meters: Optional[int] = None
+    """Phase 25: partial update — only fields that are sent are changed."""
     name: Optional[str] = None
     address: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
+    geofence_radius_meters: Optional[int] = None
+    auto_approve_rating_threshold: Optional[float] = None
     description: Optional[str] = None
+    logo_url: Optional[str] = None
+    timezone: Optional[str] = None
+    phone: Optional[str] = None
+    arrival_instructions: Optional[str] = None
+    dress_code: Optional[str] = None
+    default_shift_notes: Optional[str] = None
+    approval_policy: Optional[str] = None
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -427,3 +447,36 @@ class VenueEventResponse(BaseModel):
     total_assigned: int
     total_requested: int
     positions: List[EventPosition]
+
+# ------------------------------------------------------------------------------
+# Phase 25: Venue positions
+# ------------------------------------------------------------------------------
+class VenuePositionCreate(BaseModel):
+    name: str
+    default_rate: float
+    tips_eligible: bool = False
+    tip_pool: bool = False
+
+
+class VenuePositionUpdate(BaseModel):
+    name: Optional[str] = None
+    default_rate: Optional[float] = None
+    tips_eligible: Optional[bool] = None
+    tip_pool: Optional[bool] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class VenuePositionResponse(BaseModel):
+    id: UUID
+    venue_id: UUID
+    name: str
+    default_rate: float
+    tips_eligible: bool
+    tip_pool: bool
+    sort_order: int
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+

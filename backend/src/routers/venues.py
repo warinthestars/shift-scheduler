@@ -12,18 +12,20 @@ from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
     Venue, VenueManager, VenueWhitelist, User, UserRole,
-    Shift, ShiftRequest, RequestStatus, TimeEntry
+    Shift, ShiftRequest, RequestStatus, TimeEntry, VenuePosition
 )
 from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
     WhitelistAddRequest, WhitelistResponse,
     ShiftResponse, ShiftRequestResponse,
     WorkerContactSchema, ShiftRosterResponse, UserBrief,
-    WorkerReliability, VenueEventResponse, EventPosition, RosterPerson
+    WorkerReliability, VenueEventResponse, EventPosition, RosterPerson,
+    VenuePositionCreate, VenuePositionUpdate, VenuePositionResponse
 )
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 from src.services.reliability import compute_reliability
 from src.services.team import get_venue_team
+from src.services.venue_positions import ensure_default_positions, clean_venue_payload
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -104,9 +106,11 @@ async def create_venue(
 
     try:
         venue_dict = venue_in.model_dump(exclude={"manager_email", "initial_manager_email"})
+        venue_dict = clean_venue_payload({k: v for k, v in venue_dict.items() if v is not None or k == "auto_approve_rating_threshold"})
         venue = Venue(**venue_dict)
         db.add(venue)
         await db.flush()
+        await ensure_default_positions(db, venue.id)
 
         manager_id = None
         if mgr_user:
@@ -197,25 +201,176 @@ async def get_venue_reliability(
     return {str(wid): WorkerReliability(worker_id=wid, **vals) for wid, vals in data.items()}
 
 @router.put("/{venue_id}/settings", response_model=VenueResponse)
+@router.patch("/{venue_id}/settings", response_model=VenueResponse)
 async def update_venue_settings(
     venue_id: UUID,
     settings_in: VenueUpdateSettings,
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Task 3: Update auto_approve_rating_threshold and geofence parameters.
-    Protected by role & venue manager assignment check.
-    """
+    """Phase 25: Edit the venue profile. Admins: any venue. Managers: venues they manage."""
     venue = await verify_venue_manager_access(venue_id, current_user, db)
-
-    update_data = settings_in.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(venue, field, value)
-
-    await db.commit()
-    await db.refresh(venue)
+    data = clean_venue_payload(settings_in.model_dump(exclude_unset=True))
+    try:
+        for field, value in data.items():
+            setattr(venue, field, value)
+        await db.commit()
+        await db.refresh(venue)
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update venue: {str(e)}")
     return venue
+
+
+# ------------------------------------------------------------------------------
+# Phase 25: Venue positions (roles + default pay)
+# ------------------------------------------------------------------------------
+@router.get("/{venue_id}/positions", response_model=List[VenuePositionResponse])
+async def list_venue_positions(
+    venue_id: UUID,
+    include_inactive: bool = Query(False),
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    await verify_venue_manager_access(venue_id, current_user, db)
+    q = select(VenuePosition).where(VenuePosition.venue_id == venue_id)
+    if not include_inactive:
+        q = q.where(VenuePosition.is_active == True)
+    q = q.order_by(VenuePosition.sort_order.asc(), VenuePosition.name.asc())
+    return (await db.execute(q)).scalars().all()
+
+
+@router.post("/{venue_id}/positions", response_model=VenuePositionResponse, status_code=status.HTTP_201_CREATED)
+async def create_venue_position(
+    venue_id: UUID,
+    pos_in: VenuePositionCreate,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    await verify_venue_manager_access(venue_id, current_user, db)
+    name = (pos_in.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Position name can't be empty.")
+    if pos_in.default_rate is None or pos_in.default_rate <= 0:
+        raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
+
+    existing = await db.scalar(
+        select(VenuePosition).where(
+            VenuePosition.venue_id == venue_id,
+            func.lower(VenuePosition.name) == name.lower()
+        )
+    )
+    if existing:
+        if existing.is_active:
+            raise HTTPException(status_code=409, detail=f"'{existing.name}' already exists at this venue.")
+        # Re-activate a previously removed position instead of duplicating it
+        try:
+            existing.is_active = True
+            existing.default_rate = pos_in.default_rate
+            existing.tips_eligible = bool(pos_in.tips_eligible)
+            existing.tip_pool = bool(pos_in.tips_eligible and pos_in.tip_pool)
+            await db.commit()
+            await db.refresh(existing)
+        except Exception as e:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail=f"Failed to restore position: {str(e)}")
+        return existing
+
+    try:
+        max_order = await db.scalar(
+            select(func.coalesce(func.max(VenuePosition.sort_order), -1)).where(VenuePosition.venue_id == venue_id)
+        )
+        pos = VenuePosition(
+            venue_id=venue_id,
+            name=name[:100],
+            default_rate=pos_in.default_rate,
+            tips_eligible=bool(pos_in.tips_eligible),
+            tip_pool=bool(pos_in.tips_eligible and pos_in.tip_pool),
+            sort_order=int(max_order) + 1,
+            is_active=True,
+        )
+        db.add(pos)
+        await db.commit()
+        await db.refresh(pos)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to add position: {str(e)}")
+    return pos
+
+
+@router.patch("/{venue_id}/positions/{position_id}", response_model=VenuePositionResponse)
+async def update_venue_position(
+    venue_id: UUID,
+    position_id: UUID,
+    pos_in: VenuePositionUpdate,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    await verify_venue_manager_access(venue_id, current_user, db)
+    pos = await db.scalar(
+        select(VenuePosition).where(VenuePosition.id == position_id, VenuePosition.venue_id == venue_id)
+    )
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found.")
+
+    data = pos_in.model_dump(exclude_unset=True)
+    if "name" in data:
+        new_name = (data["name"] or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="Position name can't be empty.")
+        clash = await db.scalar(
+            select(VenuePosition).where(
+                VenuePosition.venue_id == venue_id,
+                func.lower(VenuePosition.name) == new_name.lower(),
+                VenuePosition.id != position_id
+            )
+        )
+        if clash:
+            raise HTTPException(status_code=409, detail=f"'{clash.name}' already exists at this venue.")
+        data["name"] = new_name[:100]
+    if "default_rate" in data and (data["default_rate"] is None or data["default_rate"] <= 0):
+        raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
+
+    try:
+        for field, value in data.items():
+            if value is None and field in ("tips_eligible", "tip_pool", "is_active", "sort_order"):
+                continue
+            setattr(pos, field, value)
+        if not pos.tips_eligible:
+            pos.tip_pool = False
+        await db.commit()
+        await db.refresh(pos)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update position: {str(e)}")
+    return pos
+
+
+@router.delete("/{venue_id}/positions/{position_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_venue_position(
+    venue_id: UUID,
+    position_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Soft-remove: hides the position from the Create Shift list. Existing shifts are untouched."""
+    await verify_venue_manager_access(venue_id, current_user, db)
+    pos = await db.scalar(
+        select(VenuePosition).where(VenuePosition.id == position_id, VenuePosition.venue_id == venue_id)
+    )
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found.")
+    try:
+        pos.is_active = False
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to remove position: {str(e)}")
+    return None
+
 
 @router.post("/{venue_id}/whitelist", response_model=WhitelistResponse)
 async def add_worker_to_whitelist(

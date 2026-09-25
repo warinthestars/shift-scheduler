@@ -3,6 +3,7 @@ import api from '../api/client';
 import {
   ArrowRightLeft, X, AlertCircle, Check, Users, Calendar, Clock
 } from 'lucide-react';
+import { fmtShortDate, fmtDateTime } from '../utils/venueTime';
 
 export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [], preselectedShiftId = null, onTransferSuccess }) {
   const [selectedShiftId, setSelectedShiftId] = useState(preselectedShiftId || '');
@@ -128,7 +129,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
                 const id = req.shift_id || s?.id;
                 return (
                   <option key={id} value={id}>
-                    {s?.title} ({s?.role_type}) — {new Date(s?.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    {s?.title} ({s?.role_type}) — {fmtShortDate(s?.start_time, s?.venue?.timezone)}
                   </option>
                 );
               })}
@@ -140,7 +141,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
               <p className="font-bold text-white">{currentShiftObj.title}</p>
               <p className="text-slate-400">{currentShiftObj.venue?.name} • ${currentShiftObj.hourly_rate}/hr</p>
               <p className="text-slate-500 text-[11px]">
-                {new Date(currentShiftObj.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                {fmtDateTime(currentShiftObj.start_time, currentShiftObj.venue?.timezone)}
               </p>
             </div>
           )}

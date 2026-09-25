@@ -4,7 +4,7 @@ import api from '../api/client';
 import {
   Calendar as CalendarIcon, Clock, DollarSign, Users, Plus, Trash2, Check, X,
   Building2, Star, AlertCircle, ShieldCheck, Zap, ArrowRight,
-  Download, ArrowRightLeft, MessageSquare, FileText, List as ListIcon
+  Download, ArrowRightLeft, MessageSquare, FileText, List as ListIcon, Settings
 } from 'lucide-react';
 import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
@@ -15,6 +15,8 @@ import ShiftRosterModal from '../components/ShiftRosterModal';
 import TipBadge from '../components/TipBadge';
 import ReliabilityBadge from '../components/ReliabilityBadge';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
+import VenueSettingsModal from '../components/VenueSettingsModal';
+import { zonedLocalToUtcIso, fmtShortDate } from '../utils/venueTime';
 
 const locales = {
   'en-US': enUS,
@@ -63,6 +65,8 @@ export default function VenueManagerDashboard() {
   const [reliabilityMap, setReliabilityMap] = useState({});
   const [managedVenues, setManagedVenues] = useState([]);
   const [boardRefreshKey, setBoardRefreshKey] = useState(0);
+  const [venuePositions, setVenuePositions] = useState([]);
+  const [showVenueSettings, setShowVenueSettings] = useState(false);
 
   const fetchVenueData = async (venueId) => {
     try {
@@ -130,6 +134,23 @@ export default function VenueManagerDashboard() {
     window.addEventListener('admin_venue_changed', handleAdminVenueSwitch);
     return () => window.removeEventListener('admin_venue_changed', handleAdminVenueSwitch);
   }, []);
+
+  const loadVenuePositions = async (venueId) => {
+    if (!venueId) {
+      setVenuePositions([]);
+      return;
+    }
+    try {
+      const res = await api.get(`/venues/${venueId}/positions`);
+      setVenuePositions(res.data || []);
+    } catch (err) {
+      setVenuePositions([]);
+    }
+  };
+
+  useEffect(() => {
+    loadVenuePositions(currentVenueId);
+  }, [currentVenueId]);
 
   // Phase 16: Fetch roster data when currentVenueId changes
   useEffect(() => {
@@ -289,8 +310,25 @@ export default function VenueManagerDashboard() {
   const handleExportCSV = exportPayroll;
 
   // Dynamic role requirements helpers
+  const FALLBACK_ROLES = ['Bartender', 'Server', 'Dishwasher', 'Barback', 'AV Tech'];
+
+  const rowForPosition = (pos, fallbackName = 'Bartender') => ({
+    role: pos ? pos.name : fallbackName,
+    quantity: 1,
+    hourly_rate: pos ? Number(pos.default_rate).toFixed(2) : '25.00',
+    tips_eligible: pos ? !!pos.tips_eligible : false,
+    tip_pool: pos ? !!pos.tip_pool : false,
+  });
+
+  const openCreateShiftModal = () => {
+    setRoleRequirements([rowForPosition(venuePositions[0])]);
+    setShowCreateModal(true);
+  };
+
   const handleAddRoleRow = () => {
-    setRoleRequirements([...roleRequirements, { role: 'Server', quantity: 1, hourly_rate: '25.00', tips_eligible: false, tip_pool: false }]);
+    const used = new Set(roleRequirements.map((r) => r.role));
+    const next = venuePositions.find((p) => !used.has(p.name)) || venuePositions[0];
+    setRoleRequirements([...roleRequirements, rowForPosition(next, 'Server')]);
   };
 
   const handleRemoveRoleRow = (index) => {
@@ -309,8 +347,16 @@ export default function VenueManagerDashboard() {
         if (!value) next.tip_pool = false;
       } else if (field === 'tip_pool') {
         next.tip_pool = Boolean(value);
+      } else if (field === 'role') {
+        next.role = value;
+        const pos = venuePositions.find((p) => p.name === value);
+        if (pos) {
+          next.hourly_rate = Number(pos.default_rate).toFixed(2);
+          next.tips_eligible = !!pos.tips_eligible;
+          next.tip_pool = !!pos.tip_pool;
+        }
       } else {
-        next[field] = value; // 'role' or 'hourly_rate' (kept as string while typing)
+        next[field] = value; // 'hourly_rate' (kept as string while typing)
       }
       return next;
     });
@@ -333,12 +379,17 @@ export default function VenueManagerDashboard() {
       }
 
       const now = new Date();
+      const venueTz = venueDetails?.timezone;
       const start = startDateTime
-        ? new Date(startDateTime).toISOString()
+        ? zonedLocalToUtcIso(startDateTime, venueTz)
         : new Date(now.getTime() + 86400000).toISOString();
       const end = endDateTime
-        ? new Date(endDateTime).toISOString()
+        ? zonedLocalToUtcIso(endDateTime, venueTz)
         : new Date(now.getTime() + 86400000 + 21600000).toISOString();
+      if (new Date(end) <= new Date(start)) {
+        setNotification({ type: 'error', message: 'End time must be after the start time.' });
+        return;
+      }
 
       await api.post('/shifts', {
         venue_id: currentVenueId,
@@ -356,7 +407,7 @@ export default function VenueManagerDashboard() {
 
       setShowCreateModal(false);
       setEventName('');
-      setRoleRequirements([{ role: 'Bartender', quantity: 2, hourly_rate: '25.00', tips_eligible: false, tip_pool: false }]);
+      setRoleRequirements([rowForPosition(venuePositions[0])]);
       fetchVenueData(currentVenueId);
     } catch (err) {
       setNotification({
@@ -422,6 +473,16 @@ export default function VenueManagerDashboard() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowVenueSettings(true)}
+              disabled={!venueDetails}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
+            >
+              <Settings className="w-4 h-4 text-amber-400" />
+              <span>Venue Settings</span>
+            </button>
+
             {/* Download Payroll CSV Button */}
             <button
               type="button"
@@ -436,7 +497,7 @@ export default function VenueManagerDashboard() {
             {/* Create New Shift Button */}
             <button
               type="button"
-              onClick={() => setShowCreateModal(true)}
+              onClick={openCreateShiftModal}
               className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-emerald-500/20"
             >
               <Plus className="w-4 h-4" />
@@ -528,7 +589,7 @@ export default function VenueManagerDashboard() {
                           <TipBadge shift={shift} />
                         </span>
                         <span>•</span>
-                        <span>{new Date(shift?.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
+                        <span>{fmtShortDate(shift?.start_time, venueDetails?.timezone)}</span>
                       </div>
                       {transfer.notes && (
                         <p className="text-xs text-amber-300/90 mt-1.5 italic bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">
@@ -657,6 +718,7 @@ export default function VenueManagerDashboard() {
           onDeny={handleDeny}
           onOpenBoard={setActiveDiscussionShift}
           actionLoading={actionLoading}
+          timeZone={venueDetails?.timezone}
         />
       </main>
 
@@ -690,7 +752,7 @@ export default function VenueManagerDashboard() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Start DateTime</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">{`Starts (${venueDetails?.timezone || 'local'} time)`}</label>
                   <input
                     type="datetime-local"
                     value={startDateTime}
@@ -699,7 +761,7 @@ export default function VenueManagerDashboard() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">End DateTime</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">{`Ends (${venueDetails?.timezone || 'local'} time)`}</label>
                   <input
                     type="datetime-local"
                     value={endDateTime}
@@ -734,11 +796,12 @@ export default function VenueManagerDashboard() {
                           onChange={(e) => handleRoleChange(idx, 'role', e.target.value)}
                           className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
                         >
-                          <option value="Bartender">Bartender</option>
-                          <option value="Server">Server</option>
-                          <option value="Dishwasher">Dishwasher</option>
-                          <option value="Barback">Barback</option>
-                          <option value="AV Tech">AV Tech</option>
+                          {(venuePositions.length > 0 ? venuePositions.map((p) => p.name) : FALLBACK_ROLES).map((name) => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                          {row.role && !(venuePositions.length > 0 ? venuePositions.map((p) => p.name) : FALLBACK_ROLES).includes(row.role) && (
+                            <option value={row.role}>{row.role}</option>
+                          )}
                         </select>
                         <input
                           type="number"
@@ -809,7 +872,7 @@ export default function VenueManagerDashboard() {
                   className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-emerald-500"
                 />
                 <label htmlFor="modalAutoConfirm" className="text-xs text-slate-300">
-                  Auto-Confirm Anyone (Instant auto-booking for all applicants)
+                  Instant booking for this shift (anyone who picks it up is confirmed)
                 </label>
               </div>
 
@@ -845,6 +908,24 @@ export default function VenueManagerDashboard() {
             />
           </div>
         </div>
+      )}
+
+      {showVenueSettings && venueDetails && (
+        <VenueSettingsModal
+          mode="edit"
+          venue={venueDetails}
+          onClose={() => {
+            setShowVenueSettings(false);
+            loadVenuePositions(currentVenueId);
+          }}
+          onSaved={(updated) => {
+            setVenueDetails(updated);
+            setShowVenueSettings(false);
+            loadVenuePositions(currentVenueId);
+            setNotification({ type: 'success', message: 'Venue settings saved.' });
+            setBoardRefreshKey((k) => k + 1);
+          }}
+        />
       )}
 
     </div>

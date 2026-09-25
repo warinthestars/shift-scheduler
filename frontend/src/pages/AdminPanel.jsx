@@ -6,6 +6,7 @@ import {
   Check, X, MapPin, Trash2, BarChart3, Briefcase, Search,
   UserPlus, CheckCircle2, XCircle, Power, UserCheck, Pencil
 } from 'lucide-react';
+import VenueSettingsModal from '../components/VenueSettingsModal';
 
 export default function AdminPanel() {
   const { user: currentUser } = useAuth();
@@ -22,7 +23,7 @@ export default function AdminPanel() {
     pending_requests: 0,
   });
   const [loading, setLoading] = useState(true);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [venueModal, setVenueModal] = useState(null); // null | { mode: 'create' | 'edit', venue: null | venueObj }
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
   const [deletingUser, setDeletingUser] = useState(false);
@@ -31,13 +32,6 @@ export default function AdminPanel() {
   const [editVenueIds, setEditVenueIds] = useState([]);
   const [savingEdit, setSavingEdit] = useState(false);
   const [notification, setNotification] = useState(null);
-
-  // Form state for Create New Venue Modal
-  const [name, setName] = useState('');
-  const [address, setAddress] = useState('');
-  const [managerEmail, setManagerEmail] = useState('');
-  const [geofenceRadius, setGeofenceRadius] = useState('150');
-  const [autoApproveRating, setAutoApproveRating] = useState('');
 
   // Form state for Create New User Modal
   const [userEmail, setUserEmail] = useState('');
@@ -79,36 +73,6 @@ export default function AdminPanel() {
   useEffect(() => {
     fetchAdminData();
   }, []);
-
-  const handleCreateVenue = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await api.post('/venues', {
-        name,
-        address,
-        initial_manager_email: managerEmail || undefined,
-        manager_email: managerEmail || undefined,
-        geofence_radius_meters: parseInt(geofenceRadius, 10) || 100,
-        auto_approve_rating_threshold: autoApproveRating ? parseFloat(autoApproveRating) : null,
-      });
-
-      setNotification({
-        type: 'success',
-        message: `Venue "${res.data.name}" created successfully${managerEmail ? ` and assigned to ${managerEmail}` : ''}!`,
-      });
-
-      setShowCreateModal(false);
-      setName('');
-      setAddress('');
-      setManagerEmail('');
-      fetchAdminData();
-    } catch (err) {
-      setNotification({
-        type: 'error',
-        message: err.response?.data?.detail || 'Failed to create venue.',
-      });
-    }
-  };
 
   const handleDeleteVenue = async (venueId) => {
     if (!confirm('Are you sure you want to remove this venue from ShiftBoard?')) return;
@@ -295,7 +259,7 @@ export default function AdminPanel() {
               <span>Create New User</span>
             </button>
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => setVenueModal({ mode: 'create', venue: null })}
               className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs shadow-md shadow-emerald-500/20 transition flex items-center space-x-1.5"
             >
               <Plus className="w-4 h-4" />
@@ -393,7 +357,7 @@ export default function AdminPanel() {
                 </p>
               </div>
               <button
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => setVenueModal({ mode: 'create', venue: null })}
                 className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs flex items-center space-x-1.5 transition"
               >
                 <Plus className="w-4 h-4" />
@@ -433,17 +397,17 @@ export default function AdminPanel() {
                         </td>
                         <td className="py-3.5 px-5 text-center">
                           <span className="px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400 border border-slate-700 font-mono font-bold">
-                            {venue.shifts_count ?? 0}
+                            {venue.total_shifts ?? venue.shifts_count ?? 0}
                           </span>
                         </td>
                         <td className="py-3.5 px-5 text-center">
                           <span className="px-2 py-0.5 rounded-full bg-slate-800 text-amber-400 border border-slate-700 font-mono font-bold">
-                            {venue.managers_count ?? 0}
+                            {venue.total_managers ?? venue.managers_count ?? 0}
                           </span>
                         </td>
                         <td className="py-3.5 px-5 text-center">
                           <span className="px-2 py-0.5 rounded-full bg-slate-800 text-teal-400 border border-slate-700 font-mono font-bold">
-                            {venue.workers_count ?? 0}
+                            {venue.assigned_workers_count ?? venue.workers_count ?? 0}
                           </span>
                         </td>
                         <td className="py-3.5 px-5 font-mono text-slate-300">
@@ -458,13 +422,22 @@ export default function AdminPanel() {
                           {new Date(venue.created_at).toLocaleDateString()}
                         </td>
                         <td className="py-3.5 px-5 text-right">
-                          <button
-                            onClick={() => handleDeleteVenue(venue.id)}
-                            title="Delete venue"
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="inline-flex items-center space-x-1">
+                            <button
+                              onClick={() => setVenueModal({ mode: 'edit', venue })}
+                              title="Edit Venue Settings"
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-slate-800 transition"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteVenue(venue.id)}
+                              title="Delete venue"
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -670,104 +643,22 @@ export default function AdminPanel() {
         )}
       </main>
 
-      {/* Modal: Create New Venue */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-              <h3 className="text-base font-bold text-white flex items-center space-x-2">
-                <Building2 className="w-5 h-5 text-emerald-400" />
-                <span>Create New Venue</span>
-              </h3>
-              <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateVenue} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Venue Name</label>
-                <input
-                  type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="The Grand Terrace"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Physical Address</label>
-                <input
-                  type="text"
-                  required
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="450 Lexington Ave, New York, NY"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Assign Initial Manager Email
-                </label>
-                <input
-                  type="email"
-                  value={managerEmail}
-                  onChange={(e) => setManagerEmail(e.target.value)}
-                  placeholder="manager@venue.com"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
-                <p className="text-[10px] text-slate-500 mt-1">Must be an existing account. Leave blank and assign a manager later from Users → Edit.</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Geofence Radius (m)</label>
-                  <input
-                    type="number"
-                    required
-                    value={geofenceRadius}
-                    onChange={(e) => setGeofenceRadius(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Auto-approve workers rated at least (★)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="1.0"
-                    max="5.0"
-                    value={autoApproveRating}
-                    onChange={(e) => setAutoApproveRating(e.target.value)}
-                    placeholder="Blank = review every request"
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                  <p className="text-[10px] text-slate-500 mt-1">Only applies to workers who have been rated. Leave blank to approve requests yourself.</p>
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-800 flex justify-end space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-semibold text-slate-300 hover:bg-slate-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition shadow-md shadow-emerald-500/20"
-                >
-                  Save Venue
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+      {/* Modal: Create / Edit Venue (Phase 25) */}
+      {venueModal && (
+        <VenueSettingsModal
+          mode={venueModal.mode}
+          venue={venueModal.venue}
+          onClose={() => setVenueModal(null)}
+          onSaved={(savedVenue) => {
+            setNotification({
+              type: 'success',
+              message: venueModal.mode === 'create'
+                ? `Venue "${savedVenue.name}" created successfully!`
+                : `Settings for "${savedVenue.name}" updated successfully.`,
+            });
+            fetchAdminData();
+          }}
+        />
       )}
 
       {/* Modal: Create New User (Phase 20) */}

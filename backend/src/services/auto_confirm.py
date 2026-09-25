@@ -59,14 +59,11 @@ async def evaluate_shift_request(
     ShiftBoard Auto-Confirm Engine
     
     Evaluates shift application conditions in strict hierarchical order:
-    1. Condition 1: Shift-Level Auto-Confirm: Is shift.is_shift_auto_confirm == True?
-       -> Result: APPROVED, source: "shift_auto_confirm"
-    2. Condition 2: Venue Whitelist: Is worker active in VenueWhitelist?
-       -> Result: APPROVED, source: "venue_whitelist"
-    3. Condition 3: Rating Threshold: worker has >= 1 rating AND aggregate_rating >= venue threshold.
-       -> Result: APPROVED, source: "rating_threshold"
-    4. Condition 4: Fallback: None of the above matched.
-       -> Result: PENDING, source: None
+    1. Shift-level instant booking (shift.is_shift_auto_confirm)      -> APPROVED "shift_auto_confirm"
+    2. Venue policy 'everyone_auto'                                   -> APPROVED "venue_everyone_auto"
+    3. Venue policy 'team_auto' AND worker on venue whitelist         -> APPROVED "venue_whitelist"
+    4. Rating threshold (worker has >= 1 rating and meets threshold)  -> APPROVED "rating_threshold"
+    5. Otherwise                                                      -> PENDING
     
     Returns:
         Tuple[RequestStatus, Optional[str]]: (Assigned status, Approval source)
@@ -84,6 +81,21 @@ async def evaluate_shift_request(
         await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
         return RequestStatus.APPROVED, "shift_auto_confirm"
 
+    policy = (getattr(venue, "approval_policy", None) or "team_auto").lower()
+
+    # If venue policy is manual: manager reviews every shift request; auto-confirm is disabled
+    if policy == "manual":
+        logger.info("[Auto-Confirm Engine] Venue policy is manual: auto-confirm disabled.")
+        return RequestStatus.PENDING, None
+
+    # --------------------------------------------------------------------------
+    # Condition 1b: Venue policy - everyone is booked instantly
+    # --------------------------------------------------------------------------
+    if policy == "everyone_auto":
+        logger.info("[Auto-Confirm Engine] Venue policy is everyone_auto.")
+        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
+        return RequestStatus.APPROVED, "venue_everyone_auto"
+
     # --------------------------------------------------------------------------
     # Condition 2: Venue Whitelist
     # --------------------------------------------------------------------------
@@ -94,7 +106,7 @@ async def evaluate_shift_request(
             VenueWhitelist.is_active == True
         )
     )
-    if whitelist_entry:
+    if whitelist_entry and policy == "team_auto":
         logger.info(f"[Auto-Confirm Engine] Condition 2 MET: Worker is on Venue's trusted whitelist.")
         await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
         return RequestStatus.APPROVED, "venue_whitelist"

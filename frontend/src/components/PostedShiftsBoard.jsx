@@ -7,6 +7,7 @@ import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus } fr
 import api from '../api/client';
 import TipBadge from './TipBadge';
 import EventRosterModal from './EventRosterModal';
+import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
 
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales: { 'en-US': enUS } });
 
@@ -24,6 +25,7 @@ export default function PostedShiftsBoard({
   onDeny,
   onOpenBoard,
   actionLoading,
+  timeZone,
 }) {
   const [scope, setScope] = useState('upcoming');
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'calendar'
@@ -77,9 +79,7 @@ export default function PostedShiftsBoard({
     const groups = [];
     const index = {};
     events.forEach((ev) => {
-      const dateKey = new Date(ev.start_time).toLocaleDateString([], {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-      });
+      const dateKey = fmtLongDate(ev.start_time, timeZone);
       if (!(dateKey in index)) {
         index[dateKey] = groups.length;
         groups.push({ dateKey, items: [] });
@@ -87,7 +87,7 @@ export default function PostedShiftsBoard({
       groups[index[dateKey]].items.push(ev);
     });
     return groups;
-  }, [events]);
+  }, [events, timeZone]);
 
   const toggleBtn = (active) =>
     `flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
@@ -102,6 +102,7 @@ export default function PostedShiftsBoard({
           <div>
             <h2 className="text-base font-bold text-white">Posted Shifts ({events.length})</h2>
             <p className="text-xs text-slate-400">Every posted event with its positions, assigned staff and pending requests</p>
+            {timeZone && <p className="text-[11px] text-slate-500">Times shown in venue time ({timeZone}). Calendar view uses your device's time.</p>}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -174,9 +175,7 @@ export default function PostedShiftsBoard({
               </h3>
               <div className="space-y-3">
                 {items.map((ev) => {
-                  const start = new Date(ev.start_time);
-                  const end = new Date(ev.end_time);
-                  const timeStr = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                  const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
                   return (
                     <div key={ev.event_key} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
                       <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
@@ -253,6 +252,7 @@ export default function PostedShiftsBoard({
           onDeny={onDeny}
           onOpenBoard={onOpenBoard}
           actionLoading={actionLoading}
+          timeZone={timeZone}
         />
       )}
     </div>
