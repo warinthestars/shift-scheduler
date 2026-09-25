@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText } from 'lucide-react';
+import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban } from 'lucide-react';
 import ModalShell from './ModalShell';
 import TipBadge from './TipBadge';
 import ReliabilityBadge from './ReliabilityBadge';
@@ -15,7 +15,7 @@ function assignedChip(person) {
 }
 
 export default function EventRosterModal({
-  event, onClose, reliabilityMap = {}, onApprove, onDeny, onOpenBoard, onEdit, actionLoading, timeZone,
+  event, onClose, reliabilityMap = {}, onApprove, onDeny, onOpenBoard, onEdit, onRemovePerson, onCancelPosition, actionLoading, timeZone,
 }) {
   if (!event) return null;
 
@@ -73,6 +73,15 @@ export default function EventRosterModal({
                   </span>
                   <span className={`text-xs font-semibold ${isFull ? 'text-emerald-400' : 'text-slate-300'}`}>{pos.assigned.length} / {pos.capacity} filled</span>
                 </div>
+                {onCancelPosition && !event.cancelled && pos.status !== 'CANCELLED' && (
+                  <button type="button" onClick={() => onCancelPosition(pos, event)}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-300 text-xs border border-rose-600/30 inline-flex items-center gap-1">
+                    <Ban className="w-3 h-3" /> Cancel position
+                  </button>
+                )}
+                {pos.status === 'CANCELLED' && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-300 border border-rose-500/30">Cancelled</span>
+                )}
                 {onOpenBoard && (
                   <button type="button" onClick={() => onOpenBoard({ id: pos.shift_id, title: event.title, role_type: pos.role_type })}
                     className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white text-xs border border-slate-700 inline-flex items-center gap-1">
@@ -109,6 +118,12 @@ export default function EventRosterModal({
                               <span className="text-amber-400 text-xs font-bold">★ {Number(p.aggregate_rating).toFixed(1)}</span>
                               <ReliabilityBadge data={reliabilityMap[p.worker_id]} />
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${chip.cls}`}>{chip.label}</span>
+                              {onRemovePerson && ['approved', 'confirmed'].includes(p.status) && (
+                                <button type="button" onClick={() => onRemovePerson(p, pos, event)} title="Remove from shift"
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10">
+                                  <UserMinus className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         );

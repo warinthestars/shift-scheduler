@@ -12,6 +12,7 @@ from src.routers.shifts import router as shifts_router, requests_router, message
 from src.routers.transfers import router as transfers_router
 from src.routers.admin import router as admin_router
 from src.routers.events import router as events_router
+from src.routers.timesheets import router as timesheets_router
 
 
 # Configure logging
@@ -98,6 +99,7 @@ app.include_router(transfers_router)
 app.include_router(messages_router)
 app.include_router(admin_router)
 app.include_router(events_router)
+app.include_router(timesheets_router)
 
 
 @app.get("/healthz", tags=["System"])

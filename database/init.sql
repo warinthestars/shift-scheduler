@@ -130,6 +130,8 @@ CREATE TABLE shift_events (
     start_time TIMESTAMPTZ NOT NULL,
     end_time TIMESTAMPTZ NOT NULL,
     notes TEXT,
+    cancelled_at TIMESTAMPTZ,
+    cancel_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_event_time CHECK (end_time > start_time)
@@ -154,6 +156,8 @@ CREATE TABLE shifts (
     hourly_rate_max NUMERIC(10, 2),
     hide_rate BOOLEAN NOT NULL DEFAULT FALSE,
     approval_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
+    cancelled_at TIMESTAMPTZ,
+    cancel_reason TEXT,
     tips_eligible BOOLEAN NOT NULL DEFAULT FALSE,
     tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
     capacity INT NOT NULL DEFAULT 1,
@@ -191,6 +195,8 @@ CREATE TABLE shift_requests (
     check_out_verified BOOLEAN NOT NULL DEFAULT FALSE,
     notes TEXT,
     dropped_at TIMESTAMPTZ,
+    status_reason TEXT,
+    pay_rate NUMERIC(10, 2),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_shift_worker UNIQUE (shift_id, worker_id)
@@ -276,6 +282,24 @@ CREATE TABLE time_entries (
 
 CREATE INDEX idx_time_entries_worker ON time_entries(worker_id);
 CREATE INDEX idx_time_entries_shift ON time_entries(shift_id);
+
+-- ------------------------------------------------------------------------------
+-- Time sheet audit log (Phase 26). time_entry_id has no FK so history survives deletes.
+-- ------------------------------------------------------------------------------
+CREATE TABLE time_entry_edits (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_request_id UUID REFERENCES shift_requests(id) ON DELETE CASCADE,
+    time_entry_id UUID,
+    editor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    action VARCHAR(30) NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_time_entry_edits_request ON time_entry_edits(shift_request_id);
+CREATE INDEX idx_time_entry_edits_entry ON time_entry_edits(time_entry_id);
 
 -- ------------------------------------------------------------------------------
 -- 9. Shift Transfers Table

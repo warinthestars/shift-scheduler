@@ -2,11 +2,12 @@
 Phase 25.2: Create / update / describe events (one posting with 1+ positions).
 Each position is a row in `shifts` linked by shifts.event_id.
 """
-from datetime import timezone
-from typing import Dict, Tuple
+from datetime import timezone, datetime, date
+from typing import Dict, Tuple, List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import ShiftEvent, Shift, ShiftRequest, Venue, User
@@ -17,6 +18,7 @@ from src.schemas import (
 VALID_APPROVAL_MODES = ("venue_default", "auto", "manual")
 ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
 PENDING_STATUSES = ("pending", "pending_manager_approval")
+ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
 
 
 def _as_utc(dt):
@@ -122,11 +124,15 @@ async def create_event_with_positions(db: AsyncSession, venue: Venue, user: User
 
 
 async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -> None:
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="Cancelled events can't be edited.")
     _validate_basics(data)
     for p in data.positions:
         _validate_position(p)
 
-    existing = (await db.execute(select(Shift).where(Shift.event_id == event.id))).scalars().all()
+    existing = (await db.execute(
+        select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+    )).scalars().all()
     by_id = {s.id: s for s in existing}
     counts = await _request_counts(db, list(by_id.keys()))
 
@@ -188,7 +194,9 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
 
 async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail:
     shifts = (await db.execute(
-        select(Shift).where(Shift.event_id == event.id).order_by(Shift.created_at.asc(), Shift.role_type.asc())
+        select(Shift)
+        .where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+        .order_by(Shift.created_at.asc(), Shift.role_type.asc())
     )).scalars().all()
     counts = await _request_counts(db, [s.id for s in shifts])
     return EventDetail(
@@ -198,6 +206,8 @@ async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail
         start_time=event.start_time,
         end_time=event.end_time,
         notes=event.notes,
+        cancelled=event.cancelled_at is not None,
+        cancel_reason=event.cancel_reason,
         positions=[
             EventDetailPosition(
                 shift_id=s.id,
@@ -247,3 +257,120 @@ async def backfill_missing_events(db: AsyncSession) -> int:
         await db.rollback()
         raise
     return len(orphans)
+
+
+# ------------------------------------------------------------------------------
+# Phase 26: Cancel + duplicate
+# ------------------------------------------------------------------------------
+async def cancel_shifts(db: AsyncSession, event: ShiftEvent, shift_ids: Optional[List], reason: Optional[str]) -> int:
+    """Cancel all positions (shift_ids=None) or some positions. Returns how many requests were cancelled."""
+    now = datetime.now(timezone.utc)
+    reason = _clean(reason)
+    if not reason:
+        raise HTTPException(status_code=400, detail="Please give a reason. Staff will see it.")
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="This event is already cancelled.")
+    if _as_utc(event.start_time) <= now:
+        raise HTTPException(
+            status_code=400,
+            detail="This event has already started. Remove individual people or fix the time sheet instead."
+        )
+
+    q = select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+    if shift_ids is not None:
+        q = q.where(Shift.id.in_(shift_ids))
+    shifts = (await db.execute(q)).scalars().all()
+    if shift_ids is not None and not shifts:
+        raise HTTPException(status_code=404, detail="Position not found or already cancelled.")
+
+    try:
+        ids = [s.id for s in shifts]
+        for s in shifts:
+            s.status = "CANCELLED"
+            s.cancelled_at = now
+            s.cancel_reason = reason
+            s.spots_filled = 0
+        affected = 0
+        if ids:
+            res = await db.execute(
+                update(ShiftRequest)
+                .where(
+                    ShiftRequest.shift_id.in_(ids),
+                    func.lower(ShiftRequest.status).in_(ACTIVE_REQUEST_STATUSES),
+                )
+                .values(status="cancelled", status_reason=reason)
+                .execution_options(synchronize_session=False)
+            )
+            affected = res.rowcount or 0
+        await db.flush()
+        remaining = await db.scalar(
+            select(func.count(Shift.id)).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+        )
+        if not remaining:
+            event.cancelled_at = now
+            event.cancel_reason = reason
+        await db.commit()
+        return affected
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to cancel: {str(e)}")
+
+
+async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date]) -> List[ShiftEvent]:
+    """Copy an event to each date, keeping the same local start time in the venue's timezone."""
+    unique_dates = sorted(set(dates or []))
+    if not unique_dates:
+        raise HTTPException(status_code=400, detail="Pick at least one date.")
+    if len(unique_dates) > 26:
+        raise HTTPException(status_code=400, detail="You can make up to 26 copies at a time.")
+
+    tz = ZoneInfo(venue.timezone or "America/New_York")
+    start_local = _as_utc(event.start_time).astimezone(tz)
+    duration = _as_utc(event.end_time) - _as_utc(event.start_time)
+    now = datetime.now(timezone.utc)
+
+    shifts = (await db.execute(
+        select(Shift)
+        .where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+        .order_by(Shift.created_at.asc())
+    )).scalars().all()
+    if not shifts:
+        raise HTTPException(status_code=400, detail="Nothing to copy: every position is cancelled.")
+
+    positions = [
+        EventPositionInput(
+            role_type=s.role_type,
+            capacity=s.capacity,
+            hourly_rate=float(s.hourly_rate),
+            hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
+            hide_rate=bool(s.hide_rate),
+            tips_eligible=bool(s.tips_eligible),
+            tip_pool=bool(s.tip_pool),
+            role_notes=s.description,
+            approval_mode=s.approval_mode or "venue_default",
+        )
+        for s in shifts
+    ]
+
+    starts = []
+    for d in unique_dates:
+        new_start = datetime.combine(d, start_local.time().replace(tzinfo=None), tzinfo=tz).astimezone(timezone.utc)
+        if new_start <= now:
+            raise HTTPException(status_code=400, detail=f"{d.isoformat()} is in the past.")
+        starts.append(new_start)
+
+    created = []
+    for new_start in starts:
+        ev = await create_event_with_positions(db, venue, user, EventCreate(
+            venue_id=venue.id,
+            title=event.title,
+            start_time=new_start,
+            end_time=new_start + duration,
+            notes=event.notes,
+            positions=positions,
+        ))
+        created.append(ev)
+    return created

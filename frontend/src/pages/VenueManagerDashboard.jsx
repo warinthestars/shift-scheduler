@@ -19,6 +19,9 @@ import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
 import ShiftEventFormModal from '../components/ShiftEventFormModal';
 import ShiftBoardModal from '../components/ShiftBoardModal';
+import ReasonDialog from '../components/ReasonDialog';
+import DuplicateEventModal from '../components/DuplicateEventModal';
+import TimesheetModal from '../components/TimesheetModal';
 import PayLabel from '../components/PayLabel';
 import { zonedLocalToUtcIso, fmtShortDate } from '../utils/venueTime';
 
@@ -63,6 +66,9 @@ export default function VenueManagerDashboard() {
   const [venuePositions, setVenuePositions] = useState([]);
   const [showVenueSettings, setShowVenueSettings] = useState(false);
   const [eventForm, setEventForm] = useState(null); // { mode: 'create' } | { mode: 'edit', eventId }
+  const [reasonDialog, setReasonDialog] = useState(null);
+  const [dupEvent, setDupEvent] = useState(null);
+  const [timesheetEventId, setTimesheetEventId] = useState(null);
 
   const fetchVenueData = async (venueId) => {
     try {
@@ -310,6 +316,47 @@ export default function VenueManagerDashboard() {
     setCurrentVenueId(newId);
     fetchVenueData(newId);
   };
+
+  const afterChange = (message) => {
+    setNotification({ type: 'success', message });
+    fetchVenueData(currentVenueId);
+  };
+
+  const askCancelEvent = (ev) =>
+    setReasonDialog({
+      title: 'Cancel this event?',
+      message: `Everyone booked or waiting on "${ev.title}" will see it as cancelled, with your reason.`,
+      confirmLabel: 'Cancel event',
+      danger: true,
+      onConfirm: async (reason) => {
+        await api.post(`/events/${ev.event_id}/cancel`, { reason });
+        afterChange('Event cancelled.');
+      },
+    });
+
+  const askCancelPosition = (pos, ev) =>
+    setReasonDialog({
+      title: `Cancel ${pos.role_type}?`,
+      message: `Everyone booked or waiting for ${pos.role_type} on "${ev.title}" will see it as cancelled.`,
+      confirmLabel: 'Cancel position',
+      danger: true,
+      onConfirm: async (reason) => {
+        await api.post(`/events/${ev.event_id}/positions/${pos.shift_id}/cancel`, { reason });
+        afterChange(`${pos.role_type} cancelled.`);
+      },
+    });
+
+  const askRemovePerson = (person, pos) =>
+    setReasonDialog({
+      title: `Remove ${person.first_name}?`,
+      message: `${person.first_name} ${person.last_name} will be taken off ${pos.role_type} and the spot reopens.`,
+      confirmLabel: 'Remove',
+      danger: true,
+      onConfirm: async (reason) => {
+        await api.post(`/requests/${person.request_id}/remove`, { reason });
+        afterChange(`${person.first_name} removed.`);
+      },
+    });
 
   if (!loading && !currentVenueId) {
     return (
@@ -616,6 +663,11 @@ export default function VenueManagerDashboard() {
           onDeny={handleDeny}
           onOpenBoard={setActiveDiscussionShift}
           onEditEvent={(id) => setEventForm({ mode: 'edit', eventId: id })}
+          onCancelEvent={askCancelEvent}
+          onDuplicateEvent={(ev) => setDupEvent(ev)}
+          onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
+          onRemovePerson={askRemovePerson}
+          onCancelPosition={askCancelPosition}
           actionLoading={actionLoading}
           timeZone={venueDetails?.timezone}
         />
@@ -637,6 +689,24 @@ export default function VenueManagerDashboard() {
             });
             loadVenuePositions(currentVenueId);
           }}
+        />
+      )}
+
+      {reasonDialog && <ReasonDialog {...reasonDialog} onClose={() => setReasonDialog(null)} />}
+      {dupEvent && (
+        <DuplicateEventModal
+          event={dupEvent}
+          timeZone={venueDetails?.timezone}
+          onClose={() => setDupEvent(null)}
+          onDone={(count) => afterChange(`Created ${count} ${count === 1 ? 'copy' : 'copies'}.`)}
+        />
+      )}
+      {timesheetEventId && (
+        <TimesheetModal
+          eventId={timesheetEventId}
+          timeZone={venueDetails?.timezone}
+          onClose={() => setTimesheetEventId(null)}
+          onChanged={() => fetchVenueData(currentVenueId)}
         />
       )}
 

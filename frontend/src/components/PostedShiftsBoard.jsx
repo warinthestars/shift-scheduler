@@ -3,7 +3,7 @@ import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { enUS } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff } from 'lucide-react';
+import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal } from 'lucide-react';
 import api from '../api/client';
 import TipBadge from './TipBadge';
 import PayLabel from './PayLabel';
@@ -26,6 +26,11 @@ export default function PostedShiftsBoard({
   onDeny,
   onOpenBoard,
   onEditEvent,
+  onCancelEvent,
+  onDuplicateEvent,
+  onTimesheet,
+  onRemovePerson,
+  onCancelPosition,
   actionLoading,
   timeZone,
 }) {
@@ -35,6 +40,7 @@ export default function PostedShiftsBoard({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedKey, setSelectedKey] = useState(null);
+  const [menuKey, setMenuKey] = useState(null);
 
   useEffect(() => {
     if (!venueId) {
@@ -179,10 +185,13 @@ export default function PostedShiftsBoard({
                 {items.map((ev) => {
                   const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
                   return (
-                    <div key={ev.event_key} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                    <div key={ev.event_key} className={`bg-slate-950 border rounded-xl overflow-visible ${ev.cancelled ? 'border-rose-900/60 opacity-70' : 'border-slate-800'}`}>
                       <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
                         <div>
                           <div className="text-sm font-bold text-white">{ev.title}</div>
+                          {ev.cancelled && (
+                            <div className="text-[11px] text-rose-300">Cancelled{ev.cancel_reason ? `: ${ev.cancel_reason}` : ''}</div>
+                          )}
                           {ev.description && <div className="text-[11px] text-slate-400 line-clamp-1">{ev.description}</div>}
                           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
                             <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{timeStr}</span>
@@ -194,7 +203,7 @@ export default function PostedShiftsBoard({
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 self-start md:self-auto">
+                        <div className="flex items-center gap-2 self-start md:self-auto relative">
                           <button
                             type="button"
                             onClick={() => setSelectedKey(ev.event_key)}
@@ -202,7 +211,7 @@ export default function PostedShiftsBoard({
                           >
                             <Eye className="w-3.5 h-3.5" /> Details
                           </button>
-                          {onEditEvent && ev.event_id && (
+                          {onEditEvent && ev.event_id && !ev.cancelled && (
                             <button
                               type="button"
                               onClick={() => onEditEvent(ev.event_id)}
@@ -210,6 +219,38 @@ export default function PostedShiftsBoard({
                             >
                               <Pencil className="w-3.5 h-3.5" /> Edit
                             </button>
+                          )}
+                          {ev.event_id && (
+                            <button
+                              type="button"
+                              onClick={() => setMenuKey(menuKey === ev.event_key ? null : ev.event_key)}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+                              aria-label="More actions"
+                            >
+                              <MoreHorizontal className="w-4 h-4" />
+                            </button>
+                          )}
+                          {menuKey === ev.event_key && (
+                            <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
+                              {onTimesheet && (
+                                <button type="button" onClick={() => { setMenuKey(null); onTimesheet(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+                                  <ClipboardList className="w-3.5 h-3.5" /> Time sheet
+                                </button>
+                              )}
+                              {onDuplicateEvent && (
+                                <button type="button" onClick={() => { setMenuKey(null); onDuplicateEvent(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+                                  <Copy className="w-3.5 h-3.5" /> Duplicate / repeat
+                                </button>
+                              )}
+                              {onCancelEvent && !ev.cancelled && new Date(ev.start_time) > new Date() && (
+                                <button type="button" onClick={() => { setMenuKey(null); onCancelEvent(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
+                                  <Ban className="w-3.5 h-3.5" /> Cancel event
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -220,6 +261,7 @@ export default function PostedShiftsBoard({
                             <div key={pos.shift_id} className="px-4 py-2.5 grid grid-cols-1 md:grid-cols-12 gap-2 items-center text-xs">
                               <div className="md:col-span-3 flex items-center gap-2">
                                 <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{pos.role_type}</span>
+                                {pos.status === 'CANCELLED' && <span className="text-[10px] text-rose-300">cancelled</span>}
                               </div>
                               <div className="md:col-span-3 flex items-center gap-1.5 text-emerald-400 font-semibold">
                                 <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
@@ -268,6 +310,8 @@ export default function PostedShiftsBoard({
           onDeny={onDeny}
           onOpenBoard={onOpenBoard}
           onEdit={onEditEvent ? (id) => { setSelectedKey(null); onEditEvent(id); } : undefined}
+          onRemovePerson={onRemovePerson}
+          onCancelPosition={onCancelPosition}
           actionLoading={actionLoading}
           timeZone={timeZone}
         />

@@ -14,6 +14,19 @@ import TipBadge from '../components/TipBadge';
 import PayLabel from '../components/PayLabel';
 import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';
 
+const STATUS_LABELS = {
+  approved: 'Confirmed',
+  confirmed: 'Confirmed',
+  pending: 'Pending',
+  pending_manager_approval: 'Pending Approval',
+  checked_in: 'Clocked In',
+  completed: 'Completed',
+  cancelled: 'Cancelled by venue',
+  removed: 'Removed by manager',
+  no_show: 'Marked no-show',
+  rejected: 'Not selected',
+};
+
 export default function WorkerDashboard() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('find'); // 'find' | 'schedule' | 'transfers'
@@ -508,7 +521,7 @@ export default function WorkerDashboard() {
                               : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
                           }`}
                         >
-                          {isCheckedIn ? 'CLOCKED IN' : req.status}
+                          {isCheckedIn ? 'CLOCKED IN' : (STATUS_LABELS[statusLower] || req.status)}
                         </span>
 
                         {req.approval_source && (
@@ -519,6 +532,11 @@ export default function WorkerDashboard() {
                       </div>
 
                       <h3 className="text-base font-bold text-white mt-1">{shift?.title}</h3>
+                      {req.status_reason && ['cancelled', 'removed', 'no_show'].includes(statusLower) && (
+                        <p className="text-xs text-rose-300">
+                          Reason: {req.status_reason}
+                        </p>
+                      )}
                       <p className="text-xs text-slate-400 flex items-center space-x-2">
                         <span className="text-slate-300 font-medium">{shift?.venue?.name}</span>
                         <span>•</span>

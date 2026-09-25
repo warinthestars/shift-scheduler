@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
     Venue, VenueManager, VenueWhitelist, User, UserRole,
-    Shift, ShiftRequest, RequestStatus, TimeEntry, VenuePosition, ShiftEvent
+    Shift, ShiftRequest, RequestStatus, TimeEntry, VenuePosition, ShiftEvent, TimeEntryEdit
 )
 from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
@@ -534,37 +534,52 @@ async def export_venue_payroll_csv(
     await verify_venue_manager_access(venue_id, current_user, db)
 
     query = (
-        select(TimeEntry, User, Shift)
+        select(TimeEntry, User, Shift, ShiftRequest)
         .join(Shift, TimeEntry.shift_id == Shift.id)
         .join(User, TimeEntry.worker_id == User.id)
+        .outerjoin(
+            ShiftRequest,
+            (ShiftRequest.shift_id == TimeEntry.shift_id) & (ShiftRequest.worker_id == TimeEntry.worker_id)
+        )
         .where(Shift.venue_id == venue_id)
         .order_by(TimeEntry.clock_in_time.desc())
     )
-    result = await db.execute(query)
-    records = result.all()
+    records = (await db.execute(query)).all()
+
+    entry_ids = [r[0].id for r in records]
+    edited_ids = set()
+    if entry_ids:
+        edited_ids = set((await db.execute(
+            select(distinct(TimeEntryEdit.time_entry_id))
+            .where(TimeEntryEdit.time_entry_id.in_(entry_ids), TimeEntryEdit.action.in_(("edit", "add")))
+        )).scalars().all())
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Worker Name", "Email", "Shift Title", "Role", "Date", "Clock In", "Clock Out", "Total Hours", "Hourly Rate", "Gross Pay", "Tips Eligible", "Tip Pool"])
+    writer.writerow([
+        "Worker Name", "Email", "Shift Title", "Role", "Date", "Clock In", "Clock Out", "Total Hours",
+        "Hourly Rate", "Gross Pay", "Tips Eligible", "Tip Pool", "Edited",
+    ])
 
-    for entry, worker, shift in records:
+    for entry, worker, shift, req in records:
         worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
-        email = worker.email or ""
-        shift_title = shift.title or ""
         shift_date = shift.start_time.strftime("%Y-%m-%d") if shift.start_time else ""
         clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
         clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "Did not clock out"
-
-        rate = float(shift.hourly_rate) if shift.hourly_rate is not None else 0.0
+        if req is not None and req.pay_rate is not None:
+            rate = float(req.pay_rate)
+        else:
+            rate = float(shift.hourly_rate) if shift.hourly_rate is not None else 0.0
         if entry.clock_in_time and entry.clock_out_time:
             hours = (entry.clock_out_time - entry.clock_in_time).total_seconds() / 3600.0
         else:
             hours = 0.0
         writer.writerow([
-            worker_name, email, shift_title, shift.role_type or "", shift_date, clock_in, clock_out,
+            worker_name, worker.email or "", shift.title or "", shift.role_type or "", shift_date, clock_in, clock_out,
             f"{hours:.2f}", f"{rate:.2f}", f"{hours * rate:.2f}",
             "Yes" if shift.tips_eligible else "No",
             "Yes" if shift.tip_pool else "No",
+            "Yes" if entry.id in edited_ids else "No",
         ])
 
     output.seek(0)
@@ -778,11 +793,14 @@ async def get_venue_events(
             requested_by_shift[req.shift_id].append(person)
 
     event_ids = {s.event_id for s in shifts if s.event_id}
-    event_notes = {}
+    event_notes, event_cancel = {}, {}
     if event_ids:
-        event_notes = dict((await db.execute(
-            select(ShiftEvent.id, ShiftEvent.notes).where(ShiftEvent.id.in_(event_ids))
-        )).all())
+        for eid, enotes, ecan, ereason in (await db.execute(
+            select(ShiftEvent.id, ShiftEvent.notes, ShiftEvent.cancelled_at, ShiftEvent.cancel_reason)
+            .where(ShiftEvent.id.in_(event_ids))
+        )).all():
+            event_notes[eid] = enotes
+            event_cancel[eid] = (ecan is not None, ereason)
 
     events = {}
     order = []
@@ -796,6 +814,8 @@ async def get_venue_events(
                 "start_time": s.start_time,
                 "end_time": s.end_time,
                 "description": event_notes.get(s.event_id) if s.event_id else None,
+                "cancelled": event_cancel.get(s.event_id, (False, None))[0] if s.event_id else False,
+                "cancel_reason": event_cancel.get(s.event_id, (False, None))[1] if s.event_id else None,
                 "positions": [],
             }
             order.append(key)

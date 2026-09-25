@@ -216,6 +216,8 @@ class ShiftEvent(Base):
     start_time = Column(DateTime(timezone=True), nullable=False, index=True)
     end_time = Column(DateTime(timezone=True), nullable=False)
     notes = Column(Text, nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -236,6 +238,8 @@ class Shift(Base):
     hourly_rate_max = Column(Numeric(10, 2), nullable=True)
     hide_rate = Column(Boolean, nullable=False, default=False)
     approval_mode = Column(String(20), nullable=False, default="venue_default")
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     tips_eligible = Column(Boolean, nullable=False, default=False)
     tip_pool = Column(Boolean, nullable=False, default=False)
     capacity = Column(Integer, nullable=False, default=1)
@@ -308,6 +312,8 @@ class ShiftRequest(Base):
     check_out_verified = Column(Boolean, nullable=False, default=False)
     notes = Column(Text, nullable=True)
     dropped_at = Column(DateTime(timezone=True), nullable=True)
+    status_reason = Column(Text, nullable=True)
+    pay_rate = Column(Numeric(10, 2), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -344,6 +350,19 @@ class TimeEntry(Base):
 
     worker = relationship("User", foreign_keys=[worker_id])
     shift = relationship("Shift", foreign_keys=[shift_id])
+
+class TimeEntryEdit(Base):
+    __tablename__ = "time_entry_edits"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="CASCADE"), nullable=True, index=True)
+    time_entry_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    editor_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(30), nullable=False)
+    old_value = Column(Text, nullable=True)
+    new_value = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 class ShiftTransfer(Base):
     __tablename__ = "shift_transfers"

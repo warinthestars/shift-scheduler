@@ -333,6 +333,8 @@ class ShiftRequestResponse(BaseModel):
     check_out_time: Optional[datetime] = None
     check_out_verified: bool
     created_at: datetime
+    status_reason: Optional[str] = None
+    pay_rate: Optional[float] = None
     shift: Optional[ShiftResponse] = None
     worker: Optional[UserBrief] = None
 
@@ -458,6 +460,8 @@ class EventPosition(BaseModel):
 class VenueEventResponse(BaseModel):
     event_key: str
     event_id: Optional[UUID] = None
+    cancelled: bool = False
+    cancel_reason: Optional[str] = None
     title: str
     start_time: datetime
     end_time: datetime
@@ -640,6 +644,8 @@ class EventDetail(BaseModel):
     start_time: datetime
     end_time: datetime
     notes: Optional[str] = None
+    cancelled: bool = False
+    cancel_reason: Optional[str] = None
     positions: List[EventDetailPosition]
 
 
@@ -654,4 +660,69 @@ class AdminPasswordResetResponse(BaseModel):
     user_id: UUID
     generated: bool
     temporary_password: Optional[str] = None   # only returned when generated=True
+
+
+# ------------------------------------------------------------------------------
+# Phase 26: Lifecycle + time sheets
+# ------------------------------------------------------------------------------
+class ReasonBody(BaseModel):
+    reason: Optional[str] = None
+
+
+class DuplicateEventRequest(BaseModel):
+    dates: List[date]
+
+
+class DuplicateEventResult(BaseModel):
+    created_event_ids: List[UUID]
+    count: int
+
+
+class TimeEntryInput(BaseModel):
+    clock_in_time: datetime
+    clock_out_time: Optional[datetime] = None
+    reason: Optional[str] = None
+
+
+class PayRateInput(BaseModel):
+    pay_rate: Optional[float] = None      # null = back to the posted rate
+    reason: Optional[str] = None
+
+
+class TimeEntryRow(BaseModel):
+    id: UUID
+    clock_in_time: datetime
+    clock_out_time: Optional[datetime] = None
+    hours: float
+    edited: bool = False
+
+
+class TimesheetPerson(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    name: str
+    shift_id: UUID
+    role_type: str
+    status: str
+    status_reason: Optional[str] = None
+    pay_rate: float
+    pay_rate_custom: bool
+    rate_min: float
+    rate_max: Optional[float] = None
+    entries: List[TimeEntryRow]
+    total_hours: float
+    est_pay: float
+
+
+class EventTimesheet(BaseModel):
+    event_id: UUID
+    title: str
+    start_time: datetime
+    end_time: datetime
+    timezone: str
+    cancelled: bool = False
+    started: bool = False
+    people: List[TimesheetPerson]
+    total_hours: float
+    total_pay: float
 

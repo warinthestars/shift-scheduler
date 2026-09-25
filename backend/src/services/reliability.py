@@ -49,7 +49,7 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
         .join(Shift, ShiftRequest.shift_id == Shift.id)
         .where(
             ShiftRequest.worker_id.in_(worker_ids),
-            func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped",)),
+            func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped", "no_show")),
         )
     )).all()
 
@@ -67,6 +67,10 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
         status_l = (req_status or "").lower()
         start = _aware(start_time)
         end = _aware(end_time)
+
+        if status_l == "no_show":
+            st["no_show"] += 1
+            continue
 
         if status_l == "dropped":
             d = _aware(dropped_at)
