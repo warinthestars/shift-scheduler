@@ -116,7 +116,7 @@ async def get_open_shifts(
         query = query.where(Shift.role_type.ilike(f"%{role}%"))
     query = query.order_by(Shift.start_time.asc())
     result = await db.execute(query)
-    return await to_shift_responses(db, result.scalars().all(), current_user)
+    return await to_shift_responses(db, result.scalars().all(), current_user, worker_view=True)
 
 @router.get("", response_model=List[ShiftResponse])
 async def get_shifts(
@@ -181,6 +181,7 @@ async def request_shift(
         shown = await to_shift_responses(
             db, [req_obj.shift], current_user,
             reveal_shift_ids={req_obj.shift_id} if status_val == "approved" else set(),
+            worker_view=True,
         )
         resp.shift = shown[0]
     return resp
@@ -276,7 +277,7 @@ async def get_my_shifts(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Retrieve all shift requests submitted by the logged-in worker"""
+    """Retrieve all shift requests submitted by the logged-in worker (Phase 26.3: hidden pay masked)"""
     result = await db.execute(
         select(ShiftRequest)
         .options(
@@ -286,7 +287,22 @@ async def get_my_shifts(
         .where(ShiftRequest.worker_id == current_user.id)
         .order_by(ShiftRequest.created_at.desc())
     )
-    return result.scalars().all()
+    reqs = result.scalars().all()
+    booked = ("approved", "confirmed", "checked_in", "completed")
+    shifts = [r.shift for r in reqs if r.shift is not None]
+    reveal = {r.shift_id for r in reqs if (r.status or "").lower() in booked}
+    shown = {
+        sr.id: sr for sr in await to_shift_responses(
+            db, shifts, current_user, reveal_shift_ids=reveal, worker_view=True,
+        )
+    }
+    out = []
+    for r in reqs:
+        item = ShiftRequestResponse.model_validate(r)
+        if r.shift_id in shown:
+            item.shift = shown[r.shift_id]
+        out.append(item)
+    return out
 
 @router.get("/stats/worker")
 async def get_worker_dashboard_stats(

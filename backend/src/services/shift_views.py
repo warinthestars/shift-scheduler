@@ -30,10 +30,16 @@ async def to_shift_responses(
     shifts: Iterable[Shift],
     user: Optional[User],
     reveal_shift_ids: Optional[Set] = None,
+    worker_view: bool = False,
 ) -> List[ShiftResponse]:
+    """
+    worker_view=True (Phase 26.3): apply WORKER rules to everyone, admins and managers included,
+    so worker-facing screens always show exactly what a worker would see. Hidden pay is then
+    only revealed for shift ids in reveal_shift_ids (positions the viewer is booked on).
+    """
     shifts = list(shifts)
     reveal = reveal_shift_ids or set()
-    managed = await viewer_managed_venue_ids(db, user)
+    managed = set() if worker_view else await viewer_managed_venue_ids(db, user)
 
     event_ids = {s.event_id for s in shifts if s.event_id}
     notes = {}

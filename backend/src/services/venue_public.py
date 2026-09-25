@@ -110,7 +110,7 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
         .where(VenuePosition.venue_id == venue.id, VenuePosition.is_active == True)
         .order_by(VenuePosition.sort_order.asc(), VenuePosition.name.asc())
     )).scalars().all()
-    show_rates = bool(venue.show_rates_publicly) or manage
+    show_rates = bool(venue.show_rates_publicly)   # Phase 26.3: same for everyone, managers included
 
     events_count, spots_posted = (await db.execute(
         select(
@@ -152,10 +152,11 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
         positions=[
             PublicPosition(
                 name=p.name,
-                default_rate=float(p.default_rate) if (show_rates and (manage or not p.hide_rate)) else None,
+                # Phase 26.3: public page = what workers see, for everyone (no manager/admin bypass)
+                default_rate=float(p.default_rate) if (show_rates and not p.hide_rate) else None,
                 default_rate_max=(
                     float(p.default_rate_max)
-                    if (p.default_rate_max is not None and show_rates and (manage or not p.hide_rate))
+                    if (p.default_rate_max is not None and show_rates and not p.hide_rate)
                     else None
                 ),
                 tips_eligible=bool(p.tips_eligible),
@@ -173,7 +174,6 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
 
 async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
     now = datetime.now(timezone.utc)
-    manage = await can_manage_venue(db, user, venue.id)
     q = select(Shift).where(Shift.venue_id == venue.id)
     if scope == "past":
         q = q.where(
@@ -224,7 +224,7 @@ async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope:
         cap = s.capacity if s.capacity is not None else 1
         f = filled.get(s.id, 0)
         my = mine.get(s.id)
-        can_see = (not s.hide_rate) or manage or (my in ASSIGNED_STATUSES)
+        can_see = (not s.hide_rate) or (my in ASSIGNED_STATUSES)   # Phase 26.3: no manager/admin bypass
         events[key]["positions"].append(PublicEventPosition(
             shift_id=s.id,
             role_type=s.role_type or "Worker",

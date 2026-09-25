@@ -622,6 +622,17 @@ export default function WorkerDashboard() {
           </div>
         )}
 
+        {/* Phase 26.3: admins / managers looking at the Worker view see exactly what workers see */}
+        {!['worker'].includes(String(user?.role || '').toLowerCase()) && (
+          <div className="mb-6 p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs flex items-start gap-2">
+            <Info className="w-4 h-4 text-indigo-300 flex-shrink-0 mt-0.5" />
+            <span>
+              <b>Worker preview.</b> You're seeing this page exactly as a worker would: hidden pay and
+              staff-only notes stay hidden unless you're booked on that position. Your manager screens still show full pay.
+            </span>
+          </div>
+        )}
+
         {/* Phase 26.2: don't let anyone miss updated shift info */}
         {calendar.unread_count > 0 && firstUnread && (
           <div className="mb-6 p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">

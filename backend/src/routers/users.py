@@ -81,7 +81,7 @@ async def get_my_shifts_alias(
     booked = ("approved", "confirmed", "checked_in", "completed")
     shifts = [r.shift for r in reqs if r.shift is not None]
     reveal = {r.shift_id for r in reqs if (r.status or "").lower() in booked}
-    shown = {s.id: s for s in await to_shift_responses(db, shifts, current_user, reveal_shift_ids=reveal)}
+    shown = {s.id: s for s in await to_shift_responses(db, shifts, current_user, reveal_shift_ids=reveal, worker_view=True)}
     out = []
     for r in reqs:
         item = ShiftRequestResponse.model_validate(r)

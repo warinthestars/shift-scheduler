@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models import ShiftEvent, Shift, ShiftRequest, Venue, VenueWhitelist, User, RequestStatus
 from src.schemas import EventListing, ListingPosition, ListingVenue, ListingMyRequest
 from src.services.auto_confirm import decide_approval
-from src.services.shift_views import viewer_managed_venue_ids
 from src.services.booking import (
     as_utc, ACTIVE_STATUSES, ASSIGNED_STATUSES, BOOKED_STATUSES, PENDING_STATUSES,
 )
@@ -107,7 +106,8 @@ async def build_listings(
         .distinct()
     )).scalars().all())
 
-    managed = await viewer_managed_venue_ids(db, user)   # None = admin (sees all pay)
+    # Phase 26.3: listings are a WORKER screen. Everyone (admins and managers included) gets worker
+    # rules: hidden pay and staff-only notes are shown only on a position the viewer is booked on.
 
     # The viewer's booked shifts, for "overlaps your shift" warnings
     bookings = (await db.execute(
@@ -129,7 +129,6 @@ async def build_listings(
         ev_shifts = shifts_by_event.get(ev.id, [])
         start, end = as_utc(ev.start_time), as_utc(ev.end_time)
         hours = round(max(0.0, (end - start).total_seconds() / 3600.0), 2)
-        can_see_all_pay = managed is None or venue.id in managed
 
         positions: List[ListingPosition] = []
         my_request: Optional[ListingMyRequest] = None
@@ -141,7 +140,8 @@ async def build_listings(
                     request_id=r.id, shift_id=s.id, role_type=s.role_type,
                     status=my_status, note=r.notes,
                 )
-            visible = (not s.hide_rate) or can_see_all_pay or (my_status in ASSIGNED_STATUSES)
+            booked_here = my_status in ASSIGNED_STATUSES
+            visible = (not s.hide_rate) or booked_here
             rate = _f(s.hourly_rate) if visible else None
             rate_max = _f(s.hourly_rate_max) if visible else None
             cap = s.capacity if s.capacity is not None else 1
@@ -165,7 +165,7 @@ async def build_listings(
                 est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
                 my_status=my_status,
                 my_status_reason=r.status_reason if r is not None else None,
-                staff_notes=s.staff_notes if (can_see_all_pay or my_status in ASSIGNED_STATUSES) else None,
+                staff_notes=s.staff_notes if booked_here else None,
             ))
 
         open_positions = [p for p in positions if p.status == "OPEN"]
@@ -228,7 +228,7 @@ async def build_listings(
             started=started,
             can_request=can_request,
             staff_notes=ev.staff_notes if (
-                can_see_all_pay or (my_request is not None and my_request.status in ASSIGNED_STATUSES)
+                my_request is not None and my_request.status in ASSIGNED_STATUSES
             ) else None,
         ))
     return out
