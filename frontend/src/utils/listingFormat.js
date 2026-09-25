@@ -112,3 +112,63 @@ export function downloadIcs({ uid, title, start, end, location, description }) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ---- Phase 26.2: calendar helpers -------------------------------------------------------
+
+/** "2026-10-03" for the calendar day the moment falls on in timezone `tz` (device zone if missing). */
+export function localDateKey(value, tz) {
+  const d = value instanceof Date ? value : new Date(value);
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || undefined, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(d);
+  } catch (e) {
+    return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  }
+}
+
+/** "2026-10-03" for a plain calendar Date built on the device (month grid cells). */
+export function gridDateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** "Starts in 2 days 4 hrs" / "Starts in 45 min" / "Happening now" / "Ended" */
+export function countdownText(start, end) {
+  const now = Date.now();
+  const s = new Date(start).getTime();
+  const e = new Date(end).getTime();
+  if (now >= e) return 'Ended';
+  if (now >= s) return 'Happening now';
+  const mins = Math.round((s - now) / 60000);
+  if (mins < 60) return `Starts in ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) {
+    const rem = mins % 60;
+    return `Starts in ${hrs} hr${hrs === 1 ? '' : 's'}${rem ? ` ${rem} min` : ''}`;
+  }
+  const days = Math.floor(hrs / 24);
+  const remH = hrs % 24;
+  return `Starts in ${days} day${days === 1 ? '' : 's'}${remH ? ` ${remH} hr${remH === 1 ? '' : 's'}` : ''}`;
+}
+
+/** Visual style per calendar item, by the worker's status. */
+export function calendarTone(item) {
+  const s = String(item?.status || '').toLowerCase();
+  if (item?.cancelled || ['cancelled', 'removed', 'no_show'].includes(s)) {
+    return { key: 'off', chip: 'bg-slate-800/80 text-slate-400 border-slate-700 line-through', dot: 'bg-slate-500', label: STATUS_LABELS[s] || 'Cancelled' };
+  }
+  if (s === 'completed') {
+    return { key: 'done', chip: 'bg-slate-700/60 text-slate-200 border-slate-600', dot: 'bg-slate-400', label: 'Completed' };
+  }
+  if (PENDING_STATUSES.includes(s)) {
+    return { key: 'waiting', chip: 'bg-amber-500/15 text-amber-200 border-amber-500/50 border-dashed', dot: 'bg-amber-400', label: 'Waiting for approval' };
+  }
+  if (s === 'checked_in') {
+    return { key: 'now', chip: 'bg-sky-500/20 text-sky-100 border-sky-400/60', dot: 'bg-sky-400', label: 'Clocked in' };
+  }
+  return { key: 'booked', chip: 'bg-emerald-500/20 text-emerald-100 border-emerald-500/60', dot: 'bg-emerald-400', label: 'Confirmed' };
+}
+

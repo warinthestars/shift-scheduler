@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban } from 'lucide-react';
+import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle } from 'lucide-react';
 import ModalShell from './ModalShell';
 import TipBadge from './TipBadge';
 import ReliabilityBadge from './ReliabilityBadge';
@@ -31,12 +31,22 @@ export default function EventRosterModal({
     </span>
   );
 
-  const headerExtra = (event.description || (onEdit && event.event_id)) ? (
+  const headerExtra = (event.description || event.staff_notes || (onEdit && event.event_id)) ? (
     <div className="flex flex-col sm:flex-row sm:items-start gap-3">
-      {event.description && (
-        <div className="flex-1 text-xs text-slate-300 bg-slate-950 border border-slate-800 rounded-xl p-2.5 whitespace-pre-line">
-          <span className="text-slate-500 font-semibold inline-flex items-center gap-1 mr-1"><FileText className="w-3 h-3" /> Event notes:</span>
-          {event.description}
+      {(event.description || event.staff_notes) && (
+        <div className="flex-1 space-y-2">
+          {event.description && (
+            <div className="text-xs text-slate-300 bg-slate-950 border border-slate-800 rounded-xl p-2.5 whitespace-pre-line">
+              <span className="text-slate-500 font-semibold inline-flex items-center gap-1 mr-1"><FileText className="w-3 h-3" /> Event notes:</span>
+              {event.description}
+            </div>
+          )}
+          {event.staff_notes && (
+            <div className="text-xs text-indigo-100 bg-indigo-500/5 border border-indigo-500/40 rounded-xl p-2.5 whitespace-pre-line">
+              <span className="text-indigo-300 font-semibold inline-flex items-center gap-1 mr-1"><Lock className="w-3 h-3" /> Confirmed staff only:</span>
+              {event.staff_notes}
+            </div>
+          )}
         </div>
       )}
       {onEdit && event.event_id && (
@@ -96,6 +106,11 @@ export default function EventRosterModal({
                     <span className="text-slate-500 font-semibold">{pos.role_type} notes: </span>{pos.role_notes}
                   </p>
                 )}
+                {pos.staff_notes && (
+                  <p className="text-xs text-indigo-100 bg-indigo-500/5 border border-indigo-500/40 rounded-lg p-2 whitespace-pre-line">
+                    <span className="text-indigo-300 font-semibold inline-flex items-center gap-1"><Lock className="w-3 h-3" /> {pos.role_type} — confirmed staff only: </span>{pos.staff_notes}
+                  </p>
+                )}
 
                 <div>
                   <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Assigned ({pos.assigned.length})</div>
@@ -118,6 +133,16 @@ export default function EventRosterModal({
                               <span className="text-amber-400 text-xs font-bold">★ {Number(p.aggregate_rating).toFixed(1)}</span>
                               <ReliabilityBadge data={reliabilityMap[p.worker_id]} />
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${chip.cls}`}>{chip.label}</span>
+                              {p.info_seen === true && (
+                                <span title="Has read the latest notes and changes" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                                  <BookOpenCheck className="w-3 h-3" /> Read
+                                </span>
+                              )}
+                              {p.info_seen === false && (
+                                <span title="Hasn't opened the latest notes or changes yet" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/40">
+                                  <AlertTriangle className="w-3 h-3" /> Not read yet
+                                </span>
+                              )}
                               {onRemovePerson && ['approved', 'confirmed'].includes(p.status) && (
                                 <button type="button" onClick={() => onRemovePerson(p, pos, event)} title="Remove from shift"
                                   className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10">

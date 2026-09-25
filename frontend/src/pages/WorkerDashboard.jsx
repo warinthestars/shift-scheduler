@@ -4,6 +4,7 @@ import api from '../api/client';
 import {
   Calendar, AlertCircle, Briefcase, Check, Search, Filter,
   Timer, ArrowRightLeft, MessageSquare, X, Star, Zap, Info, CalendarPlus, Navigation,
+  CalendarDays, AlertTriangle,
 } from 'lucide-react';
 import TransferModal from '../components/TransferModal';
 import ShiftBoardModal from '../components/ShiftBoardModal';
@@ -11,6 +12,8 @@ import TipBadge from '../components/TipBadge';
 import PayLabel from '../components/PayLabel';
 import EventListingCard from '../components/EventListingCard';
 import EventListingModal from '../components/EventListingModal';
+import WorkerCalendar from '../components/WorkerCalendar';
+import ShiftDetailsModal from '../components/ShiftDetailsModal';
 import { fmtDateTime } from '../utils/venueTime';
 import {
   STATUS_LABELS, PENDING_STATUSES, dayGroupLabel, isOnDay, downloadIcs, mapsUrl,
@@ -20,8 +23,10 @@ const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'c
 
 export default function WorkerDashboard() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState('find'); // 'find' | 'schedule' | 'transfers'
+  const [activeTab, setActiveTab] = useState('find'); // 'find' | 'calendar' | 'schedule' | 'transfers'
   const [listings, setListings] = useState([]);
+  const [calendar, setCalendar] = useState({ items: [], unread_count: 0 }); // Phase 26.2
+  const [detailRequestId, setDetailRequestId] = useState(null);           // Phase 26.2: ShiftDetailsModal
   const [myShifts, setMyShifts] = useState([]);
   const [incomingTransfers, setIncomingTransfers] = useState([]);
   const [activeClockIns, setActiveClockIns] = useState(new Set());
@@ -50,13 +55,18 @@ export default function WorkerDashboard() {
   const fetchWorkerData = async (showSpinner = true) => {
     try {
       if (showSpinner) setLoading(true);
-      const [listingsRes, myRes, transfersRes, activeClocksRes] = await Promise.all([
+      const [listingsRes, myRes, transfersRes, activeClocksRes, calendarRes] = await Promise.all([
         api.get('/listings'),
         api.get('/users/me/shifts'),
         api.get('/transfers/my-incoming'),
         api.get('/shifts/time-entries/active').catch(() => ({ data: [] })),
+        api.get('/me/calendar').catch(() => ({ data: { items: [], unread_count: 0 } })),
       ]);
       setListings(listingsRes.data || []);
+      setCalendar({
+        items: calendarRes.data?.items || [],
+        unread_count: calendarRes.data?.unread_count || 0,
+      });
       setMyShifts(myRes.data || []);
       setIncomingTransfers(transfersRes.data || []);
 
@@ -207,6 +217,33 @@ export default function WorkerDashboard() {
     ['approved', 'checked_in', 'confirmed'].includes(String(s.status || '').toLowerCase())
   );
 
+  // ---- Phase 26.2: calendar items by request id + "please read" handling -------------------
+  const calendarByRequest = useMemo(() => {
+    const m = new Map();
+    calendar.items.forEach((i) => m.set(i.request_id, i));
+    return m;
+  }, [calendar.items]);
+  const detailItem = detailRequestId ? calendarByRequest.get(detailRequestId) || null : null;
+  const firstUnread = calendar.items.find((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()) || null;
+
+  const handleAcknowledged = (requestId, seenAt) => {
+    setCalendar((prev) => {
+      const items = prev.items.map((i) =>
+        i.request_id === requestId ? { ...i, needs_ack: false, info_change: null, info_seen_at: seenAt || new Date().toISOString() } : i
+      );
+      const unread = items.filter((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()).length;
+      return { items, unread_count: unread };
+    });
+  };
+
+  const openDetailsForRequest = (req) => {
+    if (calendarByRequest.has(req.id)) {
+      setDetailRequestId(req.id);
+    } else if (req.shift?.event_id) {
+      setOpenListing({ eventId: req.shift.event_id, initial: null });
+    }
+  };
+
   // ---- Phase 26.1: Find Shifts (one card per event) ------------------------------------
   const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;
 
@@ -335,6 +372,17 @@ export default function WorkerDashboard() {
                 Via: {req.approval_source.replace(/_/g, ' ')}
               </span>
             )}
+
+            {calendarByRequest.get(req.id)?.needs_ack && (
+              <button
+                type="button"
+                onClick={() => setDetailRequestId(req.id)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black"
+              >
+                <AlertTriangle className="w-3 h-3" />
+                {calendarByRequest.get(req.id)?.info_change ? 'UPDATED — READ' : 'PLEASE READ'}
+              </button>
+            )}
           </div>
 
           <h3 className="text-base font-bold text-white mt-1">{shift?.title}</h3>
@@ -359,10 +407,10 @@ export default function WorkerDashboard() {
 
         {/* Action buttons */}
         <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-end">
-          {shift?.event_id && (
+          {(calendarByRequest.has(req.id) || shift?.event_id) && (
             <button
               type="button"
-              onClick={() => setOpenListing({ eventId: shift.event_id, initial: null })}
+              onClick={() => openDetailsForRequest(req)}
               className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition flex items-center space-x-1"
             >
               <Info className="w-3.5 h-3.5 text-emerald-400" />
@@ -574,6 +622,32 @@ export default function WorkerDashboard() {
           </div>
         )}
 
+        {/* Phase 26.2: don't let anyone miss updated shift info */}
+        {calendar.unread_count > 0 && firstUnread && (
+          <div className="mb-6 p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-black text-amber-100">
+                  {calendar.unread_count === 1
+                    ? '1 of your shifts has info you haven\'t read'
+                    : `${calendar.unread_count} of your shifts have info you haven't read`}
+                </div>
+                <div className="text-xs text-amber-200/80">
+                  Notes or times can change after you book. Open the shift and tap “Got it”.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDetailRequestId(firstUnread.request_id)}
+              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black whitespace-nowrap"
+            >
+              Review now
+            </button>
+          </div>
+        )}
+
         {/* Tab Selection */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-4 gap-4">
           <div className="flex space-x-3 overflow-x-auto whitespace-nowrap -mx-1 px-1">
@@ -586,6 +660,22 @@ export default function WorkerDashboard() {
               }`}
             >
               Find Shifts ({openListingCount})
+            </button>
+            <button
+              onClick={() => setActiveTab('calendar')}
+              className={`px-5 py-2.5 rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 ${
+                activeTab === 'calendar'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                  : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <CalendarDays className="w-3.5 h-3.5" />
+              <span>Calendar</span>
+              {calendar.unread_count > 0 && (
+                <span className="ml-0.5 min-w-[1.25rem] h-5 px-1 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black inline-flex items-center justify-center">
+                  {calendar.unread_count}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setActiveTab('schedule')}
@@ -740,6 +830,22 @@ export default function WorkerDashboard() {
           </div>
         )}
 
+        {/* TAB: Calendar (Phase 26.2) */}
+        {activeTab === 'calendar' && (
+          <div className="mt-6">
+            {loading ? (
+              <div className="py-20 text-center text-slate-500 text-xs">Loading your calendar...</div>
+            ) : (
+              <WorkerCalendar
+                items={calendar.items}
+                openListings={listings}
+                onSelectItem={(item) => setDetailRequestId(item.request_id)}
+                onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
+              />
+            )}
+          </div>
+        )}
+
         {/* TAB 2: My Schedule (Phase 26.1: upcoming first, history folded away) */}
         {activeTab === 'schedule' && (
           <div className="mt-6 space-y-4">
@@ -850,6 +956,17 @@ export default function WorkerDashboard() {
           </div>
         )}
       </main>
+
+      {/* Phase 26.2: My shift details (big date/time, all notes, "Got it") */}
+      {detailItem && (
+        <ShiftDetailsModal
+          key={detailItem.request_id}
+          item={detailItem}
+          onClose={() => setDetailRequestId(null)}
+          onAcknowledged={handleAcknowledged}
+          onOpenBoard={(shiftLike) => setActiveDiscussionShift(shiftLike)}
+        />
+      )}
 
       {/* Phase 26.1: Event details + request modal */}
       {openListing && (

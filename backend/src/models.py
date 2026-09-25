@@ -216,6 +216,9 @@ class ShiftEvent(Base):
     start_time = Column(DateTime(timezone=True), nullable=False, index=True)
     end_time = Column(DateTime(timezone=True), nullable=False)
     notes = Column(Text, nullable=True)
+    staff_notes = Column(Text, nullable=True)                              # Phase 26.2: booked staff only
+    info_updated_at = Column(DateTime(timezone=True), nullable=True)       # Phase 26.2: last time/notes change
+    info_change = Column(Text, nullable=True)                              # Phase 26.2: "Time changed: …"
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     cancel_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
@@ -246,6 +249,9 @@ class Shift(Base):
     spots_filled = Column(Integer, nullable=False, default=0)
     is_shift_auto_confirm = Column(Boolean, nullable=False, default=False)
     description = Column(Text, nullable=True)
+    staff_notes = Column(Text, nullable=True)                              # Phase 26.2: booked staff only
+    info_updated_at = Column(DateTime(timezone=True), nullable=True)       # Phase 26.2
+    info_change = Column(Text, nullable=True)                              # Phase 26.2
     status = Column(String(50), nullable=False, default="OPEN", index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -314,6 +320,7 @@ class ShiftRequest(Base):
     dropped_at = Column(DateTime(timezone=True), nullable=True)
     status_reason = Column(Text, nullable=True)
     pay_rate = Column(Numeric(10, 2), nullable=True)
+    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

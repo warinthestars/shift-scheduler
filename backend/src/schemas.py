@@ -440,6 +440,7 @@ class RosterPerson(BaseModel):
     clocked_in: bool = False
     clocked_out: bool = False
     note: Optional[str] = None          # Phase 26.1: worker's note with their request
+    info_seen: Optional[bool] = None    # Phase 26.2: booked person has read the latest shift info (None = nothing to read)
 
 
 class EventPosition(BaseModel):
@@ -451,6 +452,7 @@ class EventPosition(BaseModel):
     hourly_rate_max: Optional[float] = None
     hide_rate: bool = False
     role_notes: Optional[str] = None
+    staff_notes: Optional[str] = None        # Phase 26.2
     approval_mode: str = "venue_default"
     capacity: int
     spots_filled: int
@@ -468,6 +470,7 @@ class VenueEventResponse(BaseModel):
     start_time: datetime
     end_time: datetime
     description: Optional[str] = None
+    staff_notes: Optional[str] = None        # Phase 26.2
     total_capacity: int
     total_assigned: int
     total_requested: int
@@ -603,6 +606,7 @@ class EventPositionInput(BaseModel):
     tips_eligible: bool = False
     tip_pool: bool = False
     role_notes: Optional[str] = None
+    staff_notes: Optional[str] = None        # Phase 26.2: only shown to people booked on this position
     approval_mode: str = "venue_default"     # venue_default | auto | manual
 
 
@@ -612,6 +616,7 @@ class EventCreate(BaseModel):
     start_time: datetime
     end_time: datetime
     notes: Optional[str] = None
+    staff_notes: Optional[str] = None        # Phase 26.2: only shown to booked staff
     positions: List[EventPositionInput]
 
 
@@ -620,6 +625,7 @@ class EventUpdate(BaseModel):
     start_time: datetime
     end_time: datetime
     notes: Optional[str] = None
+    staff_notes: Optional[str] = None        # Phase 26.2
     positions: List[EventPositionInput]
 
 
@@ -636,6 +642,7 @@ class EventDetailPosition(BaseModel):
     tips_eligible: bool = False
     tip_pool: bool = False
     role_notes: Optional[str] = None
+    staff_notes: Optional[str] = None        # Phase 26.2
     approval_mode: str = "venue_default"
     status: str
 
@@ -647,6 +654,7 @@ class EventDetail(BaseModel):
     start_time: datetime
     end_time: datetime
     notes: Optional[str] = None
+    staff_notes: Optional[str] = None        # Phase 26.2
     cancelled: bool = False
     cancel_reason: Optional[str] = None
     positions: List[EventDetailPosition]
@@ -764,6 +772,7 @@ class ListingPosition(BaseModel):
     est_pay_max: Optional[float] = None
     my_status: Optional[str] = None            # viewer's request status on this position
     my_status_reason: Optional[str] = None
+    staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
 
 
 class ListingMyRequest(BaseModel):
@@ -793,6 +802,7 @@ class EventListing(BaseModel):
     on_team: bool = False
     my_request: Optional[ListingMyRequest] = None     # the viewer's ACTIVE request in this event
     conflict: Optional[str] = None                    # "Blue Bar · Friday Service" when it overlaps a booked shift
+    staff_notes: Optional[str] = None                 # Phase 26.2: only when the viewer is booked in this event (or manages)
     cancelled: bool = False
     cancel_reason: Optional[str] = None
     started: bool = False
@@ -811,5 +821,53 @@ class PositionRequestResult(BaseModel):
     instant: bool
     message: str
     listing: Optional[EventListing] = None
+
+
+# ------------------------------------------------------------------------------
+# Phase 26.2: Worker calendar + "make sure they read it"
+# ------------------------------------------------------------------------------
+class WorkerCalendarItem(BaseModel):
+    request_id: UUID
+    shift_id: UUID
+    event_id: Optional[UUID] = None
+    status: str                                   # the worker's request status
+    status_reason: Optional[str] = None
+    booked: bool                                  # approved / confirmed / checked_in / completed
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    hours: float
+    venue: ListingVenue
+    hourly_rate: Optional[float] = None           # None = hidden until booked
+    hourly_rate_max: Optional[float] = None
+    pay_rate: Optional[float] = None              # manager-set rate for this person (booked only)
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    event_notes: Optional[str] = None
+    role_notes: Optional[str] = None
+    event_staff_notes: Optional[str] = None       # booked only
+    position_staff_notes: Optional[str] = None    # booked only
+    staff_notes_locked: bool = False              # waiting + staff notes exist -> "more details once confirmed"
+    info_change: Optional[str] = None             # what changed since the worker last read it
+    info_updated_at: Optional[datetime] = None
+    info_seen_at: Optional[datetime] = None
+    needs_ack: bool = False                       # show "Please read" until they tap "Got it"
+    clocked_in: bool = False
+    cancelled: bool = False
+    cancel_reason: Optional[str] = None
+
+
+class WorkerCalendarResponse(BaseModel):
+    range_start: datetime
+    range_end: datetime
+    unread_count: int
+    items: List[WorkerCalendarItem]
+
+
+class InfoAckResponse(BaseModel):
+    request_id: UUID
+    info_seen_at: datetime
+
 
 

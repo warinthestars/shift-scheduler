@@ -1,645 +1,765 @@
-# Phase 26.1: Event-Based Shift Cards & One Request per Event
+# Phase 26.2: Worker Calendar, Big Date & Time, and "Don't Miss Anything" Notes
 
-Workers currently see one card per **position** (a "Bar Shift – Bartender" card, a "Bar Shift – Server" card, …). For a worker, the thing they're deciding on is the **event**: *where, when, how long, what's it pay, can I get in?* This phase:
+Workers need to see their week at a glance and never miss what matters: **when, where, what to wear, how to get in, and what changed**. This phase adds:
 
-1. Replaces the Find Shifts grid with **one card per event**. Each card shows the date, venue, time and length, pay range, tips, and every position with its pay and open spots, marked ⚡ **Instant book** or **Needs approval** *for this worker*.
-2. Adds an **event details modal** (click a card). It shows event, venue, dress code, arrival instructions, notes, directions and a position picker, plus an optional note to the manager.
-3. Enforces **one active request per worker per event**, on the server, with row locks so double taps or two workers at once can't overbook. A waiting request can be **switched** to another position or **withdrawn**. A booked worker must drop or hand off first.
-4. Makes the listing more useful for service workers:
-   * cards grouped by day (Today / Tomorrow / Fri, Oct 3)
-   * search, date, position and venue filters, "Instant book only" and "Hide ones I've requested"
-   * estimated earnings for the shift ("≈ $150")
-   * a "Your venue" badge where they've worked before
-   * an **overlap warning** when an event clashes with a shift they're already booked on
-5. My Schedule:
-   * upcoming shifts come first, and past or closed ones are folded away
-   * new buttons: **Details**, **Directions**, **Add to calendar** (.ics) and **Withdraw** for waiting requests
-   * friendly status words, with the reason shown for cancelled, removed, no-show and withdrawn requests
-   * this includes the Phase 26 §10 worker edits, which never reached `WorkerDashboard.jsx`
-6. Managers see the worker's note in the roster ("Requested" list).
-7. Venue profile pages use the same modal instead of per-position "Pick up shift" buttons.
-
-**No database schema change.** The new request status `withdrawn` is a plain VARCHAR value, and the worker note uses the existing `shift_requests.notes` column.
+1. **Calendar tab** for workers (new `WorkerCalendar.jsx`):
+   * a month grid with a day agenda below it, plus a List view
+   * phones see coloured dots; tablet and desktop see "6:00 PM Bartender" chips
+   * days are computed in each **venue's** timezone
+   * a "Your next shift" hero at the top: big date, big time, countdown
+   * an optional overlay of **open shifts** (dashed) that opens the 26.1 request modal
+2. **Shift details modal** for the worker's own shifts (new `ShiftDetailsModal.jsx`):
+   * the date and time in **large type**, the length, a countdown and the status
+   * where to go, directions, phone and pay
+   * **every note laid out openly**, none hidden behind a click: when you arrive, dress code, event notes, position notes, venue notes
+3. **Staff-only notes, shown once confirmed.** Managers can add notes at the event level and per position that **only booked workers** see: door codes, parking, point of contact, POS login. A worker who is still waiting sees "More details will show here once the manager confirms you."
+4. **Change tracking and "Got it"**:
+   * When a manager edits a posted event, the change is recorded as plain text: time (with old and new times in venue time), title, notes, staff notes, position pay, position notes.
+   * Booked workers get an amber **UPDATED / PLEASE READ** flag on the calendar, My Schedule and a dashboard banner, until they tap **"Got it — I've read this"**.
+   * First-time notes also need a "Got it".
+   * Managers see **Read ✓** or **Not read yet** next to each booked person in the roster.
+5. The 26.1 event modal also shows the staff-only notes to people who are booked.
 
 ## 0. Rules for this phase (read first)
-
 * Do **NOT** touch `backend/src/auth.py`, `main.py` CORS logic, `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, or `frontend/vite.config.js`.
-* No native PostgreSQL ENUMs. Statuses stay lowercase VARCHAR strings.
-* All backend datetime comparisons use aware UTC (`datetime.now(timezone.utc)`). The helper `as_utc()` in `services/booking.py` normalizes DB values.
-* **Never** call `UserResponse.model_validate(<ORM User>)` anywhere. Never touch an ORM relationship that wasn't `selectinload`-ed (MissingGreenlet).
-* Where this prompt gives a **full file**, replace the whole file with exactly that content. Where it gives an **edit**, change only the lines shown.
-* Do not rename existing endpoints. The old `POST /api/shifts/{shift_id}/request` keeps working and now uses the same booking rules.
+* No native PostgreSQL ENUMs. Use aware UTC datetimes only (`datetime.now(timezone.utc)`, `as_utc()` from `services/booking.py`).
+* Never `UserResponse.model_validate(<ORM User>)`. Never touch an ORM relationship that wasn't `selectinload`-ed.
+* Staff-only notes must **never** be sent to someone who isn't booked on that event or position (or who doesn't manage the venue / isn't an admin). Do **not** add `staff_notes` to `ShiftResponse`, `PublicEventPosition`, or any public or venue-profile schema.
+* **FULL FILE** means replace the whole file. **EDIT** means change only what's shown.
+* **Schema change → rebuild required** (see §17).
 
 ---
 
-## 1. Backend — `backend/src/services/auto_confirm.py` (FULL FILE REPLACEMENT)
+## 1. Database — `database/init.sql` (EDITS)
 
-The approval decision is split into a pure function `decide_approval()`. The listings use it to label positions "Instant book" or "Needs approval" for the viewer, and `evaluate_shift_request()` uses it to decide, so the two always agree. The behavior is unchanged: whitelist lookup, then the same order of rules, then the double-booking check only when approved.
+### 1a. `CREATE TABLE shift_events` — add three columns after `notes TEXT,`
+```sql
+    notes TEXT,
+    staff_notes TEXT,
+    info_updated_at TIMESTAMPTZ,
+    info_change TEXT,
+    cancelled_at TIMESTAMPTZ,
+```
+### 1b. `CREATE TABLE shifts` — add three columns after `description TEXT,`
+```sql
+    description TEXT,
+    staff_notes TEXT,
+    info_updated_at TIMESTAMPTZ,
+    info_change TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'OPEN',
+```
+### 1c. `CREATE TABLE shift_requests` — add one column after `pay_rate NUMERIC(10, 2),`
+```sql
+    pay_rate NUMERIC(10, 2),
+    info_seen_at TIMESTAMPTZ,
+```
 
+## 2. Models — `backend/src/models.py` (EDITS)
+
+### 2a. `class ShiftEvent` — directly under `notes = Column(Text, nullable=True)`
 ```python
-import logging
-from typing import Tuple, Optional
-from datetime import datetime
-from uuid import UUID
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
-from src.models import Shift, Venue, VenueWhitelist, ShiftRequest, User, RequestStatus
-
-logger = logging.getLogger("shiftboard.auto_confirm")
-
-async def check_double_booking(
-    db: AsyncSession,
-    worker_id: UUID,
-    start_time: datetime,
-    end_time: datetime,
-    exclude_shift_id: Optional[UUID] = None
-) -> None:
-    """
-    Checks if a worker already has an approved or active shift overlapping with the time slot:
-    (existing_shift.start_time < new_shift.end_time) AND (existing_shift.end_time > new_shift.start_time).
-
-    Raises:
-        HTTPException(status_code=400, detail="Worker is already booked for this time slot.")
-    """
-    query = (
-        select(Shift)
-        .join(ShiftRequest, ShiftRequest.shift_id == Shift.id)
-        .where(
-            ShiftRequest.worker_id == worker_id,
-            func.lower(ShiftRequest.status).in_([
-                "approved", "checked_in", "confirmed"
-            ]),
-            Shift.start_time < end_time,
-            Shift.end_time > start_time
-        )
-    )
-    if exclude_shift_id:
-        query = query.where(Shift.id != exclude_shift_id)
-
-    overlapping = await db.scalar(query)
-    if overlapping:
-        logger.warning(
-            f"[Double-Booking Check] Overlap detected for Worker {worker_id} "
-            f"with Shift {overlapping.id} ({overlapping.start_time} - {overlapping.end_time})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Worker is already booked for this time slot."
-        )
-
-
-def decide_approval(
-    shift: Shift,
-    venue: Venue,
-    worker: User,
-    is_whitelisted: bool,
-) -> Tuple[RequestStatus, Optional[str]]:
-    """
-    Phase 26.1: Pure decision (no database access, no side effects).
-    Used by evaluate_shift_request AND by the worker listings ("Instant book" vs "Needs approval"),
-    so both always agree. Order:
-    1. Position approval_mode 'auto' (or legacy is_shift_auto_confirm) -> APPROVED "shift_auto_confirm"
-    2. Position approval_mode 'manual'                                 -> PENDING
-    3. Venue policy 'manual'                                           -> PENDING
-    4. Venue policy 'everyone_auto'                                    -> APPROVED "venue_everyone_auto"
-    5. Venue policy 'team_auto' AND worker on venue whitelist          -> APPROVED "venue_whitelist"
-    6. Rating threshold (worker has >= 1 rating and meets threshold)   -> APPROVED "rating_threshold"
-    7. Otherwise                                                       -> PENDING
-    """
-    shift_mode = (getattr(shift, "approval_mode", None) or "venue_default").lower()
-    if shift_mode == "auto" or (shift_mode == "venue_default" and shift.is_shift_auto_confirm):
-        return RequestStatus.APPROVED, "shift_auto_confirm"
-    if shift_mode == "manual":
-        return RequestStatus.PENDING, None
-
-    policy = (getattr(venue, "approval_policy", None) or "team_auto").lower()
-    if policy == "manual":
-        return RequestStatus.PENDING, None
-    if policy == "everyone_auto":
-        return RequestStatus.APPROVED, "venue_everyone_auto"
-    if policy == "team_auto" and is_whitelisted:
-        return RequestStatus.APPROVED, "venue_whitelist"
-
-    if venue.auto_approve_rating_threshold is not None:
-        rating_count = int(worker.rating_count or 0)
-        worker_rating = float(worker.aggregate_rating or 0.0)
-        if rating_count > 0 and worker_rating >= float(venue.auto_approve_rating_threshold):
-            return RequestStatus.APPROVED, "rating_threshold"
-
-    return RequestStatus.PENDING, None
-
-
-async def evaluate_shift_request(
-    db: AsyncSession,
-    worker: User,
-    shift: Shift,
-    venue: Venue
-) -> Tuple[RequestStatus, Optional[str]]:
-    """
-    ShiftBoard Auto-Confirm Engine. Looks up the whitelist, asks decide_approval(),
-    and runs the double-booking check when the answer is APPROVED.
-    """
-    whitelist_id = await db.scalar(
-        select(VenueWhitelist.id).where(
-            VenueWhitelist.venue_id == venue.id,
-            VenueWhitelist.worker_id == worker.id,
-            VenueWhitelist.is_active == True
-        )
-    )
-    decision, source = decide_approval(shift, venue, worker, whitelist_id is not None)
-    logger.info(
-        f"[Auto-Confirm Engine] Worker {worker.id} / Shift {shift.id} ('{shift.title}') "
-        f"at Venue {venue.id}: {decision.value} via {source or 'manager review'}"
-    )
-    if decision == RequestStatus.APPROVED:
-        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
-    return decision, source
+    staff_notes = Column(Text, nullable=True)                              # Phase 26.2: booked staff only
+    info_updated_at = Column(DateTime(timezone=True), nullable=True)       # Phase 26.2: last time/notes change
+    info_change = Column(Text, nullable=True)                              # Phase 26.2: "Time changed: …"
+```
+### 2b. `class Shift` — directly under `description = Column(Text, nullable=True)`
+```python
+    staff_notes = Column(Text, nullable=True)                              # Phase 26.2: booked staff only
+    info_updated_at = Column(DateTime(timezone=True), nullable=True)       # Phase 26.2
+    info_change = Column(Text, nullable=True)                              # Phase 26.2
+```
+### 2c. `class ShiftRequest` — directly under `pay_rate = Column(Numeric(10, 2), nullable=True)`
+```python
+    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
 ```
 
 ---
 
-## 2. Backend — NEW FILE `backend/src/services/booking.py`
+## 3. Schemas — `backend/src/schemas.py` (EDITS)
 
-This is the one place a worker gets put on a position. It holds:
-* the one-per-event rule
-* switching a waiting request
-* re-requesting after a withdraw (the unique `(shift_id, worker_id)` row is re-opened, not duplicated)
-* locking: `SELECT … FOR UPDATE` on the event row, then the position row
-* the capacity check under the lock
+Add a field to each existing class listed. Put it directly after the field named, and keep everything else in the class.
+
+| Class | Add after | New line |
+|---|---|---|
+| `EventPositionInput` | `role_notes: Optional[str] = None` | `staff_notes: Optional[str] = None        # Phase 26.2: only shown to people booked on this position` |
+| `EventCreate` | `notes: Optional[str] = None` | `staff_notes: Optional[str] = None        # Phase 26.2: only shown to booked staff` |
+| `EventUpdate` | `notes: Optional[str] = None` | `staff_notes: Optional[str] = None        # Phase 26.2` |
+| `EventDetailPosition` | `role_notes: Optional[str] = None` | `staff_notes: Optional[str] = None        # Phase 26.2` |
+| `EventDetail` | `notes: Optional[str] = None` | `staff_notes: Optional[str] = None        # Phase 26.2` |
+| `RosterPerson` | `note: Optional[str] = None` | `info_seen: Optional[bool] = None    # Phase 26.2: booked person has read the latest shift info (None = nothing to read)` |
+| `EventPosition` | `role_notes: Optional[str] = None` | `staff_notes: Optional[str] = None        # Phase 26.2` |
+| `VenueEventResponse` | `description: Optional[str] = None` | `staff_notes: Optional[str] = None        # Phase 26.2` |
+| `ListingPosition` | `my_status_reason: Optional[str] = None` | `staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)` |
+| `EventListing` | `conflict: Optional[str] = None` | `staff_notes: Optional[str] = None                 # Phase 26.2: only when the viewer is booked in this event (or manages)` |
+
+Then **append at the very end of the file**:
+```python
+# ------------------------------------------------------------------------------
+# Phase 26.2: Worker calendar + "make sure they read it"
+# ------------------------------------------------------------------------------
+class WorkerCalendarItem(BaseModel):
+    request_id: UUID
+    shift_id: UUID
+    event_id: Optional[UUID] = None
+    status: str                                   # the worker's request status
+    status_reason: Optional[str] = None
+    booked: bool                                  # approved / confirmed / checked_in / completed
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    hours: float
+    venue: ListingVenue
+    hourly_rate: Optional[float] = None           # None = hidden until booked
+    hourly_rate_max: Optional[float] = None
+    pay_rate: Optional[float] = None              # manager-set rate for this person (booked only)
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    event_notes: Optional[str] = None
+    role_notes: Optional[str] = None
+    event_staff_notes: Optional[str] = None       # booked only
+    position_staff_notes: Optional[str] = None    # booked only
+    staff_notes_locked: bool = False              # waiting + staff notes exist -> "more details once confirmed"
+    info_change: Optional[str] = None             # what changed since the worker last read it
+    info_updated_at: Optional[datetime] = None
+    info_seen_at: Optional[datetime] = None
+    needs_ack: bool = False                       # show "Please read" until they tap "Got it"
+    clocked_in: bool = False
+    cancelled: bool = False
+    cancel_reason: Optional[str] = None
+
+
+class WorkerCalendarResponse(BaseModel):
+    range_start: datetime
+    range_end: datetime
+    unread_count: int
+    items: List[WorkerCalendarItem]
+
+
+class InfoAckResponse(BaseModel):
+    request_id: UUID
+    info_seen_at: datetime
+```
+
+---
+
+## 4. Backend — `backend/src/services/shift_events.py` (FULL FILE REPLACEMENT)
+
+What changed:
+* new helpers `_money()` and `_fmt_range()`
+* `_apply_position(..., track_changes=False)` stores `staff_notes`, and when editing an existing position it records changes: renamed, pay, notes, staff notes
+* `create_event_with_positions` saves `staff_notes`
+* `update_event` records time, title, notes and staff-notes changes in `event.info_change` / `event.info_updated_at`, with old and new times written in the venue's timezone
+* `build_event_detail` and `duplicate_event` carry `staff_notes`
 
 ```python
 """
-Phase 26.1: The one place that puts a worker on a position.
-
-Rules
-* One active request per worker per event (waiting for approval OR booked).
-  A waiting request can be switched to another position in the same event (switch=True).
-  A booked worker must drop / hand off first.
-* The event row and the position row are locked (SELECT ... FOR UPDATE) for the whole
-  transaction, so a double tap or two workers at once can't overbook or double-request.
-* A position can be requested again only after the worker WITHDREW it. Drops, rejections,
-  removals, no-shows and hand-offs stay on record (they feed reliability).
+Phase 25.2: Create / update / describe events (one posting with 1+ positions).
+Each position is a row in `shifts` linked by shifts.event_id.
 """
-import logging
-from datetime import datetime, timezone
-from typing import Optional
-from uuid import UUID
+from datetime import timezone, datetime, date
+from typing import Dict, Tuple, List, Optional
+from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException, status
-from sqlalchemy import select, func
+from fastapi import HTTPException
+from sqlalchemy import select, func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from src.models import Shift, ShiftEvent, ShiftRequest, User
-from src.services.auto_confirm import evaluate_shift_request, check_double_booking
+from src.models import ShiftEvent, Shift, ShiftRequest, Venue, User
+from src.schemas import (
+    EventCreate, EventUpdate, EventPositionInput, EventDetail, EventDetailPosition,
+)
 
-logger = logging.getLogger("shiftboard.booking")
-
-PENDING_STATUSES = ("pending", "pending_manager_approval")
-BOOKED_STATUSES = ("approved", "confirmed", "checked_in")
+VALID_APPROVAL_MODES = ("venue_default", "auto", "manual")
 ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
-ACTIVE_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES
-REREQUESTABLE_STATUSES = ("withdrawn",)
-BLOCKED_MESSAGES = {
-    "rejected": "The venue already passed on your request for this position. You can request a different position.",
-    "removed": "The venue removed you from this shift.",
-    "no_show": "You were marked as a no-show for this shift.",
-    "cancelled": "This position was cancelled.",
-    "dropped": "You dropped this shift earlier, so it can't be picked back up here. Message the manager if they still need you.",
-    "transferred": "You handed this shift off earlier.",
-}
-NOTE_MAX = 500
+PENDING_STATUSES = ("pending", "pending_manager_approval")
+ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
 
 
-def as_utc(dt: datetime) -> datetime:
-    if isinstance(dt, str):
-        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+def _as_utc(dt):
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
-def _clean_note(note: Optional[str]) -> Optional[str]:
-    if note is None:
+def _clean(text):
+    if text is None:
         return None
-    note = str(note).strip()
-    return note[:NOTE_MAX] if note else None
+    text = str(text).strip()
+    return text or None
 
 
-async def _load_shift_locked(db: AsyncSession, shift_id: UUID) -> Shift:
-    shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
-    if not shift:
-        raise HTTPException(status_code=404, detail="Position not found.")
-    if shift.event_id:
-        # Lock the event first so every request for this event is handled one at a time.
-        await db.execute(select(ShiftEvent.id).where(ShiftEvent.id == shift.event_id).with_for_update())
-    locked = await db.scalar(
-        select(Shift)
-        .options(selectinload(Shift.venue))
-        .where(Shift.id == shift_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    return locked
+def _money(v):
+    return None if v is None else round(float(v), 2)
 
 
-async def request_position(
-    db: AsyncSession,
-    worker: User,
-    shift_id: UUID,
-    note: Optional[str] = None,
-    switch: bool = False,
-    expected_event_id: Optional[UUID] = None,
-) -> UUID:
-    """Creates (or re-opens a withdrawn) ShiftRequest. Commits. Returns the request id."""
+def _fmt_range(start, end, tz_name: str) -> str:
+    """Phase 26.2: 'Fri Oct 3, 6:00 PM – 11:00 PM' in the venue's timezone."""
     try:
-        shift = await _load_shift_locked(db, shift_id)
-        if expected_event_id is not None and shift.event_id != expected_event_id:
-            raise HTTPException(status_code=400, detail="That position isn't part of this event.")
+        tz = ZoneInfo(tz_name or "America/New_York")
+    except Exception:
+        tz = ZoneInfo("America/New_York")
+    s_local = _as_utc(start).astimezone(tz)
+    e_local = _as_utc(end).astimezone(tz)
+    return f"{s_local.strftime('%a %b %-d, %-I:%M %p')} – {e_local.strftime('%-I:%M %p')}"
 
-        if shift.event_id:
-            event = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id))
-            if event is not None and event.cancelled_at is not None:
-                raise HTTPException(status_code=400, detail="This event was cancelled.")
 
-        shift_status = (shift.status or "").upper()
-        if shift_status == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
-        if as_utc(shift.start_time) <= datetime.now(timezone.utc):
-            raise HTTPException(status_code=400, detail="This shift has already started.")
+def _validate_basics(data) -> None:
+    if not (data.title or "").strip():
+        raise HTTPException(status_code=400, detail="Give the event a name.")
+    if _as_utc(data.end_time) <= _as_utc(data.start_time):
+        raise HTTPException(status_code=400, detail="End time must be after the start time.")
+    if not data.positions:
+        raise HTTPException(status_code=400, detail="Add at least one position.")
 
-        # --- One active request per event -------------------------------------------------
-        same_event_q = (
-            select(ShiftRequest, Shift.role_type)
-            .join(Shift, ShiftRequest.shift_id == Shift.id)
-            .where(
-                ShiftRequest.worker_id == worker.id,
-                func.lower(ShiftRequest.status).in_(ACTIVE_STATUSES),
-            )
+
+def _validate_position(p: EventPositionInput) -> None:
+    name = (p.role_type or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Every position needs a name.")
+    if p.capacity is None or p.capacity < 1:
+        raise HTTPException(status_code=400, detail=f"{name}: needs at least 1 spot.")
+    if p.hourly_rate is None or p.hourly_rate <= 0:
+        raise HTTPException(status_code=400, detail=f"{name}: pay must be more than $0.")
+    if p.hourly_rate_max is not None and p.hourly_rate_max < p.hourly_rate:
+        raise HTTPException(status_code=400, detail=f"{name}: the top of the pay range can't be lower than the bottom.")
+    mode = (p.approval_mode or "venue_default").lower()
+    if mode not in VALID_APPROVAL_MODES:
+        raise HTTPException(status_code=400, detail=f"{name}: approval must be venue_default, auto, or manual.")
+
+
+def _apply_position(shift: Shift, p: EventPositionInput, event: ShiftEvent, track_changes: bool = False) -> None:
+    """
+    Copy form values onto a Shift row. track_changes=True (existing positions being edited)
+    records what changed in shift.info_change / info_updated_at so booked workers are told (Phase 26.2).
+    """
+    mode = (p.approval_mode or "venue_default").lower()
+    new_role = p.role_type.strip()[:100]
+    new_rate_max = p.hourly_rate_max if (p.hourly_rate_max is not None and p.hourly_rate_max > p.hourly_rate) else None
+    new_desc = _clean(p.role_notes)
+    new_staff = _clean(p.staff_notes)
+
+    changes = []
+    if track_changes:
+        if (shift.role_type or "") != new_role:
+            changes.append(f"Position renamed to {new_role}")
+        if _money(shift.hourly_rate) != _money(p.hourly_rate) or _money(shift.hourly_rate_max) != _money(new_rate_max):
+            changes.append("Pay updated")
+        if _clean(shift.description) != new_desc:
+            changes.append("Position notes updated")
+        if _clean(shift.staff_notes) != new_staff:
+            changes.append("Staff-only notes updated")
+
+    shift.title = event.title
+    shift.start_time = event.start_time
+    shift.end_time = event.end_time
+    shift.role_type = new_role
+    shift.capacity = int(p.capacity)
+    shift.hourly_rate = p.hourly_rate
+    shift.hourly_rate_max = new_rate_max
+    shift.hide_rate = bool(p.hide_rate)
+    shift.tips_eligible = bool(p.tips_eligible)
+    shift.tip_pool = bool(p.tips_eligible and p.tip_pool)
+    shift.description = new_desc                      # description = position notes
+    shift.staff_notes = new_staff                     # Phase 26.2: booked staff only
+    shift.approval_mode = mode
+    shift.is_shift_auto_confirm = (mode == "auto")    # kept in sync for older screens
+
+    if changes:
+        shift.info_updated_at = datetime.now(timezone.utc)
+        shift.info_change = "; ".join(changes)
+
+
+async def _request_counts(db: AsyncSession, shift_ids) -> Dict:
+    """{shift_id: (assigned, pending)}"""
+    if not shift_ids:
+        return {}
+    rows = (await db.execute(
+        select(ShiftRequest.shift_id, func.lower(ShiftRequest.status), func.count(ShiftRequest.id))
+        .where(ShiftRequest.shift_id.in_(shift_ids))
+        .group_by(ShiftRequest.shift_id, func.lower(ShiftRequest.status))
+    )).all()
+    out: Dict = {}
+    for sid, st, n in rows:
+        a, p = out.get(sid, (0, 0))
+        if st in ASSIGNED_STATUSES:
+            a += int(n)
+        elif st in PENDING_STATUSES:
+            p += int(n)
+        out[sid] = (a, p)
+    return out
+
+
+async def create_event_with_positions(db: AsyncSession, venue: Venue, user: User, data: EventCreate) -> ShiftEvent:
+    _validate_basics(data)
+    for p in data.positions:
+        _validate_position(p)
+    try:
+        event = ShiftEvent(
+            venue_id=venue.id,
+            created_by_user_id=user.id,
+            title=data.title.strip()[:255],
+            start_time=_as_utc(data.start_time),
+            end_time=_as_utc(data.end_time),
+            notes=_clean(data.notes),
+            staff_notes=_clean(data.staff_notes),
         )
-        if shift.event_id:
-            same_event_q = same_event_q.where(Shift.event_id == shift.event_id)
-        else:
-            same_event_q = same_event_q.where(Shift.id == shift.id)
+        db.add(event)
+        await db.flush()
+        for p in data.positions:
+            s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0, status="OPEN")
+            _apply_position(s, p, event)
+            db.add(s)
+        await db.commit()
+        await db.refresh(event)
+        return event
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to post shift: {str(e)}")
 
-        replaced = None
-        for req, role in (await db.execute(same_event_q)).all():
-            st = (req.status or "").lower()
-            if req.shift_id == shift.id:
-                if st in PENDING_STATUSES:
-                    raise HTTPException(status_code=400, detail="You've already requested this position.")
-                raise HTTPException(status_code=400, detail="You're already booked on this position.")
-            if st in PENDING_STATUSES:
-                if not switch:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"You already requested {role} for this event. Switch your request instead.",
-                    )
-                replaced = req
-            else:
+
+async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -> None:
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="Cancelled events can't be edited.")
+    _validate_basics(data)
+    for p in data.positions:
+        _validate_position(p)
+
+    existing = (await db.execute(
+        select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+    )).scalars().all()
+    by_id = {s.id: s for s in existing}
+    counts = await _request_counts(db, list(by_id.keys()))
+
+    keep_ids = {p.shift_id for p in data.positions if p.shift_id}
+    unknown = keep_ids - set(by_id.keys())
+    if unknown:
+        raise HTTPException(status_code=400, detail="One of the positions doesn't belong to this event.")
+
+    for s in existing:
+        if s.id not in keep_ids:
+            a, pn = counts.get(s.id, (0, 0))
+            if a + pn > 0:
                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"You're already booked as {role} for this event. Drop or hand off that shift before picking a different position.",
+                    status_code=400,
+                    detail=f"'{s.role_type}' has {a} booked and {pn} waiting. Remove or deny them before deleting this position."
                 )
 
-        # --- Earlier history on this exact position ---------------------------------------
-        existing = await db.scalar(
-            select(ShiftRequest).where(
-                ShiftRequest.shift_id == shift.id,
-                ShiftRequest.worker_id == worker.id,
-            )
-        )
-        if existing is not None:
-            st = (existing.status or "").lower()
-            if st in BLOCKED_MESSAGES:
-                raise HTTPException(status_code=400, detail=BLOCKED_MESSAGES[st])
-            if st not in REREQUESTABLE_STATUSES:
-                raise HTTPException(status_code=400, detail=f"You already have this position (status: {st}).")
+    for p in data.positions:
+        if p.shift_id:
+            a, _ = counts.get(p.shift_id, (0, 0))
+            if p.capacity < a:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"'{p.role_type}' already has {a} people booked, so it needs at least {a} spots."
+                )
 
-        # --- Capacity (checked under the lock) -------------------------------------------
-        if shift_status != "OPEN" or (shift.spots_filled or 0) >= (shift.capacity or 1):
-            raise HTTPException(status_code=400, detail="This position just filled up.")
-
-        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
-
-        decision, source = await evaluate_shift_request(db=db, worker=worker, shift=shift, venue=shift.venue)
-        status_val = (decision.value if hasattr(decision, "value") else str(decision)).lower()
-        now = datetime.now(timezone.utc)
-
-        if replaced is not None:
-            replaced.status = "withdrawn"
-            replaced.status_reason = f"Switched to {shift.role_type}"
-
-        if status_val == "approved":
-            shift.spots_filled = (shift.spots_filled or 0) + 1
-            if shift.spots_filled >= (shift.capacity or 1):
-                shift.status = "FILLED"
-
-        if existing is not None:
-            req = existing
-            req.status = status_val
-            req.approval_source = source
-            req.approved_by_user_id = None
-            req.approved_at = now if status_val == "approved" else None
-            req.check_in_time = None
-            req.check_in_verified = False
-            req.check_out_time = None
-            req.check_out_verified = False
-            req.dropped_at = None
-            req.status_reason = None
-            req.pay_rate = None
-            req.notes = _clean_note(note)
-            req.created_at = now
-        else:
-            req = ShiftRequest(
-                shift_id=shift.id,
-                worker_id=worker.id,
-                status=status_val,
-                approval_source=source,
-                approved_at=now if status_val == "approved" else None,
-                notes=_clean_note(note),
-            )
-            db.add(req)
-
-        await db.flush()
-        req_id = req.id          # read before commit (commit may expire attributes)
-        await db.commit()
-        return req_id
-    except HTTPException:
-        await db.rollback()
-        raise
-    except Exception as e:
-        await db.rollback()
-        logger.exception("request_position failed")
-        raise HTTPException(status_code=500, detail=f"Could not request this position: {e}")
-
-
-async def withdraw_request(db: AsyncSession, worker: User, request_id: UUID) -> Optional[UUID]:
-    """Worker cancels their own WAITING request. Commits. Returns the event id (or None)."""
     try:
-        row = (await db.execute(
-            select(ShiftRequest, Shift.event_id)
-            .join(Shift, ShiftRequest.shift_id == Shift.id)
-            .where(ShiftRequest.id == request_id, ShiftRequest.worker_id == worker.id)
-            .with_for_update(of=ShiftRequest)
-        )).first()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Request not found.")
-        req, event_id = row
-        if (req.status or "").lower() not in PENDING_STATUSES:
-            raise HTTPException(
-                status_code=400,
-                detail="Only requests that are still waiting for approval can be withdrawn. Booked shifts can be dropped or handed off from My Schedule.",
+        # Phase 26.2: work out what changed so booked workers are told
+        tz_name = await db.scalar(select(Venue.timezone).where(Venue.id == event.venue_id)) or "America/New_York"
+        new_title = data.title.strip()[:255]
+        new_start, new_end = _as_utc(data.start_time), _as_utc(data.end_time)
+        changes = []
+        if _as_utc(event.start_time) != new_start or _as_utc(event.end_time) != new_end:
+            changes.append(
+                f"Time changed: {_fmt_range(event.start_time, event.end_time, tz_name)} → {_fmt_range(new_start, new_end, tz_name)}"
             )
-        req.status = "withdrawn"
-        req.status_reason = None
+        if (event.title or "") != new_title:
+            changes.append(f"Renamed to \u201c{new_title}\u201d")
+        if _clean(event.notes) != _clean(data.notes):
+            changes.append("Event notes updated")
+        if _clean(event.staff_notes) != _clean(data.staff_notes):
+            changes.append("Staff-only notes updated")
+
+        event.title = new_title
+        event.start_time = new_start
+        event.end_time = new_end
+        event.notes = _clean(data.notes)
+        event.staff_notes = _clean(data.staff_notes)
+        if changes:
+            event.info_updated_at = datetime.now(timezone.utc)
+            event.info_change = "; ".join(changes)
+
+        remove_ids = [s.id for s in existing if s.id not in keep_ids]
+        if remove_ids:
+            await db.execute(delete(Shift).where(Shift.id.in_(remove_ids)))
+
+        for p in data.positions:
+            if p.shift_id:
+                s = by_id[p.shift_id]
+                _apply_position(s, p, event, track_changes=True)
+                if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
+                    s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
+            else:
+                s = Shift(
+                    venue_id=event.venue_id, event_id=event.id,
+                    created_by_user_id=event.created_by_user_id, spots_filled=0, status="OPEN",
+                )
+                _apply_position(s, p, event)
+                db.add(s)
+
         await db.commit()
-        return event_id          # plain value from the query row, safe after commit
     except HTTPException:
         await db.rollback()
         raise
     except Exception as e:
         await db.rollback()
-        logger.exception("withdraw_request failed")
-        raise HTTPException(status_code=500, detail=f"Could not withdraw this request: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update event: {str(e)}")
 
 
-async def withdraw_other_pending_in_event(
-    db: AsyncSession,
-    worker_id: UUID,
-    event_id: Optional[UUID],
-    keep_shift_id: UUID,
-    reason: str,
-) -> int:
-    """
-    When a worker gets booked on one position, close their other WAITING requests in the same
-    event. Does NOT commit (the caller's transaction does). Returns how many were closed.
-    """
-    if event_id is None:
-        return 0
-    rows = (await db.execute(
-        select(ShiftRequest)
-        .join(Shift, ShiftRequest.shift_id == Shift.id)
-        .where(
-            ShiftRequest.worker_id == worker_id,
-            Shift.event_id == event_id,
-            Shift.id != keep_shift_id,
-            func.lower(ShiftRequest.status).in_(PENDING_STATUSES),
-        )
-    )).scalars().all()
-    for r in rows:
-        r.status = "withdrawn"
-        r.status_reason = reason
-    return len(rows)
-```
-
-**Re-request rules:**
-* Only a **withdrawn** request can be re-opened.
-* `dropped`, `rejected`, `removed`, `no_show`, `transferred` and `cancelled` stay on record, because reliability scoring depends on them. The worker gets a plain-English message instead.
-
----
-
-## 3. Backend — NEW FILE `backend/src/services/listings.py`
-
-```python
-"""
-Phase 26.1: Worker-facing event listings. One listing = one event with its positions.
-
-* Never exposes other workers (only counts).
-* Hidden pay stays hidden unless the viewer is booked on that position, manages the venue,
-  or is an admin.
-* `booking` tells THIS viewer whether a position books instantly or needs approval
-  (same decision function the request endpoint uses).
-"""
-from collections import defaultdict
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional
-from uuid import UUID
-
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.models import ShiftEvent, Shift, ShiftRequest, Venue, VenueWhitelist, User, RequestStatus
-from src.schemas import EventListing, ListingPosition, ListingVenue, ListingMyRequest
-from src.services.auto_confirm import decide_approval
-from src.services.shift_views import viewer_managed_venue_ids
-from src.services.booking import (
-    as_utc, ACTIVE_STATUSES, ASSIGNED_STATUSES, BOOKED_STATUSES, PENDING_STATUSES,
-)
-
-MAX_EVENTS = 200
-WORKED_STATUSES = ("approved", "confirmed", "checked_in", "completed", "transferred")
-
-
-def _f(v) -> Optional[float]:
-    return float(v) if v is not None else None
-
-
-async def build_listings(
-    db: AsyncSession,
-    user: User,
-    *,
-    venue_id: Optional[UUID] = None,
-    days: int = 60,
-    event_id: Optional[UUID] = None,
-) -> List[EventListing]:
-    """
-    List mode (event_id None): upcoming, not-cancelled events in the next `days` days that have
-    at least one open spot OR where the viewer has an active request.
-    Single mode (event_id given): that event, whatever its state (used by the details modal).
-    """
-    now = datetime.now(timezone.utc)
-
-    q = select(ShiftEvent)
-    if event_id is not None:
-        q = q.where(ShiftEvent.id == event_id)
-    else:
-        q = q.where(
-            ShiftEvent.cancelled_at.is_(None),
-            ShiftEvent.start_time > now,
-            ShiftEvent.start_time <= now + timedelta(days=days),
-        )
-        if venue_id is not None:
-            q = q.where(ShiftEvent.venue_id == venue_id)
-        q = q.order_by(ShiftEvent.start_time.asc()).limit(MAX_EVENTS)
-    events = (await db.execute(q)).scalars().all()
-    if not events:
-        return []
-
-    event_ids = [e.id for e in events]
-    venue_ids = {e.venue_id for e in events}
-
+async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail:
     shifts = (await db.execute(
         select(Shift)
-        .where(Shift.event_id.in_(event_ids), func.upper(Shift.status) != "CANCELLED")
+        .where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
         .order_by(Shift.created_at.asc(), Shift.role_type.asc())
     )).scalars().all()
-    shifts_by_event = defaultdict(list)
-    for s in shifts:
-        shifts_by_event[s.event_id].append(s)
-
-    venues = {
-        v.id: v for v in (await db.execute(select(Venue).where(Venue.id.in_(venue_ids)))).scalars().all()
-    }
-
-    # The viewer's own requests on these positions
-    mine = {}
-    if shifts:
-        for r in (await db.execute(
-            select(ShiftRequest).where(
-                ShiftRequest.worker_id == user.id,
-                ShiftRequest.shift_id.in_([s.id for s in shifts]),
-            )
-        )).scalars().all():
-            mine[r.shift_id] = r
-
-    whitelisted = set((await db.execute(
-        select(VenueWhitelist.venue_id).where(
-            VenueWhitelist.worker_id == user.id,
-            VenueWhitelist.is_active == True,
-            VenueWhitelist.venue_id.in_(venue_ids),
-        )
-    )).scalars().all())
-    worked = set((await db.execute(
-        select(Shift.venue_id)
-        .join(ShiftRequest, ShiftRequest.shift_id == Shift.id)
-        .where(
-            ShiftRequest.worker_id == user.id,
-            Shift.venue_id.in_(venue_ids),
-            func.lower(ShiftRequest.status).in_(WORKED_STATUSES),
-        )
-        .distinct()
-    )).scalars().all())
-
-    managed = await viewer_managed_venue_ids(db, user)   # None = admin (sees all pay)
-
-    # The viewer's booked shifts, for "overlaps your shift" warnings
-    bookings = (await db.execute(
-        select(Shift.event_id, Shift.title, Shift.start_time, Shift.end_time, Venue.name)
-        .join(ShiftRequest, ShiftRequest.shift_id == Shift.id)
-        .join(Venue, Venue.id == Shift.venue_id)
-        .where(
-            ShiftRequest.worker_id == user.id,
-            func.lower(ShiftRequest.status).in_(BOOKED_STATUSES),
-            Shift.end_time > now,
-        )
-    )).all()
-
-    out: List[EventListing] = []
-    for ev in events:
-        venue = venues.get(ev.venue_id)
-        if venue is None:
-            continue
-        ev_shifts = shifts_by_event.get(ev.id, [])
-        start, end = as_utc(ev.start_time), as_utc(ev.end_time)
-        hours = round(max(0.0, (end - start).total_seconds() / 3600.0), 2)
-        can_see_all_pay = managed is None or venue.id in managed
-
-        positions: List[ListingPosition] = []
-        my_request: Optional[ListingMyRequest] = None
-        for s in ev_shifts:
-            r = mine.get(s.id)
-            my_status = (r.status or "").lower() if r is not None else None
-            if r is not None and my_status in ACTIVE_STATUSES:
-                my_request = ListingMyRequest(
-                    request_id=r.id, shift_id=s.id, role_type=s.role_type,
-                    status=my_status, note=r.notes,
-                )
-            visible = (not s.hide_rate) or can_see_all_pay or (my_status in ASSIGNED_STATUSES)
-            rate = _f(s.hourly_rate) if visible else None
-            rate_max = _f(s.hourly_rate_max) if visible else None
-            cap = s.capacity if s.capacity is not None else 1
-            left = max(0, cap - (s.spots_filled or 0))
-            is_open = (s.status or "").upper() == "OPEN" and left > 0
-            decision, _src = decide_approval(s, venue, user, venue.id in whitelisted)
-            positions.append(ListingPosition(
+    counts = await _request_counts(db, [s.id for s in shifts])
+    return EventDetail(
+        id=event.id,
+        venue_id=event.venue_id,
+        title=event.title,
+        start_time=event.start_time,
+        end_time=event.end_time,
+        notes=event.notes,
+        staff_notes=event.staff_notes,
+        cancelled=event.cancelled_at is not None,
+        cancel_reason=event.cancel_reason,
+        positions=[
+            EventDetailPosition(
                 shift_id=s.id,
-                role_type=s.role_type or "Worker",
-                role_notes=s.description,
-                hourly_rate=rate,
-                hourly_rate_max=rate_max,
+                role_type=s.role_type,
+                capacity=s.capacity,
+                spots_filled=s.spots_filled or 0,
+                assigned_count=counts.get(s.id, (0, 0))[0],
+                pending_count=counts.get(s.id, (0, 0))[1],
+                hourly_rate=float(s.hourly_rate),
+                hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
                 hide_rate=bool(s.hide_rate),
                 tips_eligible=bool(s.tips_eligible),
                 tip_pool=bool(s.tip_pool),
-                capacity=cap,
-                spots_left=left,
-                status="OPEN" if is_open else "FILLED",
-                booking="instant" if decision == RequestStatus.APPROVED else "approval",
-                est_pay_min=round(rate * hours, 2) if rate is not None else None,
-                est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
-                my_status=my_status,
-                my_status_reason=r.status_reason if r is not None else None,
-            ))
+                role_notes=s.description,
+                staff_notes=s.staff_notes,
+                approval_mode=s.approval_mode or "venue_default",
+                status=s.status or "OPEN",
+            )
+            for s in shifts
+        ],
+    )
 
-        open_positions = [p for p in positions if p.status == "OPEN"]
-        if event_id is None and not open_positions and my_request is None:
-            continue   # list mode: nothing to request and nothing of mine here
 
-        conflict = None
-        if my_request is None or my_request.status not in ASSIGNED_STATUSES:
-            for b_event_id, b_title, b_start, b_end, b_venue in bookings:
-                if b_event_id == ev.id:
-                    continue
-                if as_utc(b_start) < end and as_utc(b_end) > start:
-                    conflict = f"{b_venue} · {b_title}"
-                    break
+async def backfill_missing_events(db: AsyncSession) -> int:
+    """Gives every shift without an event_id an event (grouped by venue + title + times). Idempotent."""
+    orphans = (await db.execute(
+        select(Shift).where(Shift.event_id.is_(None)).order_by(Shift.start_time.asc())
+    )).scalars().all()
+    if not orphans:
+        return 0
+    groups: Dict[Tuple, ShiftEvent] = {}
+    try:
+        for s in orphans:
+            key = (s.venue_id, s.title, s.start_time, s.end_time)
+            if key not in groups:
+                ev = ShiftEvent(
+                    venue_id=s.venue_id, created_by_user_id=s.created_by_user_id,
+                    title=s.title, start_time=s.start_time, end_time=s.end_time,
+                )
+                db.add(ev)
+                await db.flush()
+                groups[key] = ev
+            s.event_id = groups[key].id
+            if s.is_shift_auto_confirm and (s.approval_mode or "venue_default") == "venue_default":
+                s.approval_mode = "auto"
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return len(orphans)
 
-        priced = [p for p in positions if p.hourly_rate is not None]
-        started = start <= now
-        cancelled = ev.cancelled_at is not None
-        can_request = (
-            not cancelled
-            and not started
-            and bool(open_positions)
-            and conflict is None
-            and (my_request is None or my_request.status in PENDING_STATUSES)
+
+# ------------------------------------------------------------------------------
+# Phase 26: Cancel + duplicate
+# ------------------------------------------------------------------------------
+async def cancel_shifts(db: AsyncSession, event: ShiftEvent, shift_ids: Optional[List], reason: Optional[str]) -> int:
+    """Cancel all positions (shift_ids=None) or some positions. Returns how many requests were cancelled."""
+    now = datetime.now(timezone.utc)
+    reason = _clean(reason)
+    if not reason:
+        raise HTTPException(status_code=400, detail="Please give a reason. Staff will see it.")
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="This event is already cancelled.")
+    if _as_utc(event.start_time) <= now:
+        raise HTTPException(
+            status_code=400,
+            detail="This event has already started. Remove individual people or fix the time sheet instead."
         )
 
-        out.append(EventListing(
-            event_id=ev.id,
-            title=ev.title,
-            notes=ev.notes,
-            start_time=ev.start_time,
-            end_time=ev.end_time,
+    q = select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+    if shift_ids is not None:
+        q = q.where(Shift.id.in_(shift_ids))
+    shifts = (await db.execute(q)).scalars().all()
+    if shift_ids is not None and not shifts:
+        raise HTTPException(status_code=404, detail="Position not found or already cancelled.")
+
+    try:
+        ids = [s.id for s in shifts]
+        for s in shifts:
+            s.status = "CANCELLED"
+            s.cancelled_at = now
+            s.cancel_reason = reason
+            s.spots_filled = 0
+        affected = 0
+        if ids:
+            res = await db.execute(
+                update(ShiftRequest)
+                .where(
+                    ShiftRequest.shift_id.in_(ids),
+                    func.lower(ShiftRequest.status).in_(ACTIVE_REQUEST_STATUSES),
+                )
+                .values(status="cancelled", status_reason=reason)
+                .execution_options(synchronize_session=False)
+            )
+            affected = res.rowcount or 0
+        await db.flush()
+        remaining = await db.scalar(
+            select(func.count(Shift.id)).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+        )
+        if not remaining:
+            event.cancelled_at = now
+            event.cancel_reason = reason
+        await db.commit()
+        return affected
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to cancel: {str(e)}")
+
+
+async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date]) -> List[ShiftEvent]:
+    """Copy an event to each date, keeping the same local start time in the venue's timezone."""
+    unique_dates = sorted(set(dates or []))
+    if not unique_dates:
+        raise HTTPException(status_code=400, detail="Pick at least one date.")
+    if len(unique_dates) > 26:
+        raise HTTPException(status_code=400, detail="You can make up to 26 copies at a time.")
+
+    tz = ZoneInfo(venue.timezone or "America/New_York")
+    start_local = _as_utc(event.start_time).astimezone(tz)
+    duration = _as_utc(event.end_time) - _as_utc(event.start_time)
+    now = datetime.now(timezone.utc)
+
+    shifts = (await db.execute(
+        select(Shift)
+        .where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+        .order_by(Shift.created_at.asc())
+    )).scalars().all()
+    if not shifts:
+        raise HTTPException(status_code=400, detail="Nothing to copy: every position is cancelled.")
+
+    positions = [
+        EventPositionInput(
+            role_type=s.role_type,
+            capacity=s.capacity,
+            hourly_rate=float(s.hourly_rate),
+            hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
+            hide_rate=bool(s.hide_rate),
+            tips_eligible=bool(s.tips_eligible),
+            tip_pool=bool(s.tip_pool),
+            role_notes=s.description,
+            staff_notes=s.staff_notes,
+            approval_mode=s.approval_mode or "venue_default",
+        )
+        for s in shifts
+    ]
+
+    starts = []
+    for d in unique_dates:
+        new_start = datetime.combine(d, start_local.time().replace(tzinfo=None), tzinfo=tz).astimezone(timezone.utc)
+        if new_start <= now:
+            raise HTTPException(status_code=400, detail=f"{d.isoformat()} is in the past.")
+        starts.append(new_start)
+
+    created = []
+    for new_start in starts:
+        ev = await create_event_with_positions(db, venue, user, EventCreate(
+            venue_id=venue.id,
+            title=event.title,
+            start_time=new_start,
+            end_time=new_start + duration,
+            notes=event.notes,
+            staff_notes=event.staff_notes,
+            positions=positions,
+        ))
+        created.append(ev)
+    return created
+```
+
+---
+
+## 5. Backend — NEW FILE `backend/src/services/worker_calendar.py`
+
+```python
+"""
+Phase 26.2: The worker's own calendar, plus "did they read it?" tracking.
+
+A booked worker must acknowledge the shift info when:
+* the shift has any notes they haven't acknowledged yet (venue, event, position or staff-only notes), or
+* the manager changed the time / notes / pay after the worker booked or last acknowledged.
+Staff-only notes are shown only to people BOOKED on the shift (and to managers / admins).
+"""
+from datetime import datetime, timezone, timedelta
+from typing import Optional, List
+from uuid import UUID
+
+from fastapi import HTTPException
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models import Shift, ShiftEvent, ShiftRequest, Venue, TimeEntry, User
+from src.schemas import WorkerCalendarItem, WorkerCalendarResponse, ListingVenue
+from src.services.booking import as_utc, ASSIGNED_STATUSES, PENDING_STATUSES
+
+CALENDAR_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES + ("cancelled", "removed", "no_show")
+DEFAULT_PAST = timedelta(days=60)
+DEFAULT_FUTURE = timedelta(days=180)
+MAX_SPAN = timedelta(days=400)
+
+
+def latest_info_update(event: Optional[ShiftEvent], shift: Shift) -> Optional[datetime]:
+    stamps = [as_utc(d) for d in (
+        event.info_updated_at if event is not None else None,
+        shift.info_updated_at,
+    ) if d is not None]
+    return max(stamps) if stamps else None
+
+
+def info_change_text(event: Optional[ShiftEvent], shift: Shift) -> Optional[str]:
+    parts = []
+    if event is not None and event.info_change:
+        parts.append(event.info_change)
+    if shift.info_change:
+        parts.append(f"{shift.role_type}: {shift.info_change}")
+    return " · ".join(parts) or None
+
+
+def has_any_notes(venue: Optional[Venue], event: Optional[ShiftEvent], shift: Shift) -> bool:
+    values = [shift.description, shift.staff_notes]
+    if event is not None:
+        values += [event.notes, event.staff_notes]
+    if venue is not None:
+        values += [venue.default_shift_notes, venue.dress_code, venue.arrival_instructions]
+    return any((v or "").strip() for v in values)
+
+
+def needs_ack(
+    *,
+    booked: bool,
+    has_notes: bool,
+    updated_at: Optional[datetime],
+    seen_at: Optional[datetime],
+    booked_at: Optional[datetime],
+) -> bool:
+    """True = show the "Please read" flag until the worker taps "Got it"."""
+    if not booked:
+        return False
+    if seen_at is None:
+        if has_notes:
+            return True
+        return updated_at is not None and booked_at is not None and as_utc(updated_at) > as_utc(booked_at)
+    return updated_at is not None and as_utc(updated_at) > as_utc(seen_at)
+
+
+async def build_worker_calendar(
+    db: AsyncSession,
+    user: User,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> WorkerCalendarResponse:
+    now = datetime.now(timezone.utc)
+    range_start = as_utc(start) if start else now - DEFAULT_PAST
+    range_end = as_utc(end) if end else now + DEFAULT_FUTURE
+    if range_end <= range_start:
+        raise HTTPException(status_code=400, detail="end must be after start.")
+    if range_end - range_start > MAX_SPAN:
+        raise HTTPException(status_code=400, detail="Pick a range of 400 days or less.")
+
+    rows = (await db.execute(
+        select(ShiftRequest, Shift)
+        .join(Shift, ShiftRequest.shift_id == Shift.id)
+        .where(
+            ShiftRequest.worker_id == user.id,
+            func.lower(ShiftRequest.status).in_(CALENDAR_STATUSES),
+            Shift.start_time < range_end,
+            Shift.end_time > range_start,
+        )
+        .order_by(Shift.start_time.asc())
+    )).all()
+    if not rows:
+        return WorkerCalendarResponse(range_start=range_start, range_end=range_end, unread_count=0, items=[])
+
+    shifts = [s for _, s in rows]
+    event_ids = {s.event_id for s in shifts if s.event_id}
+    venue_ids = {s.venue_id for s in shifts}
+    events = {}
+    if event_ids:
+        events = {e.id: e for e in (await db.execute(
+            select(ShiftEvent).where(ShiftEvent.id.in_(event_ids))
+        )).scalars().all()}
+    venues = {v.id: v for v in (await db.execute(
+        select(Venue).where(Venue.id.in_(venue_ids))
+    )).scalars().all()}
+
+    open_entries = set((await db.execute(
+        select(TimeEntry.shift_id).where(
+            TimeEntry.worker_id == user.id,
+            TimeEntry.shift_id.in_([s.id for s in shifts]),
+            TimeEntry.clock_out_time.is_(None),
+        )
+    )).scalars().all())
+
+    items: List[WorkerCalendarItem] = []
+    for req, s in rows:
+        venue = venues.get(s.venue_id)
+        if venue is None:
+            continue
+        event = events.get(s.event_id) if s.event_id else None
+        status = (req.status or "").lower()
+        booked = status in ASSIGNED_STATUSES
+        start_utc, end_utc = as_utc(s.start_time), as_utc(s.end_time)
+        hours = round(max(0.0, (end_utc - start_utc).total_seconds() / 3600.0), 2)
+
+        show_pay = booked or not s.hide_rate
+        ev_staff = event.staff_notes if event is not None else None
+        updated = latest_info_update(event, s)
+        seen = req.info_seen_at
+        booked_at = req.approved_at or req.created_at
+        flag = needs_ack(
+            booked=booked,
+            has_notes=has_any_notes(venue, event, s),
+            updated_at=updated,
+            seen_at=seen,
+            booked_at=booked_at,
+        )
+        # Only describe changes the worker hasn't seen, and only ones made after they booked.
+        change = None
+        if booked and updated is not None:
+            reference = seen or booked_at
+            if reference is None or updated > as_utc(reference):
+                change = info_change_text(event, s)
+
+        items.append(WorkerCalendarItem(
+            request_id=req.id,
+            shift_id=s.id,
+            event_id=s.event_id,
+            status=status,
+            status_reason=req.status_reason,
+            booked=booked,
+            title=(event.title if event is not None else s.title) or "Shift",
+            role_type=s.role_type or "Worker",
+            start_time=s.start_time,
+            end_time=s.end_time,
             hours=hours,
             venue=ListingVenue(
                 id=venue.id,
@@ -648,710 +768,695 @@ async def build_listings(
                 timezone=venue.timezone or "America/New_York",
                 logo_url=venue.logo_url,
                 phone=venue.phone,
-                lat=_f(venue.lat),
-                lng=_f(venue.lng),
+                lat=float(venue.lat) if venue.lat is not None else None,
+                lng=float(venue.lng) if venue.lng is not None else None,
                 dress_code=venue.dress_code,
                 arrival_instructions=venue.arrival_instructions,
                 default_shift_notes=venue.default_shift_notes,
             ),
-            positions=positions,
-            total_capacity=sum(p.capacity for p in positions),
-            total_spots_left=sum(p.spots_left for p in open_positions),
-            open_positions=len(open_positions),
-            pay_min=min((p.hourly_rate for p in priced), default=None),
-            pay_max=max(((p.hourly_rate_max or p.hourly_rate) for p in priced), default=None),
-            any_tips=any(p.tips_eligible for p in positions),
-            any_instant=any(p.booking == "instant" for p in open_positions),
-            on_team=(venue.id in whitelisted) or (venue.id in worked),
-            my_request=my_request,
-            conflict=conflict,
-            cancelled=cancelled,
-            cancel_reason=ev.cancel_reason,
-            started=started,
-            can_request=can_request,
+            hourly_rate=float(s.hourly_rate) if (show_pay and s.hourly_rate is not None) else None,
+            hourly_rate_max=float(s.hourly_rate_max) if (show_pay and s.hourly_rate_max is not None) else None,
+            pay_rate=float(req.pay_rate) if (booked and req.pay_rate is not None) else None,
+            tips_eligible=bool(s.tips_eligible),
+            tip_pool=bool(s.tip_pool),
+            event_notes=event.notes if event is not None else None,
+            role_notes=s.description,
+            event_staff_notes=ev_staff if booked else None,
+            position_staff_notes=s.staff_notes if booked else None,
+            staff_notes_locked=(not booked) and bool((ev_staff or "").strip() or (s.staff_notes or "").strip()),
+            info_change=change,
+            info_updated_at=updated,
+            info_seen_at=seen,
+            needs_ack=flag,
+            clocked_in=(status == "checked_in") or (s.id in open_entries),
+            cancelled=(event is not None and event.cancelled_at is not None) or (s.status or "").upper() == "CANCELLED",
+            cancel_reason=(event.cancel_reason if event is not None and event.cancelled_at is not None else s.cancel_reason),
         ))
-    return out
+
+    unread = sum(1 for i in items if i.needs_ack and as_utc(i.end_time) > now)
+    return WorkerCalendarResponse(range_start=range_start, range_end=range_end, unread_count=unread, items=items)
+
+
+async def acknowledge_info(db: AsyncSession, user: User, request_id: UUID) -> datetime:
+    """Worker taps "Got it". Only for their own booked shifts. Commits."""
+    try:
+        req = await db.scalar(
+            select(ShiftRequest).where(ShiftRequest.id == request_id, ShiftRequest.worker_id == user.id)
+        )
+        if req is None:
+            raise HTTPException(status_code=404, detail="Shift not found.")
+        if (req.status or "").lower() not in ASSIGNED_STATUSES:
+            raise HTTPException(status_code=400, detail="Only booked shifts can be marked as read.")
+        stamp = datetime.now(timezone.utc)
+        req.info_seen_at = stamp
+        await db.commit()
+        return stamp
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Could not save: {e}")
 ```
+
+**Rules in plain words:**
+* A booked worker is flagged **PLEASE READ** the first time the shift has any notes (venue arrival, dress code, venue notes, event notes, position notes, staff notes).
+* They are flagged **UPDATED** whenever the manager changes the time, title, notes, staff notes, position pay or position notes after the worker booked or last tapped "Got it".
+* The "what changed" text only covers the **latest** edit.
 
 ---
 
-## 4. Backend — `backend/src/schemas.py` (EDITS)
+## 6. Backend — NEW FILE `backend/src/routers/me.py`
 
-### 4a. Append this block at the very END of the file
-```python
-# ------------------------------------------------------------------------------
-# Phase 26.1: Worker event listings (one card per event)
-# ------------------------------------------------------------------------------
-class ListingVenue(BaseModel):
-    id: UUID
-    name: str
-    address: Optional[str] = None
-    timezone: str = "America/New_York"
-    logo_url: Optional[str] = None
-    phone: Optional[str] = None
-    lat: Optional[float] = None
-    lng: Optional[float] = None
-    dress_code: Optional[str] = None
-    arrival_instructions: Optional[str] = None
-    default_shift_notes: Optional[str] = None
-
-
-class ListingPosition(BaseModel):
-    shift_id: UUID
-    role_type: str
-    role_notes: Optional[str] = None
-    hourly_rate: Optional[float] = None        # None = hidden from this viewer
-    hourly_rate_max: Optional[float] = None
-    hide_rate: bool = False
-    tips_eligible: bool = False
-    tip_pool: bool = False
-    capacity: int
-    spots_left: int
-    status: str                                # OPEN | FILLED
-    booking: str                               # instant | approval  (for THIS viewer)
-    est_pay_min: Optional[float] = None        # hours x rate, None when pay is hidden
-    est_pay_max: Optional[float] = None
-    my_status: Optional[str] = None            # viewer's request status on this position
-    my_status_reason: Optional[str] = None
-
-
-class ListingMyRequest(BaseModel):
-    request_id: UUID
-    shift_id: UUID
-    role_type: str
-    status: str
-    note: Optional[str] = None
-
-
-class EventListing(BaseModel):
-    event_id: UUID
-    title: str
-    notes: Optional[str] = None
-    start_time: datetime
-    end_time: datetime
-    hours: float
-    venue: ListingVenue
-    positions: List[ListingPosition]
-    total_capacity: int
-    total_spots_left: int
-    open_positions: int
-    pay_min: Optional[float] = None
-    pay_max: Optional[float] = None
-    any_tips: bool = False
-    any_instant: bool = False
-    on_team: bool = False
-    my_request: Optional[ListingMyRequest] = None     # the viewer's ACTIVE request in this event
-    conflict: Optional[str] = None                    # "Blue Bar · Friday Service" when it overlaps a booked shift
-    cancelled: bool = False
-    cancel_reason: Optional[str] = None
-    started: bool = False
-    can_request: bool = True
-
-
-class PositionRequestBody(BaseModel):
-    shift_id: UUID
-    note: Optional[str] = Field(None, max_length=500)
-    switch: bool = False
-
-
-class PositionRequestResult(BaseModel):
-    request_id: UUID
-    status: str
-    instant: bool
-    message: str
-    listing: Optional[EventListing] = None
-```
-(`Field` is already imported at the top of `schemas.py`: `from pydantic import BaseModel, EmailStr, Field`.)
-
-### 4b. `class ShiftRequestResponse` — add one field
-Find:
-```python
-    status_reason: Optional[str] = None
-    pay_rate: Optional[float] = None
-    shift: Optional[ShiftResponse] = None
-```
-Replace with:
-```python
-    status_reason: Optional[str] = None
-    pay_rate: Optional[float] = None
-    notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
-    shift: Optional[ShiftResponse] = None
-```
-
-### 4c. `class RosterPerson` — add one field at the end
-Find:
-```python
-    clocked_in: bool = False
-    clocked_out: bool = False
-
-
-class EventPosition(BaseModel):
-```
-Replace with:
-```python
-    clocked_in: bool = False
-    clocked_out: bool = False
-    note: Optional[str] = None          # Phase 26.1: worker's note with their request
-
-
-class EventPosition(BaseModel):
-```
-
-### 4d. `class PublicVenueEvent` — add `event_id`
-Find:
-```python
-class PublicVenueEvent(BaseModel):
-    event_key: str
-```
-Replace with:
-```python
-class PublicVenueEvent(BaseModel):
-    event_key: str
-    event_id: Optional[UUID] = None     # Phase 26.1: opens the worker listing modal
-```
-
----
-
-## 5. Backend — NEW FILE `backend/src/routers/listings.py`
-
-| Method | URL | Auth | Purpose |
+| Method | URL | Auth | Returns |
 |---|---|---|---|
-| GET | `/api/listings?venue_id=&days=60` | any logged-in user | Upcoming events with open spots, or with the viewer's active request |
-| GET | `/api/listings/{event_id}` | any logged-in user | One event in any state (for the modal) |
-| POST | `/api/listings/{event_id}/request` | `require_worker` (worker + platform_admin) | Body `{shift_id, note?, switch?}` → `PositionRequestResult` |
-| POST | `/api/listings/requests/{request_id}/withdraw` | `require_worker` | Withdraw own **waiting** request → `PositionRequestResult` |
+| GET | `/api/me/calendar?start=&end=` | any logged-in user (their own data only) | `WorkerCalendarResponse`. Default range: 60 days back to 180 days ahead. Max 400 days. |
+| POST | `/api/me/requests/{request_id}/ack` | any logged-in user; must own the request and be **booked** | `InfoAckResponse` (sets `shift_requests.info_seen_at = now`) |
 
-Error codes:
-* **409** when the worker already has a request in the event (waiting without `switch`, or booked).
-* **400** for full, started, cancelled or blocked positions.
-* **404** when not found.
-
-`request_position` and `withdraw_request` do their own `try/except` with `await db.rollback()`.
+`acknowledge_info()` does its own `try/except` with `await db.rollback()`.
 
 ```python
 """
-Phase 26.1: Worker "Find Shifts" — one listing per event, one request per event.
+Phase 26.2: The signed-in worker's own calendar and "I've read this" acknowledgements.
 """
-from typing import List, Optional
+from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import User, ShiftRequest
-from src.schemas import EventListing, PositionRequestBody, PositionRequestResult
-from src.auth import get_current_user, require_worker
-from src.services.listings import build_listings
-from src.services.booking import request_position, withdraw_request
+from src.models import User
+from src.schemas import WorkerCalendarResponse, InfoAckResponse
+from src.auth import get_current_user
+from src.services.worker_calendar import build_worker_calendar, acknowledge_info
 
-router = APIRouter(prefix="/api/listings", tags=["Listings"])
+router = APIRouter(prefix="/api/me", tags=["My Schedule"])
 
 
-@router.get("", response_model=List[EventListing])
-async def list_open_events(
-    venue_id: Optional[UUID] = Query(None, description="Only this venue"),
-    days: int = Query(60, ge=1, le=180, description="How far ahead to look"),
+@router.get("/calendar", response_model=WorkerCalendarResponse)
+async def my_calendar(
+    start: Optional[datetime] = Query(None, description="Range start (ISO, default: 60 days ago)"),
+    end: Optional[datetime] = Query(None, description="Range end (ISO, default: 180 days ahead)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upcoming events with open spots (or with the viewer's active request), soonest first."""
-    return await build_listings(db, current_user, venue_id=venue_id, days=days)
+    """Every shift the worker is booked on or waiting for (plus cancelled / removed / no-show) in the range."""
+    return await build_worker_calendar(db, current_user, start, end)
 
 
-@router.get("/{event_id}", response_model=EventListing)
-async def get_event_listing(
-    event_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """One event for the details modal, in any state (full, started, cancelled)."""
-    rows = await build_listings(db, current_user, event_id=event_id)
-    if not rows:
-        raise HTTPException(status_code=404, detail="Event not found.")
-    return rows[0]
-
-
-@router.post("/{event_id}/request", response_model=PositionRequestResult, status_code=status.HTTP_201_CREATED)
-async def request_event_position(
-    event_id: UUID,
-    body: PositionRequestBody,
-    current_user: User = Depends(require_worker),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Request one position in this event. switch=true replaces the worker's WAITING request
-    for another position in the same event. request_position() commits or rolls back.
-    """
-    request_id = await request_position(
-        db, current_user, body.shift_id,
-        note=body.note, switch=body.switch, expected_event_id=event_id,
-    )
-    await db.refresh(current_user)
-    req_status = (await db.scalar(select(ShiftRequest.status).where(ShiftRequest.id == request_id)) or "").lower()
-    instant = req_status in ("approved", "confirmed")
-    rows = await build_listings(db, current_user, event_id=event_id)
-    return PositionRequestResult(
-        request_id=request_id,
-        status=req_status,
-        instant=instant,
-        message="You're booked! It's on your schedule." if instant else "Request sent. The manager will review it.",
-        listing=rows[0] if rows else None,
-    )
-
-
-@router.post("/requests/{request_id}/withdraw", response_model=PositionRequestResult)
-async def withdraw_my_request(
+@router.post("/requests/{request_id}/ack", response_model=InfoAckResponse)
+async def acknowledge_shift_info(
     request_id: UUID,
-    current_user: User = Depends(require_worker),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Worker withdraws their own request that is still waiting for approval."""
-    event_id = await withdraw_request(db, current_user, request_id)
-    await db.refresh(current_user)
-    rows = await build_listings(db, current_user, event_id=event_id) if event_id else []
-    return PositionRequestResult(
-        request_id=request_id,
-        status="withdrawn",
-        instant=False,
-        message="Request withdrawn.",
-        listing=rows[0] if rows else None,
-    )
+    """Worker confirms they've read the latest notes / changes for a booked shift."""
+    stamp = await acknowledge_info(db, current_user, request_id)
+    return InfoAckResponse(request_id=request_id, info_seen_at=stamp)
 ```
 
 ---
 
-## 6. Backend — `backend/src/main.py` (EDIT)
-
-Add the import directly under the timesheets import:
+## 7. Backend — `backend/src/main.py` (EDIT)
+Directly under `from src.routers.listings import router as listings_router` add:
 ```python
-from src.routers.timesheets import router as timesheets_router
-from src.routers.listings import router as listings_router
+from src.routers.me import router as me_router
 ```
-Add the include directly under `app.include_router(timesheets_router)`:
+Directly under `app.include_router(listings_router)` add:
 ```python
-app.include_router(timesheets_router)
-app.include_router(listings_router)
+app.include_router(me_router)
 ```
-Change nothing else in `main.py`.
 
 ---
 
-## 7. Backend — `backend/src/routers/shifts.py` (EDITS)
+## 8. Backend — `backend/src/services/listings.py` (EDITS)
 
-### 7a. Imports
-Directly under `from src.services.shift_views import to_shift_responses` add:
+### 8a. In the `positions.append(ListingPosition(...))` call, find:
 ```python
-from src.services.booking import request_position, withdraw_other_pending_in_event
-```
-(Leave the existing `evaluate_shift_request, check_double_booking` import as it is.)
-
-### 7b. `request_shift` (the `POST /{shift_id}/request` endpoint)
-Keep the decorator, signature and docstring. **Replace the entire function body after the docstring** (from the line `    # 1. Fetch shift with its venue` down to and including the final `    return resp` of this function) with:
-```python
-    # Phase 26.1: all booking rules (one request per event, locking, re-request rules) live in
-    # services/booking.request_position. This legacy endpoint is kept for older screens.
-    request_id = await request_position(db, current_user, shift_id)
-    await db.refresh(current_user)
-
-    res = await db.execute(
-        select(ShiftRequest)
-        .options(
-            selectinload(ShiftRequest.shift).selectinload(Shift.venue),
-            selectinload(ShiftRequest.worker)
-        )
-        .where(ShiftRequest.id == request_id)
-    )
-    req_obj = res.scalar_one()
-    status_val = (req_obj.status or "").lower()
-    resp = ShiftRequestResponse.model_validate(req_obj)
-    if req_obj.shift is not None:
-        shown = await to_shift_responses(
-            db, [req_obj.shift], current_user,
-            reveal_shift_ids={req_obj.shift_id} if status_val == "approved" else set(),
-        )
-        resp.shift = shown[0]
-    return resp
-```
-
-### 7c. `update_shift_request_status` — close other waiting requests when a manager approves
-Find (inside the `if target_clean == "approved" and prev_status != "approved":` branch):
-```python
-        shift_req.approved_by_user_id = current_user.id
-        shift_req.approved_at = datetime.utcnow()
+                my_status=my_status,
+                my_status_reason=r.status_reason if r is not None else None,
+            ))
 ```
 Replace with:
 ```python
-        shift_req.approved_by_user_id = current_user.id
-        shift_req.approved_at = datetime.utcnow()
-        # Phase 26.1: booked on this position -> close their other waiting requests in the event
-        await withdraw_other_pending_in_event(
-            db, shift_req.worker_id, shift.event_id, shift.id,
-            "Booked on another position for this event",
-        )
+                my_status=my_status,
+                my_status_reason=r.status_reason if r is not None else None,
+                staff_notes=s.staff_notes if (can_see_all_pay or my_status in ASSIGNED_STATUSES) else None,
+            ))
 ```
-
----
-
-## 8. Backend — `backend/src/routers/transfers.py` (EDITS)
-
-### 8a. Import
-Directly under `from src.services.auto_confirm import check_double_booking` add:
+### 8b. At the end of the `out.append(EventListing(...))` call, find:
 ```python
-from src.services.booking import withdraw_other_pending_in_event
-```
-
-### 8b. Manager approves a transfer
-In the manager review endpoint, find the end of the "create or update ShiftRequest for to_worker_id" block:
-```python
-                approved_at=datetime.now(timezone.utc)
-            )
-            db.add(to_req)
-```
-Replace with (same indentation. The new call sits **after** the `if to_req: … else: …` block, still inside `if action == "approve":`):
-```python
-                approved_at=datetime.now(timezone.utc)
-            )
-            db.add(to_req)
-        # Phase 26.1: the new holder's other waiting requests in this event are closed
-        await withdraw_other_pending_in_event(
-            db, transfer.to_worker_id, shift.event_id, shift.id,
-            "Took over a handed-off shift for this event",
-        )
-```
-
----
-
-## 9. Backend — `backend/src/routers/venues.py` (EDIT)
-
-In `get_venue_events`, the `RosterPerson(...)` constructor: find
-```python
-            clocked_out=clocked_out or req.check_out_time is not None,
-        )
-        if person.status in ASSIGNED_STATUSES:
+            started=started,
+            can_request=can_request,
+        ))
 ```
 Replace with:
 ```python
-            clocked_out=clocked_out or req.check_out_time is not None,
-            note=req.notes,
-        )
-        if person.status in ASSIGNED_STATUSES:
+            started=started,
+            can_request=can_request,
+            staff_notes=ev.staff_notes if (
+                can_see_all_pay or (my_request is not None and my_request.status in ASSIGNED_STATUSES)
+            ) else None,
+        ))
 ```
 
 ---
 
-## 10. Backend — `backend/src/services/venue_public.py` (EDIT)
+## 9. Backend — `backend/src/routers/venues.py` (EDITS in `get_venue_events` + import)
 
-In `build_public_events`, find:
+### 9a. Import — directly under `from src.services.shift_views import to_shift_responses`
 ```python
-            events[key] = {
-                "event_key": key,
+from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
+```
+
+### 9b. Remember each request's read time. Find:
+```python
+    assigned_by_shift = defaultdict(list)
+    requested_by_shift = defaultdict(list)
+    for req, worker in req_rows:
 ```
 Replace with:
 ```python
-            events[key] = {
-                "event_key": key,
-                "event_id": s.event_id,
+    assigned_by_shift = defaultdict(list)
+    requested_by_shift = defaultdict(list)
+    ack_by_request = {}   # Phase 26.2: request_id -> (info_seen_at, booked_at)
+    for req, worker in req_rows:
+        ack_by_request[req.id] = (req.info_seen_at, req.approved_at or req.created_at)
+```
+
+### 9c. Load full event rows and compute "Read" per booked person. Find:
+```python
+    event_ids = {s.event_id for s in shifts if s.event_id}
+    event_notes, event_cancel = {}, {}
+    if event_ids:
+        for eid, enotes, ecan, ereason in (await db.execute(
+            select(ShiftEvent.id, ShiftEvent.notes, ShiftEvent.cancelled_at, ShiftEvent.cancel_reason)
+            .where(ShiftEvent.id.in_(event_ids))
+        )).all():
+            event_notes[eid] = enotes
+            event_cancel[eid] = (ecan is not None, ereason)
+```
+Replace with:
+```python
+    event_ids = {s.event_id for s in shifts if s.event_id}
+    event_notes, event_cancel = {}, {}
+    event_objs = {}   # Phase 26.2
+    if event_ids:
+        for ev_obj in (await db.execute(
+            select(ShiftEvent).where(ShiftEvent.id.in_(event_ids))
+        )).scalars().all():
+            event_objs[ev_obj.id] = ev_obj
+            event_notes[ev_obj.id] = ev_obj.notes
+            event_cancel[ev_obj.id] = (ev_obj.cancelled_at is not None, ev_obj.cancel_reason)
+    venue_obj = await db.scalar(select(Venue).where(Venue.id == venue_id))
+
+    # Phase 26.2: has each booked person read the latest info?
+    for s in shifts:
+        ev_obj = event_objs.get(s.event_id) if s.event_id else None
+        notes_exist = has_any_notes(venue_obj, ev_obj, s)
+        updated = latest_info_update(ev_obj, s)
+        for person in assigned_by_shift[s.id]:
+            seen_at, booked_at = ack_by_request.get(person.request_id, (None, None))
+            if notes_exist or updated is not None:
+                person.info_seen = not needs_ack(
+                    booked=True, has_notes=notes_exist, updated_at=updated,
+                    seen_at=seen_at, booked_at=booked_at,
+                )
+```
+
+### 9d. Event dict — find:
+```python
+                "description": event_notes.get(s.event_id) if s.event_id else None,
+                "cancelled":
+```
+Replace with (only the first two lines shown change; the rest of the `"cancelled": …` line stays):
+```python
+                "description": event_notes.get(s.event_id) if s.event_id else None,
+                "staff_notes": event_objs[s.event_id].staff_notes if s.event_id in event_objs else None,
+                "cancelled":
+```
+
+### 9e. `EventPosition(...)` — find:
+```python
+            role_notes=s.description,
+            approval_mode=s.approval_mode or "venue_default",
+            capacity=s.capacity if s.capacity is not None else 1,
+```
+Replace with:
+```python
+            role_notes=s.description,
+            staff_notes=s.staff_notes,
+            approval_mode=s.approval_mode or "venue_default",
+            capacity=s.capacity if s.capacity is not None else 1,
 ```
 
 ---
 
-## 11. Frontend — NEW FILE `frontend/src/utils/listingFormat.js`
+## 10. Frontend — `frontend/src/utils/listingFormat.js` (EDIT: append at end of file)
 
 ```javascript
-/**
- * Phase 26.1: Small helpers for worker event listings (Find Shifts cards + details modal).
- */
-import { dayKey, fmtDate } from './venueTime';
+// ---- Phase 26.2: calendar helpers -------------------------------------------------------
 
-export const PENDING_STATUSES = ['pending', 'pending_manager_approval'];
-export const BOOKED_STATUSES = ['approved', 'confirmed', 'checked_in'];
-export const ACTIVE_STATUSES = [...PENDING_STATUSES, ...BOOKED_STATUSES, 'completed'];
-
-/** Friendly words for every request status a worker can see. */
-export const STATUS_LABELS = {
-  pending: 'Waiting for approval',
-  pending_manager_approval: 'Waiting for approval',
-  approved: 'Confirmed',
-  confirmed: 'Confirmed',
-  checked_in: 'Clocked in',
-  completed: 'Completed',
-  rejected: 'Not selected',
-  dropped: 'Released',
-  transferred: 'Handed off',
-  cancelled: 'Cancelled by venue',
-  removed: 'Removed by manager',
-  no_show: 'Marked no-show',
-  withdrawn: 'Withdrawn',
-};
-
-const money = (n) => {
-  const v = Number(n);
-  if (Number.isNaN(v)) return '';
-  return Number.isInteger(v) ? `$${v}` : `$${v.toFixed(2)}`;
-};
-const wholeMoney = (n) => `$${Math.round(Number(n)).toLocaleString()}`;
-
-/** "5 hrs", "5.5 hrs", "1 hr" */
-export function hoursText(hours) {
-  const h = Math.round(Number(hours || 0) * 10) / 10;
-  return `${h} ${h === 1 ? 'hr' : 'hrs'}`;
+/** "2026-10-03" for the calendar day the moment falls on in timezone `tz` (device zone if missing). */
+export function localDateKey(value, tz) {
+  const d = value instanceof Date ? value : new Date(value);
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || undefined, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(d);
+  } catch (e) {
+    return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  }
 }
 
-/** Headline pay for a card: "$28–$35/hr", "$30/hr" or null when every rate is hidden. */
-export function listingPayText(listing) {
-  if (listing?.pay_min === null || listing?.pay_min === undefined) return null;
-  const lo = Number(listing.pay_min);
-  const hi = listing.pay_max === null || listing.pay_max === undefined ? lo : Number(listing.pay_max);
-  return hi > lo ? `${money(lo)}–${money(hi)}/hr` : `${money(lo)}/hr`;
+/** "2026-10-03" for a plain calendar Date built on the device (month grid cells). */
+export function gridDateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
-/** "≈ $140" or "≈ $140–$175" for one position, or null when pay is hidden. */
-export function estPayText(position) {
-  if (position?.est_pay_min === null || position?.est_pay_min === undefined) return null;
-  const lo = Number(position.est_pay_min);
-  const hi = position.est_pay_max === null || position.est_pay_max === undefined ? lo : Number(position.est_pay_max);
-  return hi > lo ? `≈ ${wholeMoney(lo)}–${wholeMoney(hi)}` : `≈ ${wholeMoney(lo)}`;
+/** "Starts in 2 days 4 hrs" / "Starts in 45 min" / "Happening now" / "Ended" */
+export function countdownText(start, end) {
+  const now = Date.now();
+  const s = new Date(start).getTime();
+  const e = new Date(end).getTime();
+  if (now >= e) return 'Ended';
+  if (now >= s) return 'Happening now';
+  const mins = Math.round((s - now) / 60000);
+  if (mins < 60) return `Starts in ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) {
+    const rem = mins % 60;
+    return `Starts in ${hrs} hr${hrs === 1 ? '' : 's'}${rem ? ` ${rem} min` : ''}`;
+  }
+  const days = Math.floor(hrs / 24);
+  const remH = hrs % 24;
+  return `Starts in ${days} day${days === 1 ? '' : 's'}${remH ? ` ${remH} hr${remH === 1 ? '' : 's'}` : ''}`;
 }
 
-/** Day group heading in the venue's timezone: "Today", "Tomorrow" or "Fri, Oct 3". */
-export function dayGroupLabel(value, tz) {
-  const k = dayKey(value, tz);
-  if (k === dayKey(new Date(), tz)) return 'Today';
-  if (k === dayKey(new Date(Date.now() + 86400000), tz)) return 'Tomorrow';
-  return fmtDate(value, tz);
-}
-
-/** True when the event starts on the venue-local "today" / "tomorrow". */
-export function isOnDay(value, tz, offsetDays) {
-  return dayKey(value, tz) === dayKey(new Date(Date.now() + offsetDays * 86400000), tz);
-}
-
-export function mapsUrl(venue) {
-  if (!venue) return '#';
-  const q = venue.address || (venue.lat && venue.lng ? `${venue.lat},${venue.lng}` : venue.name);
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q || '')}`;
-}
-
-function icsStamp(value) {
-  return new Date(value).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-}
-
-function icsEscape(text) {
-  return String(text || '')
-    .replace(/\\/g, '\\\\')
-    .replace(/\n/g, '\\n')
-    .replace(/,/g, '\\,')
-    .replace(/;/g, '\\;');
-}
-
-/** Download a one-event .ics file (works with Google, Apple and Outlook calendars). */
-export function downloadIcs({ uid, title, start, end, location, description }) {
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//ShiftBoard//Shift//EN',
-    'CALSCALE:GREGORIAN',
-    'BEGIN:VEVENT',
-    `UID:${uid || `${icsStamp(start)}@shiftboard`}`,
-    `DTSTAMP:${icsStamp(new Date())}`,
-    `DTSTART:${icsStamp(start)}`,
-    `DTEND:${icsStamp(end)}`,
-    `SUMMARY:${icsEscape(title)}`,
-    location ? `LOCATION:${icsEscape(location)}` : null,
-    description ? `DESCRIPTION:${icsEscape(description)}` : null,
-    'END:VEVENT',
-    'END:VCALENDAR',
-  ].filter(Boolean);
-  const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${String(title || 'shift').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.ics`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+/** Visual style per calendar item, by the worker's status. */
+export function calendarTone(item) {
+  const s = String(item?.status || '').toLowerCase();
+  if (item?.cancelled || ['cancelled', 'removed', 'no_show'].includes(s)) {
+    return { key: 'off', chip: 'bg-slate-800/80 text-slate-400 border-slate-700 line-through', dot: 'bg-slate-500', label: STATUS_LABELS[s] || 'Cancelled' };
+  }
+  if (s === 'completed') {
+    return { key: 'done', chip: 'bg-slate-700/60 text-slate-200 border-slate-600', dot: 'bg-slate-400', label: 'Completed' };
+  }
+  if (PENDING_STATUSES.includes(s)) {
+    return { key: 'waiting', chip: 'bg-amber-500/15 text-amber-200 border-amber-500/50 border-dashed', dot: 'bg-amber-400', label: 'Waiting for approval' };
+  }
+  if (s === 'checked_in') {
+    return { key: 'now', chip: 'bg-sky-500/20 text-sky-100 border-sky-400/60', dot: 'bg-sky-400', label: 'Clocked in' };
+  }
+  return { key: 'booked', chip: 'bg-emerald-500/20 text-emerald-100 border-emerald-500/60', dot: 'bg-emerald-400', label: 'Confirmed' };
 }
 ```
 
 ---
 
-## 12. Frontend — NEW FILE `frontend/src/components/EventListingCard.jsx`
+## 11. Frontend — NEW FILE `frontend/src/components/WorkerCalendar.jsx`
 
-The whole card is clickable (a `div role="button"`, keyboard accessible). It contains **no** links or buttons inside, because nested interactive elements are invalid.
+This is a custom month grid, **not** react-big-calendar: it's easier to read on phones and uses correct venue-local days. It uses `date-fns` (already installed and pre-bundled).
 
 ```jsx
-import React from 'react';
-import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star } from 'lucide-react';
-import PayLabel from './PayLabel';
-import { fmtTimeRange } from '../utils/venueTime';
+import React, { useMemo, useState } from 'react';
 import {
-  hoursText, listingPayText, estPayText, STATUS_LABELS, PENDING_STATUSES, BOOKED_STATUSES,
+  startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, addMonths, isSameMonth, format,
+} from 'date-fns';
+import {
+  ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertTriangle, MapPin, Clock, Eye, EyeOff, ArrowRight,
+} from 'lucide-react';
+import { fmtTime, fmtTimeRange, fmtLongDate, tzAbbrev } from '../utils/venueTime';
+import {
+  localDateKey, gridDateKey, countdownText, calendarTone, hoursText,
 } from '../utils/listingFormat';
 
-const MAX_ROWS = 4;
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MAX_CHIPS = 3;
 
-function dateParts(value, tz) {
-  const d = new Date(value);
-  const make = (opts) => {
-    try {
-      return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: tz || undefined }).format(d);
-    } catch (e) {
-      return new Intl.DateTimeFormat('en-US', opts).format(d);
-    }
-  };
-  return { month: make({ month: 'short' }).toUpperCase(), day: make({ day: 'numeric' }), weekday: make({ weekday: 'short' }) };
+function entryStart(e) {
+  return e.kind === 'mine' ? e.item.start_time : e.listing.start_time;
 }
 
-export function MyRequestPill({ status, role }) {
-  if (!status) return null;
-  const s = String(status).toLowerCase();
-  const booked = BOOKED_STATUSES.includes(s) || s === 'completed';
-  const waiting = PENDING_STATUSES.includes(s);
-  const cls = booked
-    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-    : waiting
-    ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-    : 'bg-slate-800 text-slate-400 border-slate-700';
-  const text = booked ? `Booked · ${role}` : waiting ? `Requested · ${role}` : STATUS_LABELS[s] || s;
+/** One big, easy-to-read row for the day agenda and the list view. */
+function AgendaRow({ entry, onSelectItem, onSelectListing }) {
+  if (entry.kind === 'open') {
+    const l = entry.listing;
+    const tz = l.venue?.timezone;
+    return (
+      <button
+        type="button"
+        onClick={() => onSelectListing(l)}
+        className="w-full text-left p-3 sm:p-4 rounded-xl border border-dashed border-slate-600 bg-slate-950/40 hover:border-emerald-500/60 transition flex items-center gap-4"
+      >
+        <div className="w-24 sm:w-28 flex-shrink-0">
+          <div className="text-base sm:text-lg font-black text-slate-200 leading-tight">{fmtTime(l.start_time, tz)}</div>
+          <div className="text-[11px] text-slate-500">to {fmtTime(l.end_time, tz)} {tzAbbrev(l.start_time, tz)}</div>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Open shift</div>
+          <div className="text-sm font-bold text-slate-200 truncate">{l.title}</div>
+          <div className="text-xs text-slate-400 truncate">
+            {l.venue?.name} · {l.total_spots_left} spot{l.total_spots_left === 1 ? '' : 's'} open
+          </div>
+        </div>
+        <ArrowRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
+      </button>
+    );
+  }
+
+  const it = entry.item;
+  const tz = it.venue?.timezone;
+  const tone = calendarTone(it);
+  const off = tone.key === 'off';
   return (
-    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border whitespace-nowrap ${cls}`}>
-      {text}
-    </span>
+    <button
+      type="button"
+      onClick={() => onSelectItem(it)}
+      className={`w-full text-left p-3 sm:p-4 rounded-xl border transition flex items-center gap-4 ${
+        it.needs_ack && !off
+          ? 'border-amber-500/70 bg-amber-500/5 hover:bg-amber-500/10'
+          : 'border-slate-800 bg-slate-900 hover:border-slate-600'
+      }`}
+    >
+      <div className="w-24 sm:w-28 flex-shrink-0">
+        <div className={`text-base sm:text-lg font-black leading-tight ${off ? 'text-slate-500 line-through' : 'text-white'}`}>
+          {fmtTime(it.start_time, tz)}
+        </div>
+        <div className="text-[11px] text-slate-400">to {fmtTime(it.end_time, tz)} {tzAbbrev(it.start_time, tz)}</div>
+        <div className="text-[10px] text-slate-500">{hoursText(it.hours)}</div>
+      </div>
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={`w-2 h-2 rounded-full ${tone.dot}`} />
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tone.label}</span>
+          {it.needs_ack && !off && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black">
+              <AlertTriangle className="w-3 h-3" /> {it.info_change ? 'UPDATED' : 'PLEASE READ'}
+            </span>
+          )}
+        </div>
+        <div className={`text-sm font-bold truncate ${off ? 'text-slate-500' : 'text-white'}`}>
+          {it.role_type} · {it.title}
+        </div>
+        <div className="text-xs text-slate-400 flex items-center gap-1 truncate">
+          <MapPin className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{it.venue?.name}</span>
+        </div>
+      </div>
+      <ArrowRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
+    </button>
   );
 }
 
 /**
- * Phase 26.1: One card per event on the worker's Find Shifts tab.
- * The whole card opens the details modal (onOpen).
+ * Phase 26.2: Worker calendar.
+ * Month grid (day cells show time + position on desktop, coloured dots on phones) with the selected
+ * day's agenda below, or a plain list. Days are computed in each venue's own timezone.
+ *
+ * Props:
+ *   items            WorkerCalendarItem[] from GET /api/me/calendar
+ *   openListings     EventListing[] from GET /api/listings (optional overlay)
+ *   onSelectItem(item)       open ShiftDetailsModal
+ *   onSelectListing(listing) open EventListingModal
  */
-export default function EventListingCard({ listing, onOpen }) {
-  const tz = listing.venue?.timezone;
-  const { month, day, weekday } = dateParts(listing.start_time, tz);
-  const pay = listingPayText(listing);
-  const rows = listing.positions.slice(0, MAX_ROWS);
-  const extra = listing.positions.length - rows.length;
-  const mine = listing.my_request;
+export default function WorkerCalendar({ items = [], openListings = [], onSelectItem, onSelectListing }) {
+  const todayKey = gridDateKey(new Date());
+  const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
+  const [selectedKey, setSelectedKey] = useState(todayKey);
+  const [view, setView] = useState('month'); // 'month' | 'list'
+  const [showOpen, setShowOpen] = useState(false);
+  const [showPast, setShowPast] = useState(false);
 
-  const open = () => onOpen && onOpen(listing);
+  // All entries, keyed by venue-local calendar day
+  const entries = useMemo(() => {
+    const list = items.map((item) => ({ kind: 'mine', key: localDateKey(item.start_time, item.venue?.timezone), item }));
+    if (showOpen) {
+      openListings
+        .filter((l) => !l.my_request && l.total_spots_left > 0)
+        .forEach((l) => list.push({ kind: 'open', key: localDateKey(l.start_time, l.venue?.timezone), listing: l }));
+    }
+    list.sort((a, b) => new Date(entryStart(a)) - new Date(entryStart(b)));
+    return list;
+  }, [items, openListings, showOpen]);
+
+  const byDay = useMemo(() => {
+    const m = new Map();
+    entries.forEach((e) => {
+      if (!m.has(e.key)) m.set(e.key, []);
+      m.get(e.key).push(e);
+    });
+    return m;
+  }, [entries]);
+
+  const days = useMemo(
+    () => eachDayOfInterval({ start: startOfWeek(startOfMonth(cursor)), end: endOfWeek(endOfMonth(cursor)) }),
+    [cursor]
+  );
+
+  const nextShift = useMemo(() => {
+    const now = Date.now();
+    return items.find(
+      (i) => i.booked && !i.cancelled && i.status !== 'completed' && new Date(i.end_time).getTime() > now
+    ) || null;
+  }, [items]);
+
+  const selectedEntries = byDay.get(selectedKey) || [];
+  const selectedDate = new Date(`${selectedKey}T12:00:00`);
+
+  const listGroups = useMemo(() => {
+    const groups = [];
+    entries
+      .filter((e) => showPast || e.key >= todayKey)
+      .forEach((e) => {
+        const last = groups[groups.length - 1];
+        if (last && last.key === e.key) last.entries.push(e);
+        else groups.push({ key: e.key, entries: [e] });
+      });
+    return groups;
+  }, [entries, showPast, todayKey]);
+
+  const goToday = () => {
+    setCursor(startOfMonth(new Date()));
+    setSelectedKey(todayKey);
+  };
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          open();
-        }
-      }}
-      className="group bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl cursor-pointer transition hover:border-emerald-600/60 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 flex flex-col"
-    >
-      {/* Header: date tile + title + my status */}
-      <div className="flex items-start gap-3">
-        <div className="flex-shrink-0 w-14 rounded-xl bg-slate-950 border border-slate-800 text-center py-1.5">
-          <div className="text-[10px] font-bold text-emerald-400 tracking-wider">{month}</div>
-          <div className="text-xl font-black text-white leading-none">{day}</div>
-          <div className="text-[10px] text-slate-400 mt-0.5">{weekday}</div>
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="text-base font-bold text-white leading-snug line-clamp-2">{listing.title}</h3>
-            {mine && <MyRequestPill status={mine.status} role={mine.role_type} />}
-          </div>
-          <p className="text-xs font-semibold text-slate-300 mt-0.5 flex items-center gap-1.5">
-            <span className="truncate">{listing.venue?.name}</span>
-            {listing.on_team && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold whitespace-nowrap">
-                <Star className="w-2.5 h-2.5" /> Your venue
-              </span>
-            )}
-          </p>
-          {listing.venue?.address && (
-            <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
-              <MapPin className="w-3 h-3 flex-shrink-0" />
-              <span className="truncate">{listing.venue.address}</span>
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Time + pay */}
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-slate-300 inline-flex items-center gap-1.5">
-          <Clock className="w-3.5 h-3.5 text-emerald-400" />
-          {fmtTimeRange(listing.start_time, listing.end_time, tz)}
-          <span className="text-slate-500">· {hoursText(listing.hours)}</span>
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          {pay ? (
-            <span className="text-base font-black text-emerald-400">{pay}</span>
-          ) : (
-            <span className="text-xs italic text-slate-400">Pay shared when booked</span>
-          )}
-          {listing.any_tips && (
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              + Tips
-            </span>
-          )}
-        </span>
-      </div>
-
-      {/* Positions */}
-      <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/60 divide-y divide-slate-800/70">
-        {rows.map((p) => {
-          const full = p.status !== 'OPEN';
-          const est = estPayText(p);
-          return (
-            <div key={p.shift_id} className={`px-3 py-2 flex items-center justify-between gap-2 ${full ? 'opacity-50' : ''}`}>
-              <div className="min-w-0 flex items-center gap-1.5">
-                {p.booking === 'instant' && !full ? (
-                  <Zap className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" title="Instant book" />
-                ) : (
-                  <ShieldCheck className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Needs approval" />
-                )}
-                <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
-                {p.my_status && <span className="text-[10px] text-amber-300">• you</span>}
+    <div className="space-y-5">
+      {/* Next shift — big and impossible to miss */}
+      {nextShift && (() => {
+        const tz = nextShift.venue?.timezone;
+        return (
+          <button
+            type="button"
+            onClick={() => onSelectItem(nextShift)}
+            className={`w-full text-left rounded-2xl p-4 sm:p-5 border shadow-xl transition ${
+              nextShift.needs_ack
+                ? 'border-amber-500/70 bg-gradient-to-br from-amber-500/10 to-slate-900'
+                : 'border-emerald-600/50 bg-gradient-to-br from-emerald-600/15 to-slate-900 hover:border-emerald-400'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-300">Your next shift</div>
+                <div className="text-xl sm:text-2xl font-black text-white mt-0.5">{fmtLongDate(nextShift.start_time, tz)}</div>
+                <div className="text-lg sm:text-xl font-bold text-emerald-300 flex items-center gap-2">
+                  <Clock className="w-5 h-5" /> {fmtTimeRange(nextShift.start_time, nextShift.end_time, tz)}
+                </div>
+                <div className="text-sm text-slate-300 mt-1 truncate">
+                  {nextShift.role_type} · {nextShift.title} · {nextShift.venue?.name}
+                </div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
-                <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-slate-200 font-semibold" hiddenText="—" />
-                {est && <span className="hidden sm:inline text-slate-500">{est}</span>}
-                <span className={`font-semibold ${full ? 'text-slate-500' : 'text-emerald-300'}`}>
-                  {full ? 'Full' : `${p.spots_left} open`}
+              <div className="flex sm:flex-col items-start sm:items-end gap-2 flex-shrink-0">
+                <span className="px-3 py-1 rounded-full bg-slate-950/70 border border-slate-700 text-xs font-bold text-white">
+                  {countdownText(nextShift.start_time, nextShift.end_time)}
                 </span>
+                {nextShift.needs_ack && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500 text-slate-950 text-[11px] font-black">
+                    <AlertTriangle className="w-3.5 h-3.5" /> {nextShift.info_change ? 'Shift was updated — tap to read' : 'Read the shift notes'}
+                  </span>
+                )}
               </div>
             </div>
-          );
-        })}
-        {extra > 0 && (
-          <div className="px-3 py-1.5 text-[11px] text-slate-400">+{extra} more position{extra === 1 ? '' : 's'}</div>
-        )}
+          </button>
+        );
+      })()}
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setCursor((c) => addMonths(c, -1))} aria-label="Previous month"
+            className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300">
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <h2 className="text-lg font-black text-white min-w-[10rem] text-center">{format(cursor, 'MMMM yyyy')}</h2>
+          <button type="button" onClick={() => setCursor((c) => addMonths(c, 1))} aria-label="Next month"
+            className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300">
+            <ChevronRight className="w-4 h-4" />
+          </button>
+          <button type="button" onClick={goToday}
+            className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-xs font-semibold text-slate-300">
+            Today
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowOpen((v) => !v)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1.5 ${
+              showOpen ? 'bg-slate-800 text-white border-slate-600' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+            }`}
+          >
+            {showOpen ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />} Open shifts
+          </button>
+          <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5">
+            <button type="button" onClick={() => setView('month')}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'month' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}>
+              <CalendarDays className="w-3.5 h-3.5" /> Month
+            </button>
+            <button type="button" onClick={() => setView('list')}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'list' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}>
+              <ListIcon className="w-3.5 h-3.5" /> List
+            </button>
+          </div>
+        </div>
       </div>
 
-      {listing.conflict && (
-        <p className="mt-2 text-[11px] text-amber-300 flex items-center gap-1">
-          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-          <span className="truncate">Overlaps your shift: {listing.conflict}</span>
-        </p>
+      {/* Legend */}
+      <div className="flex flex-wrap gap-3 text-[11px] text-slate-400">
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Confirmed</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Waiting for approval</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-sky-400" /> Clocked in</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-slate-400" /> Done / cancelled</span>
+        {showOpen && <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border border-dashed border-slate-400" /> Open shift</span>}
+        <span className="inline-flex items-center gap-1 text-amber-300"><AlertTriangle className="w-3 h-3" /> Needs your attention</span>
+      </div>
+
+      {view === 'month' ? (
+        <>
+          <div className="rounded-2xl border border-slate-800 overflow-hidden bg-slate-950">
+            <div className="grid grid-cols-7 bg-slate-900 border-b border-slate-800">
+              {WEEKDAYS.map((w) => (
+                <div key={w} className="py-2 text-center text-[10px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">{w}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7">
+              {days.map((d) => {
+                const key = gridDateKey(d);
+                const dayEntries = byDay.get(key) || [];
+                const inMonth = isSameMonth(d, cursor);
+                const isToday = key === todayKey;
+                const isSelected = key === selectedKey;
+                const attention = dayEntries.some((e) => e.kind === 'mine' && e.item.needs_ack && calendarTone(e.item).key !== 'off');
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setSelectedKey(key)}
+                    className={`relative flex flex-col justify-start min-h-[3.5rem] sm:min-h-[6.5rem] p-1 sm:p-1.5 text-left border-b border-r border-slate-800/70 transition ${
+                      inMonth ? 'bg-slate-950' : 'bg-slate-950/40'
+                    } ${isSelected ? 'ring-2 ring-inset ring-emerald-500 bg-emerald-500/5' : 'hover:bg-slate-900'}`}
+                  >
+                    <div className="w-full flex items-center justify-between">
+                      <span
+                        className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
+                          isToday ? 'bg-emerald-500 text-slate-950' : inMonth ? 'text-slate-200' : 'text-slate-600'
+                        }`}
+                      >
+                        {d.getDate()}
+                      </span>
+                      {attention && <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
+                    </div>
+
+                    {/* Phones: dots */}
+                    <div className="flex flex-wrap gap-0.5 mt-1 sm:hidden">
+                      {dayEntries.slice(0, 4).map((e, i) =>
+                        e.kind === 'open' ? (
+                          <span key={i} className="w-1.5 h-1.5 rounded-full border border-slate-400" />
+                        ) : (
+                          <span key={i} className={`w-1.5 h-1.5 rounded-full ${calendarTone(e.item).dot}`} />
+                        )
+                      )}
+                    </div>
+
+                    {/* Tablet / desktop: time + position chips */}
+                    <div className="hidden sm:block w-full mt-1 space-y-0.5">
+                      {dayEntries.slice(0, MAX_CHIPS).map((e, i) => {
+                        if (e.kind === 'open') {
+                          const l = e.listing;
+                          return (
+                            <div key={i} className="px-1 py-0.5 rounded border border-dashed border-slate-600 text-[10px] text-slate-400 truncate">
+                              {fmtTime(l.start_time, l.venue?.timezone)} Open
+                            </div>
+                          );
+                        }
+                        const it = e.item;
+                        const tone = calendarTone(it);
+                        return (
+                          <div key={i} className={`px-1 py-0.5 rounded border text-[10px] font-semibold truncate ${tone.chip}`}>
+                            {fmtTime(it.start_time, it.venue?.timezone)} {it.role_type}
+                          </div>
+                        );
+                      })}
+                      {dayEntries.length > MAX_CHIPS && (
+                        <div className="text-[10px] text-slate-500 px-1">+{dayEntries.length - MAX_CHIPS} more</div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Selected day agenda */}
+          <div>
+            <h3 className="text-sm font-bold text-white mb-2">
+              {selectedKey === todayKey ? 'Today · ' : ''}
+              {format(selectedDate, 'EEEE, MMMM d')}
+            </h3>
+            {selectedEntries.length === 0 ? (
+              <p className="text-xs text-slate-500 py-6 text-center bg-slate-900/40 border border-slate-800 rounded-xl">
+                Nothing on this day.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {selectedEntries.map((e, i) => (
+                  <AgendaRow key={i} entry={e} onSelectItem={onSelectItem} onSelectListing={onSelectListing} />
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="space-y-5">
+          <button type="button" onClick={() => setShowPast((v) => !v)} className="text-xs text-slate-400 underline hover:text-white">
+            {showPast ? 'Hide past shifts' : 'Show past shifts'}
+          </button>
+          {listGroups.length === 0 ? (
+            <p className="text-xs text-slate-500 py-10 text-center bg-slate-900/40 border border-slate-800 rounded-xl">
+              Nothing scheduled yet.
+            </p>
+          ) : (
+            listGroups.map((g) => (
+              <section key={g.key}>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                  {g.key === todayKey ? 'Today · ' : ''}
+                  {format(new Date(`${g.key}T12:00:00`), 'EEEE, MMMM d')}
+                </h3>
+                <div className="space-y-2">
+                  {g.entries.map((e, i) => (
+                    <AgendaRow key={i} entry={e} onSelectItem={onSelectItem} onSelectListing={onSelectListing} />
+                  ))}
+                </div>
+              </section>
+            ))
+          )}
+        </div>
       )}
-
-      {/* Footer */}
-      <div className="mt-auto pt-3 flex items-center justify-between gap-2">
-        <span className="text-[11px] text-slate-400 inline-flex items-center gap-1">
-          <Users className="w-3.5 h-3.5" />
-          {listing.total_spots_left > 0
-            ? `${listing.total_spots_left} spot${listing.total_spots_left === 1 ? '' : 's'} open`
-            : 'Fully staffed'}
-          {listing.any_instant && <span className="text-emerald-400 font-semibold"> · Instant book</span>}
-        </span>
-        <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
-          {mine ? 'View details' : 'View & request'}
-          <ChevronRight className="w-4 h-4" />
-        </span>
-      </div>
     </div>
   );
 }
@@ -1359,22 +1464,14 @@ export default function EventListingCard({ listing, onOpen }) {
 
 ---
 
-## 13. Frontend — NEW FILE `frontend/src/components/EventListingModal.jsx`
-
-Uses the shared `ModalShell` (z-[60], scrolling backdrop, Esc closes the top modal only). It is two columns on desktop and stacked on phones.
-
-The primary button changes with the situation:
-* **Book instantly** or **Send request** for a new request
-* **Switch to X** when the worker already has a waiting request in this event
-* **Withdraw request** for their own waiting position
-* **Add to calendar** and **Go to My Schedule** when they're booked
+## 12. Frontend — NEW FILE `frontend/src/components/ShiftDetailsModal.jsx`
 
 ```jsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Calendar, Clock, MapPin, Phone, Shirt, Info, StickyNote, Navigation, CalendarPlus,
-  Zap, ShieldCheck, AlertTriangle, CheckCircle2, ExternalLink, Briefcase,
+  Calendar, Clock, MapPin, Phone, Shirt, Info, StickyNote, Navigation, CalendarPlus, Lock,
+  AlertTriangle, CheckCircle2, MessageSquare, ExternalLink, DollarSign, Briefcase,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
@@ -1382,416 +1479,255 @@ import PayLabel from './PayLabel';
 import TipBadge from './TipBadge';
 import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
 import {
-  hoursText, estPayText, mapsUrl, downloadIcs, STATUS_LABELS, PENDING_STATUSES,
+  hoursText, mapsUrl, downloadIcs, countdownText, calendarTone,
 } from '../utils/listingFormat';
 
-// Statuses on a position that the server will refuse to re-open.
-const LOCKED_POSITION_STATUSES = ['rejected', 'removed', 'no_show', 'dropped', 'transferred', 'cancelled'];
-
-function pickDefault(listing, prev) {
-  if (!listing) return null;
-  if (prev && listing.positions.some((p) => p.shift_id === prev)) return prev;
-  if (listing.my_request) return listing.my_request.shift_id;
-  const open = listing.positions.filter((p) => p.status === 'OPEN');
-  return open.length === 1 ? open[0].shift_id : null;
-}
-
-function InfoBlock({ icon: Icon, label, children }) {
-  if (!children) return null;
+function NoteCard({ icon: Icon, label, text, tone = 'default', badge = null }) {
+  if (!text || !String(text).trim()) return null;
+  const toneCls =
+    tone === 'staff'
+      ? 'border-indigo-500/40 bg-indigo-500/5'
+      : 'border-slate-800 bg-slate-950/60';
   return (
-    <div className="flex gap-2.5">
-      <Icon className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
-      <div className="min-w-0">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
-        <div className="text-xs text-slate-200 whitespace-pre-line break-words">{children}</div>
+    <div className={`p-3 rounded-xl border ${toneCls}`}>
+      <div className="flex items-center gap-1.5 mb-1">
+        <Icon className={`w-4 h-4 ${tone === 'staff' ? 'text-indigo-300' : 'text-emerald-400'}`} />
+        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">{label}</span>
+        {badge}
       </div>
+      <p className="text-sm text-slate-100 whitespace-pre-line break-words leading-relaxed">{text}</p>
     </div>
   );
 }
 
 /**
- * Phase 26.1: Event details + request flow for workers.
+ * Phase 26.2: Everything a worker needs for one of THEIR shifts, in one place.
+ * Big date and time, countdown, where to go, pay, and every note (venue, event, position,
+ * and staff-only notes once they're confirmed). Booked workers confirm "Got it" so
+ * the manager knows they've read the latest info.
+ *
  * Props:
- *   eventId         (required) event to show; always re-fetched from GET /api/listings/{eventId}
- *   initial         optional listing object from the card list (shown instantly while loading)
- *   onClose()       close the modal
- *   onChanged(res)  called after a successful request / switch / withdraw (parent refreshes lists)
- *   onGoToSchedule() optional; shows a "Go to My Schedule" button when the worker is booked
+ *   item               WorkerCalendarItem
+ *   onClose()
+ *   onAcknowledged(requestId, seenAtIso)   parent updates its copy / refetches
+ *   onOpenBoard(shiftLike)                 optional: opens ShiftBoardModal
  */
-export default function EventListingModal({ eventId, initial = null, onClose, onChanged, onGoToSchedule }) {
-  const [listing, setListing] = useState(initial);
-  const [loading, setLoading] = useState(!initial);
-  const [loadError, setLoadError] = useState('');
-  const [selectedId, setSelectedId] = useState(() => pickDefault(initial, null));
-  const [note, setNote] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState(null); // { type: 'success' | 'info' | 'error', message }
+export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpenBoard }) {
+  const [acking, setAcking] = useState(false);
+  const [ackError, setAckError] = useState('');
+  const [ackedNow, setAckedNow] = useState(false);
 
-  const applyListing = (next, resetSelection = false) => {
-    setListing(next);
-    setSelectedId((prev) => pickDefault(next, resetSelection ? null : prev));
-  };
+  if (!item) return null;
+  const tz = item.venue?.timezone;
+  const tone = calendarTone(item);
+  const off = tone.key === 'off';
+  const mustRead = item.needs_ack && !ackedNow && !off;
 
-  const reload = async (resetSelection = false) => {
+  const acknowledge = async () => {
+    setAcking(true);
+    setAckError('');
     try {
-      const res = await api.get(`/listings/${eventId}`);
-      applyListing(res.data, resetSelection);
-      setLoadError('');
+      const res = await api.post(`/me/requests/${item.request_id}/ack`);
+      setAckedNow(true);
+      if (onAcknowledged) onAcknowledged(item.request_id, res.data?.info_seen_at);
     } catch (err) {
-      setLoadError(err.response?.data?.detail || 'Could not load this event.');
-    }
-  };
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(!initial);
-    api
-      .get(`/listings/${eventId}`)
-      .then((res) => {
-        if (alive) applyListing(res.data, false);
-      })
-      .catch((err) => {
-        if (alive) setLoadError(err.response?.data?.detail || 'Could not load this event.');
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventId]);
-
-  const sendRequest = async (isSwitch) => {
-    if (!selectedId) return;
-    setSubmitting(true);
-    setResult(null);
-    try {
-      const res = await api.post(`/listings/${eventId}/request`, {
-        shift_id: selectedId,
-        note: note.trim() ? note.trim() : null,
-        switch: Boolean(isSwitch),
-      });
-      setResult({ type: res.data.instant ? 'success' : 'info', message: res.data.message });
-      if (res.data.listing) applyListing(res.data.listing, true);
-      setNote('');
-      if (onChanged) onChanged(res.data);
-    } catch (err) {
-      setResult({ type: 'error', message: err.response?.data?.detail || 'Could not send your request.' });
-      reload(false);
+      setAckError(err.response?.data?.detail || 'Could not save. Try again.');
     } finally {
-      setSubmitting(false);
+      setAcking(false);
     }
   };
-
-  const withdraw = async () => {
-    if (!listing?.my_request) return;
-    setSubmitting(true);
-    setResult(null);
-    try {
-      const res = await api.post(`/listings/requests/${listing.my_request.request_id}/withdraw`);
-      setResult({ type: 'info', message: res.data.message });
-      if (res.data.listing) applyListing(res.data.listing, true);
-      if (onChanged) onChanged(res.data);
-    } catch (err) {
-      setResult({ type: 'error', message: err.response?.data?.detail || 'Could not withdraw your request.' });
-      reload(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  if (!listing) {
-    return (
-      <ModalShell title="Shift details" onClose={onClose} maxWidth="max-w-md">
-        <p className="text-sm text-center py-10 text-slate-400">
-          {loading ? 'Loading…' : loadError || 'Event not found.'}
-        </p>
-      </ModalShell>
-    );
-  }
-
-  const tz = listing.venue?.timezone;
-  const mine = listing.my_request;
-  const mineStatus = mine ? String(mine.status).toLowerCase() : null;
-  const isWaiting = mine && PENDING_STATUSES.includes(mineStatus);
-  const isBooked = mine && !isWaiting;
-  const selected = listing.positions.find((p) => p.shift_id === selectedId) || null;
-  const selectedIsMine = selected && mine && selected.shift_id === mine.shift_id;
-  const bookedPosition = isBooked ? listing.positions.find((p) => p.shift_id === mine.shift_id) : null;
 
   const addToCalendar = () =>
     downloadIcs({
-      uid: `${listing.event_id}@shiftboard`,
-      title: `${listing.title} — ${mine?.role_type || 'Shift'} (${listing.venue?.name || ''})`,
-      start: listing.start_time,
-      end: listing.end_time,
-      location: listing.venue?.address,
-      description: [listing.notes, listing.venue?.arrival_instructions, listing.venue?.dress_code && `Dress code: ${listing.venue.dress_code}`]
-        .filter(Boolean)
-        .join('\n\n'),
+      uid: `${item.request_id}@shiftboard`,
+      title: `${item.role_type} — ${item.title} (${item.venue?.name || ''})`,
+      start: item.start_time,
+      end: item.end_time,
+      location: item.venue?.address,
+      description: [
+        item.venue?.arrival_instructions && `When you arrive: ${item.venue.arrival_instructions}`,
+        item.venue?.dress_code && `Dress code: ${item.venue.dress_code}`,
+        item.event_notes,
+        item.role_notes,
+        item.event_staff_notes,
+        item.position_staff_notes,
+      ].filter(Boolean).join('\n\n'),
     });
-
-  // ---- Footer actions --------------------------------------------------------------------
-  let primary = null;
-  let secondary = null;
-  let blockedReason = null;
-  if (listing.cancelled) {
-    blockedReason = `This event was cancelled${listing.cancel_reason ? `: ${listing.cancel_reason}` : '.'}`;
-  } else if (isBooked) {
-    secondary = (
-      <button type="button" onClick={addToCalendar} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5">
-        <CalendarPlus className="w-4 h-4 text-emerald-400" /> Add to calendar
-      </button>
-    );
-    if (onGoToSchedule) {
-      primary = (
-        <button type="button" onClick={onGoToSchedule} className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold">
-          Go to My Schedule
-        </button>
-      );
-    }
-  } else if (listing.started) {
-    blockedReason = 'This shift has already started.';
-  } else {
-    if (isWaiting) {
-      secondary = (
-        <button type="button" onClick={withdraw} disabled={submitting} className="px-4 py-2 rounded-xl border border-rose-500/50 text-rose-300 hover:bg-rose-500/10 text-xs font-semibold disabled:opacity-50">
-          Withdraw request
-        </button>
-      );
-    }
-    if (listing.conflict) {
-      blockedReason = `This overlaps a shift you're booked on (${listing.conflict}).`;
-    } else if (!selected) {
-      primary = (
-        <button type="button" disabled className="px-5 py-2 rounded-xl bg-slate-800 text-slate-500 text-xs font-bold cursor-not-allowed">
-          Pick a position
-        </button>
-      );
-    } else if (!selectedIsMine) {
-      const label = isWaiting
-        ? `Switch to ${selected.role_type}`
-        : selected.booking === 'instant'
-        ? 'Book instantly'
-        : 'Send request';
-      primary = (
-        <button
-          type="button"
-          onClick={() => sendRequest(isWaiting)}
-          disabled={submitting || !listing.can_request || selected.status !== 'OPEN'}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
-        >
-          {selected.booking === 'instant' && <Zap className="w-4 h-4" />}
-          {submitting ? 'Sending…' : label}
-        </button>
-      );
-    }
-  }
 
   const footer = (
     <>
       <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 mr-auto">
         Close
       </button>
-      {secondary}
-      {primary}
+      {item.booked && !off && (
+        <button type="button" onClick={addToCalendar} className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5">
+          <CalendarPlus className="w-4 h-4 text-emerald-400" /> Add to calendar
+        </button>
+      )}
+      {item.booked && onOpenBoard && (
+        <button
+          type="button"
+          onClick={() => onOpenBoard({ id: item.shift_id, title: item.title, venue: { name: item.venue?.name } })}
+          className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5"
+        >
+          <MessageSquare className="w-4 h-4 text-indigo-400" /> Board
+        </button>
+      )}
+      {mustRead && (
+        <button
+          type="button"
+          onClick={acknowledge}
+          disabled={acking}
+          className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md shadow-amber-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+          <CheckCircle2 className="w-4 h-4" /> {acking ? 'Saving…' : "Got it — I've read this"}
+        </button>
+      )}
     </>
   );
 
-  const showNoteBox = !isBooked && !listing.cancelled && !listing.started && !listing.conflict && selected && !selectedIsMine;
-
   return (
     <ModalShell
-      title={listing.title}
-      subtitle={
-        <span>
-          {listing.venue?.name} · {fmtLongDate(listing.start_time, tz)}
-        </span>
-      }
+      title={`${item.role_type} · ${item.title}`}
+      subtitle={item.venue?.name}
       icon={<Briefcase className="w-5 h-5 text-emerald-400" />}
       onClose={onClose}
       maxWidth="max-w-4xl"
       footer={footer}
     >
-      {result && (
-        <div
-          className={`mb-4 p-3 rounded-xl border text-sm flex items-start gap-2 ${
-            result.type === 'success'
-              ? 'bg-emerald-950/70 border-emerald-700 text-emerald-200'
-              : result.type === 'error'
-              ? 'bg-rose-950/70 border-rose-700 text-rose-200'
-              : 'bg-indigo-950/70 border-indigo-700 text-indigo-200'
-          }`}
-        >
-          {result.type === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-          <span>{result.message}</span>
-        </div>
-      )}
-
-      {blockedReason && (
-        <div className="mb-4 p-3 rounded-xl border border-amber-700/60 bg-amber-950/40 text-amber-200 text-xs flex items-start gap-2">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>{blockedReason}</span>
-        </div>
-      )}
-
-      {isBooked && (
-        <div className="mb-4 p-3 rounded-xl border border-emerald-700/60 bg-emerald-950/40 text-emerald-200 text-sm">
-          <div className="font-bold flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4" /> You're booked as {mine.role_type}
+      {/* Big date & time */}
+      <div className={`rounded-2xl p-4 sm:p-5 border mb-4 ${off ? 'border-slate-700 bg-slate-950/60' : 'border-emerald-600/40 bg-gradient-to-br from-emerald-600/10 to-slate-950'}`}>
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+          <div>
+            <div className={`text-2xl sm:text-3xl font-black ${off ? 'text-slate-500 line-through' : 'text-white'}`}>
+              {fmtLongDate(item.start_time, tz)}
+            </div>
+            <div className={`text-xl sm:text-2xl font-bold mt-1 flex items-center gap-2 ${off ? 'text-slate-500' : 'text-emerald-300'}`}>
+              <Clock className="w-6 h-6" /> {fmtTimeRange(item.start_time, item.end_time, tz)}
+            </div>
+            <div className="text-sm text-slate-400 mt-1">{hoursText(item.hours)}</div>
           </div>
-          <p className="text-xs text-emerald-300/80 mt-1">
-            To change position, drop or hand off this shift from My Schedule first.
-            {bookedPosition && bookedPosition.hourly_rate !== null && (
-              <> Pay: <PayLabel rate={bookedPosition.hourly_rate} rateMax={bookedPosition.hourly_rate_max} className="font-semibold" /></>
+          <div className="flex sm:flex-col items-start sm:items-end gap-2">
+            <span className={`px-3 py-1 rounded-full border text-xs font-bold ${tone.chip.replace('line-through', '')}`}>{tone.label}</span>
+            {!off && (
+              <span className="px-3 py-1 rounded-full bg-slate-950/70 border border-slate-700 text-xs font-bold text-white">
+                {countdownText(item.start_time, item.end_time)}
+              </span>
             )}
-          </p>
+          </div>
+        </div>
+      </div>
+
+      {off && (
+        <div className="mb-4 p-3 rounded-xl border border-rose-700/60 bg-rose-950/40 text-rose-200 text-sm flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>
+            {tone.label}
+            {item.cancel_reason || item.status_reason ? ` — ${item.cancel_reason || item.status_reason}` : ''}. You don't need to go to this shift.
+          </span>
         </div>
       )}
+
+      {mustRead && (
+        <div className="mb-4 p-3 rounded-xl border-2 border-amber-500 bg-amber-500/10 text-amber-100 text-sm flex items-start gap-2">
+          <AlertTriangle className="w-5 h-5 mt-0.5 flex-shrink-0 text-amber-400" />
+          <div>
+            <div className="font-black">{item.info_change ? 'This shift was updated' : 'Please read before your shift'}</div>
+            {item.info_change && <div className="text-xs mt-0.5 text-amber-200">{item.info_change}</div>}
+            <div className="text-xs mt-1 text-amber-200/80">Tap “Got it” at the bottom so your manager knows you've seen it.</div>
+          </div>
+        </div>
+      )}
+      {ackedNow && (
+        <div className="mb-4 p-3 rounded-xl border border-emerald-700 bg-emerald-950/60 text-emerald-200 text-sm flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4" /> Thanks — your manager can see you've read this.
+        </div>
+      )}
+      {ackError && <div className="mb-4 p-3 rounded-xl border border-rose-700 bg-rose-950/60 text-rose-200 text-sm">{ackError}</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-5">
-        {/* LEFT: event + venue info */}
+        {/* LEFT: where + pay */}
         <div className="md:col-span-2 space-y-4">
           <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
-            <InfoBlock icon={Calendar} label="When">
-              {fmtLongDate(listing.start_time, tz)}
-            </InfoBlock>
-            <InfoBlock icon={Clock} label="Hours">
-              {fmtTimeRange(listing.start_time, listing.end_time, tz)} · {hoursText(listing.hours)}
-            </InfoBlock>
-            <InfoBlock icon={MapPin} label="Where">
-              <span className="font-semibold">{listing.venue?.name}</span>
-              {listing.venue?.address ? `\n${listing.venue.address}` : ''}
-            </InfoBlock>
+            <div className="flex gap-2.5">
+              <MapPin className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Where</div>
+                <div className="text-sm font-semibold text-white">{item.venue?.name}</div>
+                {item.venue?.address && <div className="text-xs text-slate-300">{item.venue.address}</div>}
+              </div>
+            </div>
             <div className="flex flex-wrap gap-2 pl-6">
-              <a
-                href={mapsUrl(listing.venue)}
-                target="_blank"
-                rel="noreferrer"
-                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1"
-              >
+              <a href={mapsUrl(item.venue)} target="_blank" rel="noreferrer"
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1">
                 <Navigation className="w-3 h-3 text-emerald-400" /> Directions
               </a>
-              <Link
-                to={`/venues/${listing.venue?.id}`}
-                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1"
-              >
+              <Link to={`/venues/${item.venue?.id}`}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1">
                 <ExternalLink className="w-3 h-3 text-emerald-400" /> Venue profile
               </Link>
             </div>
-            {listing.venue?.phone && (
-              <InfoBlock icon={Phone} label="Venue phone">
-                <a href={`tel:${listing.venue.phone}`} className="underline decoration-slate-600">{listing.venue.phone}</a>
-              </InfoBlock>
+            {item.venue?.phone && (
+              <div className="flex gap-2.5">
+                <Phone className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Venue phone</div>
+                  <a href={`tel:${item.venue.phone}`} className="text-sm text-slate-100 underline decoration-slate-600">{item.venue.phone}</a>
+                </div>
+              </div>
             )}
           </div>
 
-          {(listing.notes || listing.venue?.default_shift_notes || listing.venue?.dress_code || listing.venue?.arrival_instructions) && (
-            <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
-              <InfoBlock icon={StickyNote} label="About this event">{listing.notes}</InfoBlock>
-              <InfoBlock icon={Shirt} label="Dress code">{listing.venue?.dress_code}</InfoBlock>
-              <InfoBlock icon={MapPin} label="When you arrive">{listing.venue?.arrival_instructions}</InfoBlock>
-              <InfoBlock icon={Info} label="Venue notes">{listing.venue?.default_shift_notes}</InfoBlock>
+          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1">
+            <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <DollarSign className="w-3.5 h-3.5 text-emerald-400" /> Pay
             </div>
-          )}
+            {item.pay_rate !== null && item.pay_rate !== undefined ? (
+              <div className="text-lg font-black text-emerald-400">${Number(item.pay_rate).toFixed(2)}/hr <span className="text-xs font-semibold text-slate-400">your rate</span></div>
+            ) : (
+              <PayLabel rate={item.hourly_rate} rateMax={item.hourly_rate_max} className="text-lg font-black text-emerald-400" hiddenText="Pay shared when you're confirmed" />
+            )}
+            <TipBadge shift={item} />
+          </div>
         </div>
 
-        {/* RIGHT: positions */}
+        {/* RIGHT: every note, nothing hidden behind a click */}
         <div className="md:col-span-3 space-y-3">
-          <div className="flex items-baseline justify-between">
-            <h4 className="text-sm font-bold text-white">Positions</h4>
-            <span className="text-[11px] text-slate-400">You can request one position per event</span>
-          </div>
+          <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+            <StickyNote className="w-4 h-4 text-emerald-400" /> Shift notes
+          </h4>
+          <NoteCard icon={MapPin} label="When you arrive" text={item.venue?.arrival_instructions} />
+          <NoteCard icon={Shirt} label="Dress code" text={item.venue?.dress_code} />
+          <NoteCard icon={Calendar} label="About this event" text={item.event_notes} />
+          <NoteCard icon={Briefcase} label={`${item.role_type} notes`} text={item.role_notes} />
+          <NoteCard
+            icon={Lock}
+            label="For confirmed staff"
+            text={item.event_staff_notes}
+            tone="staff"
+            badge={<span className="ml-auto text-[10px] text-indigo-300">Only booked staff see this</span>}
+          />
+          <NoteCard
+            icon={Lock}
+            label={`For confirmed ${item.role_type} staff`}
+            text={item.position_staff_notes}
+            tone="staff"
+            badge={<span className="ml-auto text-[10px] text-indigo-300">Only booked staff see this</span>}
+          />
+          <NoteCard icon={Info} label="Venue notes" text={item.venue?.default_shift_notes} />
 
-          <div className="space-y-2" role="radiogroup" aria-label="Positions">
-            {listing.positions.map((p) => {
-              const full = p.status !== 'OPEN';
-              const ps = p.my_status ? String(p.my_status).toLowerCase() : null;
-              const isMine = mine && mine.shift_id === p.shift_id;
-              const locked = LOCKED_POSITION_STATUSES.includes(ps);
-              const disabled = !isMine && (full || locked || isBooked || listing.cancelled || listing.started);
-              const active = selectedId === p.shift_id;
-              const est = estPayText(p);
-              return (
-                <button
-                  key={p.shift_id}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  disabled={disabled}
-                  onClick={() => setSelectedId(p.shift_id)}
-                  className={`w-full text-left p-3 rounded-xl border transition ${
-                    active
-                      ? 'border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500/40'
-                      : 'border-slate-800 bg-slate-950/60 hover:border-slate-600'
-                  } ${disabled ? 'opacity-50 cursor-not-allowed hover:border-slate-800' : ''}`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${active ? 'border-emerald-400 bg-emerald-400' : 'border-slate-600'}`} />
-                        <span className="text-sm font-bold text-white">{p.role_type}</span>
-                        <TipBadge shift={p} />
-                        {p.booking === 'instant' ? (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                            <Zap className="w-2.5 h-2.5" /> Instant book
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
-                            <ShieldCheck className="w-2.5 h-2.5" /> Needs approval
-                          </span>
-                        )}
-                      </div>
-                      {p.role_notes && <p className="text-[11px] text-slate-400 mt-1.5 whitespace-pre-line">{p.role_notes}</p>}
-                      {ps && (
-                        <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
-                          You: {STATUS_LABELS[ps] || ps}
-                          {p.my_status_reason ? ` — ${p.my_status_reason}` : ''}
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-sm font-black text-emerald-400" hiddenText="Pay shared when booked" />
-                      {est && <div className="text-[10px] text-slate-500">{est} for the shift</div>}
-                      <div className={`text-[11px] font-semibold mt-0.5 ${full ? 'text-slate-500' : 'text-emerald-300'}`}>
-                        {full ? 'Full' : `${p.spots_left} of ${p.capacity} open`}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {listing.positions.some((p) => p.est_pay_min !== null && p.est_pay_min !== undefined) && (
-            <p className="text-[10px] text-slate-500">Estimates are hours × hourly rate, before tips and taxes.</p>
-          )}
-
-          {isWaiting && selected && !selectedIsMine && !listing.conflict && (
-            <p className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800/40 rounded-lg p-2.5">
-              Switching replaces your waiting request for <b>{mine.role_type}</b>.
-            </p>
-          )}
-
-          {showNoteBox && (
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">Note for the manager (optional)</label>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value.slice(0, 500))}
-                rows={2}
-                placeholder="e.g. 3 years behind the bar, can stay late"
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
-              />
-              <div className="text-[10px] text-slate-500 text-right">{note.length}/500</div>
+          {item.staff_notes_locked && (
+            <div className="p-3 rounded-xl border border-dashed border-indigo-500/40 text-xs text-indigo-200 flex items-start gap-2">
+              <Lock className="w-4 h-4 flex-shrink-0" />
+              More details for this shift will show here once the manager confirms you.
             </div>
           )}
 
-          {isWaiting && mine.note && (
-            <p className="text-[11px] text-slate-400">
-              Your note: <span className="text-slate-300">{mine.note}</span>
-            </p>
+          {![
+            item.venue?.arrival_instructions, item.venue?.dress_code, item.event_notes, item.role_notes,
+            item.event_staff_notes, item.position_staff_notes, item.venue?.default_shift_notes,
+          ].some((t) => t && String(t).trim()) && !item.staff_notes_locked && (
+            <p className="text-xs text-slate-500 italic">No notes for this shift.</p>
           )}
         </div>
       </div>
@@ -1802,18 +1738,19 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
 
 ---
 
-## 14. Frontend — `frontend/src/pages/WorkerDashboard.jsx` (FULL FILE REPLACEMENT)
+## 13. Frontend — `frontend/src/pages/WorkerDashboard.jsx` (FULL FILE REPLACEMENT)
 
-What changed vs. the current file:
-* `availableShifts`, `/shifts/open`, `handleRequestShift`, `requestingId` and `requestedMap` are removed. The page loads `GET /listings` into `listings`.
+What changed vs. the 26.1 file:
 * New state:
-  * filters: `search`, `whenFilter`, `roleFilter`, `venueFilter`, `instantOnly`, `hideRequested`
-  * `openListing` (`{eventId, initial}`)
-  * `withdrawingId`
-* `fetchWorkerData(showSpinner = true)`. The modal calls it with `false` so the page doesn't flash.
-* Find Shifts is a filter bar plus day-grouped `EventListingCard`s.
-* My Schedule shows upcoming first, then a folded "Past & closed" list. It uses `STATUS_LABELS`, shows reasons, and adds the Details, Directions, Calendar and Withdraw buttons.
-* The Pending Transfers tab, clock in/out, drop, transfer and board logic are unchanged.
+  * `calendar` (`{items, unread_count}`)
+  * `detailRequestId`
+* `fetchWorkerData` also loads `GET /me/calendar`.
+* New **Calendar** tab, with an amber unread count, between Find Shifts and My Schedule.
+* An amber **"N of your shifts have info you haven't read"** banner with a **Review now** button.
+* My Schedule cards:
+  * show a **PLEASE READ** or **UPDATED — READ** badge
+  * **Details** now opens `ShiftDetailsModal`, falling back to the 26.1 event modal if the calendar item isn't loaded
+* `ShiftDetailsModal` is rendered. Its **Board** button opens the existing `ShiftBoardModal`, which sits on top at z-[80].
 
 ```jsx
 import React, { useState, useEffect, useMemo } from 'react';
@@ -1822,6 +1759,7 @@ import api from '../api/client';
 import {
   Calendar, AlertCircle, Briefcase, Check, Search, Filter,
   Timer, ArrowRightLeft, MessageSquare, X, Star, Zap, Info, CalendarPlus, Navigation,
+  CalendarDays, AlertTriangle,
 } from 'lucide-react';
 import TransferModal from '../components/TransferModal';
 import ShiftBoardModal from '../components/ShiftBoardModal';
@@ -1829,6 +1767,8 @@ import TipBadge from '../components/TipBadge';
 import PayLabel from '../components/PayLabel';
 import EventListingCard from '../components/EventListingCard';
 import EventListingModal from '../components/EventListingModal';
+import WorkerCalendar from '../components/WorkerCalendar';
+import ShiftDetailsModal from '../components/ShiftDetailsModal';
 import { fmtDateTime } from '../utils/venueTime';
 import {
   STATUS_LABELS, PENDING_STATUSES, dayGroupLabel, isOnDay, downloadIcs, mapsUrl,
@@ -1838,8 +1778,10 @@ const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'c
 
 export default function WorkerDashboard() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState('find'); // 'find' | 'schedule' | 'transfers'
+  const [activeTab, setActiveTab] = useState('find'); // 'find' | 'calendar' | 'schedule' | 'transfers'
   const [listings, setListings] = useState([]);
+  const [calendar, setCalendar] = useState({ items: [], unread_count: 0 }); // Phase 26.2
+  const [detailRequestId, setDetailRequestId] = useState(null);           // Phase 26.2: ShiftDetailsModal
   const [myShifts, setMyShifts] = useState([]);
   const [incomingTransfers, setIncomingTransfers] = useState([]);
   const [activeClockIns, setActiveClockIns] = useState(new Set());
@@ -1868,13 +1810,18 @@ export default function WorkerDashboard() {
   const fetchWorkerData = async (showSpinner = true) => {
     try {
       if (showSpinner) setLoading(true);
-      const [listingsRes, myRes, transfersRes, activeClocksRes] = await Promise.all([
+      const [listingsRes, myRes, transfersRes, activeClocksRes, calendarRes] = await Promise.all([
         api.get('/listings'),
         api.get('/users/me/shifts'),
         api.get('/transfers/my-incoming'),
         api.get('/shifts/time-entries/active').catch(() => ({ data: [] })),
+        api.get('/me/calendar').catch(() => ({ data: { items: [], unread_count: 0 } })),
       ]);
       setListings(listingsRes.data || []);
+      setCalendar({
+        items: calendarRes.data?.items || [],
+        unread_count: calendarRes.data?.unread_count || 0,
+      });
       setMyShifts(myRes.data || []);
       setIncomingTransfers(transfersRes.data || []);
 
@@ -2025,6 +1972,33 @@ export default function WorkerDashboard() {
     ['approved', 'checked_in', 'confirmed'].includes(String(s.status || '').toLowerCase())
   );
 
+  // ---- Phase 26.2: calendar items by request id + "please read" handling -------------------
+  const calendarByRequest = useMemo(() => {
+    const m = new Map();
+    calendar.items.forEach((i) => m.set(i.request_id, i));
+    return m;
+  }, [calendar.items]);
+  const detailItem = detailRequestId ? calendarByRequest.get(detailRequestId) || null : null;
+  const firstUnread = calendar.items.find((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()) || null;
+
+  const handleAcknowledged = (requestId, seenAt) => {
+    setCalendar((prev) => {
+      const items = prev.items.map((i) =>
+        i.request_id === requestId ? { ...i, needs_ack: false, info_change: null, info_seen_at: seenAt || new Date().toISOString() } : i
+      );
+      const unread = items.filter((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()).length;
+      return { items, unread_count: unread };
+    });
+  };
+
+  const openDetailsForRequest = (req) => {
+    if (calendarByRequest.has(req.id)) {
+      setDetailRequestId(req.id);
+    } else if (req.shift?.event_id) {
+      setOpenListing({ eventId: req.shift.event_id, initial: null });
+    }
+  };
+
   // ---- Phase 26.1: Find Shifts (one card per event) ------------------------------------
   const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;
 
@@ -2153,6 +2127,17 @@ export default function WorkerDashboard() {
                 Via: {req.approval_source.replace(/_/g, ' ')}
               </span>
             )}
+
+            {calendarByRequest.get(req.id)?.needs_ack && (
+              <button
+                type="button"
+                onClick={() => setDetailRequestId(req.id)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black"
+              >
+                <AlertTriangle className="w-3 h-3" />
+                {calendarByRequest.get(req.id)?.info_change ? 'UPDATED — READ' : 'PLEASE READ'}
+              </button>
+            )}
           </div>
 
           <h3 className="text-base font-bold text-white mt-1">{shift?.title}</h3>
@@ -2177,10 +2162,10 @@ export default function WorkerDashboard() {
 
         {/* Action buttons */}
         <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-end">
-          {shift?.event_id && (
+          {(calendarByRequest.has(req.id) || shift?.event_id) && (
             <button
               type="button"
-              onClick={() => setOpenListing({ eventId: shift.event_id, initial: null })}
+              onClick={() => openDetailsForRequest(req)}
               className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition flex items-center space-x-1"
             >
               <Info className="w-3.5 h-3.5 text-emerald-400" />
@@ -2392,6 +2377,32 @@ export default function WorkerDashboard() {
           </div>
         )}
 
+        {/* Phase 26.2: don't let anyone miss updated shift info */}
+        {calendar.unread_count > 0 && firstUnread && (
+          <div className="mb-6 p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-black text-amber-100">
+                  {calendar.unread_count === 1
+                    ? '1 of your shifts has info you haven\'t read'
+                    : `${calendar.unread_count} of your shifts have info you haven't read`}
+                </div>
+                <div className="text-xs text-amber-200/80">
+                  Notes or times can change after you book. Open the shift and tap “Got it”.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDetailRequestId(firstUnread.request_id)}
+              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black whitespace-nowrap"
+            >
+              Review now
+            </button>
+          </div>
+        )}
+
         {/* Tab Selection */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-4 gap-4">
           <div className="flex space-x-3 overflow-x-auto whitespace-nowrap -mx-1 px-1">
@@ -2404,6 +2415,22 @@ export default function WorkerDashboard() {
               }`}
             >
               Find Shifts ({openListingCount})
+            </button>
+            <button
+              onClick={() => setActiveTab('calendar')}
+              className={`px-5 py-2.5 rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 ${
+                activeTab === 'calendar'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                  : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              <CalendarDays className="w-3.5 h-3.5" />
+              <span>Calendar</span>
+              {calendar.unread_count > 0 && (
+                <span className="ml-0.5 min-w-[1.25rem] h-5 px-1 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black inline-flex items-center justify-center">
+                  {calendar.unread_count}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setActiveTab('schedule')}
@@ -2558,6 +2585,22 @@ export default function WorkerDashboard() {
           </div>
         )}
 
+        {/* TAB: Calendar (Phase 26.2) */}
+        {activeTab === 'calendar' && (
+          <div className="mt-6">
+            {loading ? (
+              <div className="py-20 text-center text-slate-500 text-xs">Loading your calendar...</div>
+            ) : (
+              <WorkerCalendar
+                items={calendar.items}
+                openListings={listings}
+                onSelectItem={(item) => setDetailRequestId(item.request_id)}
+                onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
+              />
+            )}
+          </div>
+        )}
+
         {/* TAB 2: My Schedule (Phase 26.1: upcoming first, history folded away) */}
         {activeTab === 'schedule' && (
           <div className="mt-6 space-y-4">
@@ -2669,6 +2712,17 @@ export default function WorkerDashboard() {
         )}
       </main>
 
+      {/* Phase 26.2: My shift details (big date/time, all notes, "Got it") */}
+      {detailItem && (
+        <ShiftDetailsModal
+          key={detailItem.request_id}
+          item={detailItem}
+          onClose={() => setDetailRequestId(null)}
+          onAcknowledged={handleAcknowledged}
+          onOpenBoard={(shiftLike) => setActiveDiscussionShift(shiftLike)}
+        />
+      )}
+
       {/* Phase 26.1: Event details + request modal */}
       {openListing && (
         <EventListingModal
@@ -2774,213 +2828,291 @@ export default function WorkerDashboard() {
 
 ---
 
-## 15. Frontend — `frontend/src/pages/VenueProfile.jsx` (EDITS)
+## 14. Frontend — `frontend/src/components/ShiftEventFormModal.jsx` (EDITS)
 
-### 15a. Import (under the `venueTime` import)
+### 14a. Import — add `Lock`
 ```jsx
-import EventListingModal from '../components/EventListingModal';
+import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock } from 'lucide-react';
+```
+### 14b. `blankRow()` — add `staff_notes: ''` directly after `role_notes: '',`
+
+### 14c. State — directly under `const [notes, setNotes] = useState('');`
+```jsx
+  const [staffNotes, setStaffNotes] = useState(''); // Phase 26.2: confirmed staff only
+```
+### 14d. Edit-mode load
+Directly under `setNotes(ev.notes || '');` add:
+```jsx
+        setStaffNotes(ev.staff_notes || '');
+```
+In the `(ev.positions || []).map((p) => ({ … }))` row object:
+* add `staff_notes: p.staff_notes || '',` directly after `role_notes: p.role_notes || '',`
+* change `showNotes: !!p.role_notes,` to `showNotes: !!(p.role_notes || p.staff_notes),`
+
+### 14e. Payload
+In `payloadPositions.push({ … })` add, directly after `role_notes: (r.role_notes || '').trim() || null,`:
+```jsx
+        staff_notes: (r.staff_notes || '').trim() || null,
+```
+In `const body = { … }` add, directly after `notes: notes.trim() || null,`:
+```jsx
+      staff_notes: staffNotes.trim() || null,
 ```
 
-### 15b. `MY_STATUS` map — add a `withdrawn` entry, and a constant after the map
-Find:
+### 14f. Event-level field
+Find the Event notes textarea's placeholder and closing:
 ```jsx
-  transferred: { label: 'Handed off', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
-};
-```
-Replace with:
-```jsx
-  transferred: { label: 'Handed off', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
-  withdrawn: { label: 'Withdrawn', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
-};
-
-const ACTIVE_MY_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in', 'completed'];
-```
-
-### 15c. State
-Find:
-```jsx
-  const [requestingId, setRequestingId] = useState(null);
-  const [notice, setNotice] = useState(null);
-```
-Replace with:
-```jsx
-  const [notice, setNotice] = useState(null);
-  const [openEventId, setOpenEventId] = useState(null); // Phase 26.1
-```
-
-### 15d. Delete the whole `handleRequest` function
-Delete everything from `  const handleRequest = async (shiftId) => {` down to (not including) `  if (loading && !profile) {`.
-
-### 15e. Event header — add the "View & request" button
-Find:
-```jsx
-                    <span className="text-xs text-slate-400 inline-flex items-center gap-1">
-                      <Users className="w-3.5 h-3.5" /> {ev.total_filled}/{ev.total_capacity} staffed
-                    </span>
+                placeholder="Shown to everyone working this event. e.g. Load-in through the loading dock at 4pm."
+              />
+            </div>
 ```
 Replace with:
 ```jsx
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-slate-400 inline-flex items-center gap-1">
-                        <Users className="w-3.5 h-3.5" /> {ev.total_filled}/{ev.total_capacity} staffed
-                      </span>
-                      {scope === 'upcoming' && isWorker && ev.event_id && (() => {
-                        const hasMine = ev.positions.some((x) => ACTIVE_MY_STATUSES.includes(x.my_status));
-                        const anyOpen = ev.positions.some((x) => x.status === 'OPEN' && x.spots_left > 0);
-                        if (!hasMine && !anyOpen) return null;
-                        return (
-                          <button
-                            type="button"
-                            onClick={() => setOpenEventId(ev.event_id)}
-                            className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold"
-                          >
-                            {hasMine ? 'View details' : 'View & request'}
-                          </button>
-                        );
-                      })()}
+                placeholder="Shown to everyone browsing this event. e.g. Load-in through the loading dock at 4pm."
+              />
+            </div>
+            <div>
+              <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
+                <Lock className="w-3 h-3 text-indigo-300" /> Notes for confirmed staff only
+              </label>
+              <textarea
+                rows={2}
+                value={staffNotes}
+                onChange={(e) => setStaffNotes(e.target.value)}
+                className={inputCls}
+                placeholder="Only people you've booked see this. e.g. Door code 4471, park in lot B, ask for Sam on arrival."
+              />
+              {isEdit && (
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Changing the time or any notes flags the shift as “Updated” for everyone booked until they read it.
+                </p>
+              )}
+            </div>
+```
+
+### 14g. Per-position notes → two boxes (public + staff-only)
+Find:
+```jsx
+                  {r.showNotes ? (
+                    <div>
+                      <label className={labelCls}>Notes for {r.role_type || 'this position'}</label>
+                      <textarea
+                        rows={2}
+                        value={r.role_notes}
+                        onChange={(e) => updateRow(r.key, { role_notes: e.target.value })}
+                        className={inputCls}
+                        placeholder="e.g. Bring a wine key. Black apron provided."
+                      />
                     </div>
-```
-
-### 15f. Remove the per-position "Pick up shift" button
-Delete these two lines inside `ev.positions.map(...)`:
-```jsx
-                      const canRequest =
-                        scope === 'upcoming' && isWorker && !p.my_status && p.status === 'OPEN' && p.spots_left > 0;
-```
-Then find:
-```jsx
-                            ) : canRequest ? (
-                              <button
-                                type="button"
-                                onClick={() => handleRequest(p.shift_id)}
-                                disabled={requestingId === p.shift_id}
-                                className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50"
-                              >
-                                {requestingId === p.shift_id ? 'Sending…' : 'Pick up shift'}
-                              </button>
-                            ) : scope
+                  ) : (
 ```
 Replace with:
 ```jsx
-                            ) : scope
+                  {r.showNotes ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className={labelCls}>Notes for {r.role_type || 'this position'}</label>
+                        <textarea
+                          rows={2}
+                          value={r.role_notes}
+                          onChange={(e) => updateRow(r.key, { role_notes: e.target.value })}
+                          className={inputCls}
+                          placeholder="Everyone sees this. e.g. Bring a wine key. Black apron provided."
+                        />
+                      </div>
+                      <div>
+                        <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
+                          <Lock className="w-3 h-3 text-indigo-300" /> Confirmed {r.role_type || 'staff'} only
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={r.staff_notes}
+                          onChange={(e) => updateRow(r.key, { staff_notes: e.target.value })}
+                          className={inputCls}
+                          placeholder="Only booked people see this. e.g. POS login 2231, bar lead is Jess."
+                        />
+                      </div>
+                    </div>
+                  ) : (
 ```
-
-### 15g. Render the modal
-At the very end of the component's JSX, find:
-```jsx
-        </div>
-      </main>
-    </div>
-  );
-}
-```
-Replace with:
-```jsx
-        </div>
-      </main>
-
-      {openEventId && (
-        <EventListingModal
-          eventId={openEventId}
-          onClose={() => setOpenEventId(null)}
-          onChanged={() => setRefreshKey((k) => k + 1)}
-        />
-      )}
-    </div>
-  );
-}
-```
+Also change the button text `+ Add notes for this position` to `+ Add notes for this position (public or staff-only)`.
 
 ---
 
-## 16. Frontend — `frontend/src/components/EventRosterModal.jsx` (EDIT)
+## 15. Frontend — `frontend/src/components/EventRosterModal.jsx` (EDITS)
 
-In the **Requested** list, find:
+### 15a. Import line → replace with
 ```jsx
-                              <div className="text-[11px] text-slate-400 mt-0.5">Requested {p.requested_at ? fmtDateTime(p.requested_at, timeZone) : ''}</div>
+import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle } from 'lucide-react';
+```
+
+### 15b. Header notes — find:
+```jsx
+  const headerExtra = (event.description || (onEdit && event.event_id)) ? (
+    <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+      {event.description && (
+        <div className="flex-1 text-xs text-slate-300 bg-slate-950 border border-slate-800 rounded-xl p-2.5 whitespace-pre-line">
+          <span className="text-slate-500 font-semibold inline-flex items-center gap-1 mr-1"><FileText className="w-3 h-3" /> Event notes:</span>
+          {event.description}
+        </div>
+      )}
+```
+Replace with:
+```jsx
+  const headerExtra = (event.description || event.staff_notes || (onEdit && event.event_id)) ? (
+    <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+      {(event.description || event.staff_notes) && (
+        <div className="flex-1 space-y-2">
+          {event.description && (
+            <div className="text-xs text-slate-300 bg-slate-950 border border-slate-800 rounded-xl p-2.5 whitespace-pre-line">
+              <span className="text-slate-500 font-semibold inline-flex items-center gap-1 mr-1"><FileText className="w-3 h-3" /> Event notes:</span>
+              {event.description}
+            </div>
+          )}
+          {event.staff_notes && (
+            <div className="text-xs text-indigo-100 bg-indigo-500/5 border border-indigo-500/40 rounded-xl p-2.5 whitespace-pre-line">
+              <span className="text-indigo-300 font-semibold inline-flex items-center gap-1 mr-1"><Lock className="w-3 h-3" /> Confirmed staff only:</span>
+              {event.staff_notes}
+            </div>
+          )}
+        </div>
+      )}
+```
+
+### 15c. Position staff notes — find the end of the role-notes paragraph:
+```jsx
+                    <span className="text-slate-500 font-semibold">{pos.role_type} notes: </span>{pos.role_notes}
+                  </p>
+                )}
 ```
 Add directly after it:
 ```jsx
-                              {p.note && (
-                                <div className="text-[11px] text-slate-300 mt-1 italic whitespace-pre-line">“{p.note}”</div>
+                {pos.staff_notes && (
+                  <p className="text-xs text-indigo-100 bg-indigo-500/5 border border-indigo-500/40 rounded-lg p-2 whitespace-pre-line">
+                    <span className="text-indigo-300 font-semibold inline-flex items-center gap-1"><Lock className="w-3 h-3" /> {pos.role_type} — confirmed staff only: </span>{pos.staff_notes}
+                  </p>
+                )}
+```
+
+### 15d. "Read" chip on assigned people — find (in the Assigned list):
+```jsx
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${chip.cls}`}>{chip.label}</span>
+                              {onRemovePerson
+```
+Replace with:
+```jsx
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${chip.cls}`}>{chip.label}</span>
+                              {p.info_seen === true && (
+                                <span title="Has read the latest notes and changes" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                                  <BookOpenCheck className="w-3 h-3" /> Read
+                                </span>
                               )}
+                              {p.info_seen === false && (
+                                <span title="Hasn't opened the latest notes or changes yet" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/40">
+                                  <AlertTriangle className="w-3 h-3" /> Not read yet
+                                </span>
+                              )}
+                              {onRemovePerson
 ```
 
 ---
 
-## 17. Behaviour summary
+## 16. Frontend — `frontend/src/components/EventListingModal.jsx` (EDITS)
 
-**One request per event**
-* A worker can hold one active request (waiting or booked) per event.
-* If they're **waiting** on Bartender and pick Server, the button reads **Switch to Server**. The Bartender request becomes `withdrawn` with the reason "Switched to Server", in the same transaction.
-* If they're **booked**, other positions are disabled. They must drop (24h rule) or hand off from My Schedule first.
+### 16a. Add `Lock` to the lucide import list (after `Briefcase,`).
 
-**Positions that can't be re-requested**
-* A position the venue **declined** stays declined, but the worker may request a *different* position in that event.
-* **Dropped**, **removed**, **no-show** and **handed-off** positions can't be re-requested from the listing.
-
-**Automatic cleanup**
-* When a manager approves one of a worker's requests, or approves a transfer to them, any other waiting request they have in that event is withdrawn automatically.
-
-**Instant book label**
-* The "Instant book" label is computed per viewer: position mode, venue policy, whitelist and rating threshold. It's the exact function the request uses.
-
-**Hidden pay**
-* Hidden pay stays hidden: it shows as "Pay shared when booked" and there's no earnings estimate.
-
-**Listing contents**
-* Listings show upcoming, not-cancelled events in the next 60 days with ≥1 open spot, plus events where the worker has an active request.
-* Full events drop off the list; a waitlist comes in a later phase.
-
-**Overlap warning**
-* An event that overlaps one of the worker's booked shifts shows an amber warning, and requesting is disabled.
-
-**Rate limiting and races**
-* Double-tapping "Book instantly" is safe: the event row lock serializes the requests, and the second one gets "You're already booked on this position."
+### 16b. Booked banner — find:
+```jsx
+            {bookedPosition && bookedPosition.hourly_rate !== null && (
+              <> Pay: <PayLabel rate={bookedPosition.hourly_rate} rateMax={bookedPosition.hourly_rate_max} className="font-semibold" /></>
+            )}
+          </p>
+        </div>
+      )}
+```
+Replace with:
+```jsx
+            {bookedPosition && bookedPosition.hourly_rate !== null && (
+              <> Pay: <PayLabel rate={bookedPosition.hourly_rate} rateMax={bookedPosition.hourly_rate_max} className="font-semibold" /></>
+            )}
+          </p>
+          {/* Phase 26.2: staff-only notes, shown once confirmed */}
+          {(listing.staff_notes || bookedPosition?.staff_notes) && (
+            <div className="mt-3 space-y-2">
+              {listing.staff_notes && (
+                <div className="p-2.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs whitespace-pre-line">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1 mb-0.5"><Lock className="w-3 h-3" /> For confirmed staff</div>
+                  {listing.staff_notes}
+                </div>
+              )}
+              {bookedPosition?.staff_notes && (
+                <div className="p-2.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs whitespace-pre-line">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1 mb-0.5"><Lock className="w-3 h-3" /> For confirmed {bookedPosition.role_type} staff</div>
+                  {bookedPosition.staff_notes}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+```
 
 ---
 
-## 18. Rebuild & Verification
+## 17. Rebuild & Verification
 
-**No schema change.** Just rebuild:
+**Schema changed.** Choose ONE:
+
+* **Standard (wipes data):**
 ```bash
+docker compose down -v
 docker compose up -d --build
 ```
-If the browser shows a blank page or "Invalid hook call" after the rebuild, clear the Vite cache once:
+* **Keep current data:**
+```bash
+docker compose exec -T database psql -U shiftboard_user -d shiftboard <<'SQL'
+ALTER TABLE shift_events ADD COLUMN IF NOT EXISTS staff_notes TEXT;
+ALTER TABLE shift_events ADD COLUMN IF NOT EXISTS info_updated_at TIMESTAMPTZ;
+ALTER TABLE shift_events ADD COLUMN IF NOT EXISTS info_change TEXT;
+ALTER TABLE shifts ADD COLUMN IF NOT EXISTS staff_notes TEXT;
+ALTER TABLE shifts ADD COLUMN IF NOT EXISTS info_updated_at TIMESTAMPTZ;
+ALTER TABLE shifts ADD COLUMN IF NOT EXISTS info_change TEXT;
+ALTER TABLE shift_requests ADD COLUMN IF NOT EXISTS info_seen_at TIMESTAMPTZ;
+SQL
+docker compose up -d --build
+```
+(Use the database service name, user and DB from `docker-compose.yml` if they differ from `database` / `shiftboard_user` / `shiftboard`.)
+
+If the page is blank or shows "Invalid hook call" after the rebuild:
 ```bash
 docker compose exec frontend rm -rf node_modules/.vite && docker compose restart frontend
 ```
-then hard-refresh (Ctrl+Shift+R).
+then hard-refresh.
 
 **Checklist**
-1. Log in as a worker, then open **Find Shifts**.
-   * You should see one card per event, grouped under Today / Tomorrow / dates.
-   * Each card lists its positions with pay, open spots and a ⚡ or shield icon.
-2. Type in search, switch "Next 7 days", pick a position, and toggle "Instant book".
-   * The cards filter.
-   * "Clear filters" resets them.
-3. Open a card and check the modal:
-   * the left column shows the date, hours, venue, directions, dress code and notes
-   * the right column has radio-style positions
-4. Pick a **Needs approval** position, add a note, and press **Send request**.
-   * You get "Request sent…".
-   * The position shows "You: Waiting for approval", and the card shows "Requested · Bartender".
-5. In the same modal pick another position.
-   * The button reads **Switch to Server**, with an amber explanation.
-   * Press it: the old request becomes Withdrawn and the new one is waiting.
-6. Press **Withdraw request**.
-   * Nothing is active any more.
-   * You can request again.
-7. Pick an **Instant book** position.
-   * You get "You're booked!" and a green banner.
-   * Other positions are disabled.
-   * Add to calendar downloads a `.ics` file.
-   * Go to My Schedule switches tabs.
-8. In **My Schedule**:
-   * booked shifts show Details, Directions, Calendar, Board, Transfer, Drop and Clock In
-   * waiting requests show Withdraw
-   * withdrawn and past items are under "Past & closed"
-9. Log in as the manager, then open Posted Shifts → Details. The worker's note appears under "Requested".
-10. Approve a request for a worker who also has a waiting request on another position in that event. The other request becomes Withdrawn ("Booked on another position for this event").
-11. Open `/venues/<id>` as a worker. Events show **View & request**, which opens the same modal. There are no per-position "Pick up shift" buttons.
-12. API: call `POST /api/listings/<event_id>/request` twice quickly with the same body. The first succeeds and the second returns 400 or 409, and `spots_filled` is never above capacity.
+1. **Manager, adding staff notes:**
+   * Edit a posted event. Add **Notes for confirmed staff only**, e.g. "Door code 4471".
+   * Open a position's notes and fill **Confirmed Bartender only**. Save.
+   * **Details** shows both in indigo "confirmed staff only" boxes.
+2. **Worker who is waiting:**
+   * In Find Shifts, the event modal does **not** show staff notes.
+   * In Calendar, the day shows an amber dashed "Waiting" chip. Its details say "More details will show here once the manager confirms you."
+3. **Manager approves the worker:**
+   * The worker reloads and sees an amber banner: "1 of your shifts has info you haven't read".
+   * The Calendar tab has a badge, the day cell shows ⚠, and the My Schedule card shows **PLEASE READ**.
+4. **Worker reads the details:** Review now opens the shift with:
+   * the big date, big time and countdown
+   * all notes, including the indigo staff-only notes
+   * **Got it** clears the flags
+   * The manager's roster now shows **Read ✓** next to the worker.
+5. **Manager changes the time:**
+   * Change the start time by one hour and save.
+   * The worker sees **UPDATED — READ** with "Time changed: Fri Oct 3, 6:00 PM – 11:00 PM → Fri Oct 3, 7:00 PM – 11:00 PM", and the roster shows **Not read yet** until they tap Got it.
+6. **Calendar views:**
+   * Month view: phone width shows dots; desktop shows "6:00 PM Bartender" chips. Today is highlighted, and tapping a day lists its shifts below with big times.
+   * **List** view shows upcoming days, and "Show past shifts" reveals history.
+   * **Open shifts** toggle: dashed "Open" entries appear, and clicking one opens the 26.1 request modal.
+7. **Add to calendar** in the shift details downloads an `.ics` whose description includes arrival, dress code and all notes.
+8. **Security check:** `GET /api/listings/<event_id>` as a worker who isn't booked has `staff_notes: null` on the event and every position, and `GET /api/venues/<id>/public-events` never contains `staff_notes`.
+
+**Note:** existing booked shifts with venue notes, dress code or arrival instructions will show **PLEASE READ** once after this deploy. That's intended: each worker confirms once.

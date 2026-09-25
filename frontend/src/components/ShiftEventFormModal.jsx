@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { payText } from './PayLabel';
@@ -56,6 +56,7 @@ function blankRow(pos) {
     capacity: 1,
     ...defaultsFor(pos),
     role_notes: '',
+    staff_notes: '',
     approval_mode: 'venue_default',
     booked: 0,
     pending: 0,
@@ -96,6 +97,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [notes, setNotes] = useState('');
+  const [staffNotes, setStaffNotes] = useState(''); // Phase 26.2: confirmed staff only
   const [rows, setRows] = useState(() => (isEdit ? [] : [blankRow(null)]));
   const [touched, setTouched] = useState(false);
 
@@ -116,6 +118,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
         setStart(utcToZonedLocalInput(ev.start_time, tz));
         setEnd(utcToZonedLocalInput(ev.end_time, tz));
         setNotes(ev.notes || '');
+        setStaffNotes(ev.staff_notes || '');
         setRows(
           (ev.positions || []).map((p) => ({
             key: p.shift_id,
@@ -129,10 +132,11 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
             tips_eligible: !!p.tips_eligible,
             tip_pool: !!p.tip_pool,
             role_notes: p.role_notes || '',
+            staff_notes: p.staff_notes || '',
             approval_mode: p.approval_mode || 'venue_default',
             booked: p.assigned_count || 0,
             pending: p.pending_count || 0,
-            showNotes: !!p.role_notes,
+            showNotes: !!(p.role_notes || p.staff_notes),
           }))
         );
       })
@@ -213,6 +217,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
         tips_eligible: !!r.tips_eligible,
         tip_pool: r.tips_eligible ? !!r.tip_pool : false,
         role_notes: (r.role_notes || '').trim() || null,
+        staff_notes: (r.staff_notes || '').trim() || null,
         approval_mode: r.approval_mode,
       });
     }
@@ -222,6 +227,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
       start_time: startIso,
       end_time: endIso,
       notes: notes.trim() || null,
+      staff_notes: staffNotes.trim() || null,
       positions: payloadPositions,
     };
 
@@ -292,8 +298,25 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 className={inputCls}
-                placeholder="Shown to everyone working this event. e.g. Load-in through the loading dock at 4pm."
+                placeholder="Shown to everyone browsing this event. e.g. Load-in through the loading dock at 4pm."
               />
+            </div>
+            <div>
+              <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
+                <Lock className="w-3 h-3 text-indigo-300" /> Notes for confirmed staff only
+              </label>
+              <textarea
+                rows={2}
+                value={staffNotes}
+                onChange={(e) => setStaffNotes(e.target.value)}
+                className={inputCls}
+                placeholder="Only people you've booked see this. e.g. Door code 4471, park in lot B, ask for Sam on arrival."
+              />
+              {isEdit && (
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Changing the time or any notes flags the shift as “Updated” for everyone booked until they read it.
+                </p>
+              )}
             </div>
             {venue?.default_shift_notes && (
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
@@ -524,15 +547,29 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
                   </div>
 
                   {r.showNotes ? (
-                    <div>
-                      <label className={labelCls}>Notes for {r.role_type || 'this position'}</label>
-                      <textarea
-                        rows={2}
-                        value={r.role_notes}
-                        onChange={(e) => updateRow(r.key, { role_notes: e.target.value })}
-                        className={inputCls}
-                        placeholder="e.g. Bring a wine key. Black apron provided."
-                      />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className={labelCls}>Notes for {r.role_type || 'this position'}</label>
+                        <textarea
+                          rows={2}
+                          value={r.role_notes}
+                          onChange={(e) => updateRow(r.key, { role_notes: e.target.value })}
+                          className={inputCls}
+                          placeholder="Everyone sees this. e.g. Bring a wine key. Black apron provided."
+                        />
+                      </div>
+                      <div>
+                        <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
+                          <Lock className="w-3 h-3 text-indigo-300" /> Confirmed {r.role_type || 'staff'} only
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={r.staff_notes}
+                          onChange={(e) => updateRow(r.key, { staff_notes: e.target.value })}
+                          className={inputCls}
+                          placeholder="Only booked people see this. e.g. POS login 2231, bar lead is Jess."
+                        />
+                      </div>
                     </div>
                   ) : (
                     <button
@@ -540,7 +577,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
                       onClick={() => updateRow(r.key, { showNotes: true })}
                       className="text-xs text-emerald-400 hover:text-emerald-300"
                     >
-                      + Add notes for this position
+                      + Add notes for this position (public or staff-only)
                     </button>
                   )}
                 </div>

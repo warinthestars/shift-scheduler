@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Calendar, Clock, MapPin, Phone, Shirt, Info, StickyNote, Navigation, CalendarPlus,
-  Zap, ShieldCheck, AlertTriangle, CheckCircle2, ExternalLink, Briefcase,
+  Zap, ShieldCheck, AlertTriangle, CheckCircle2, ExternalLink, Briefcase, Lock,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
@@ -275,6 +275,23 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
               <> Pay: <PayLabel rate={bookedPosition.hourly_rate} rateMax={bookedPosition.hourly_rate_max} className="font-semibold" /></>
             )}
           </p>
+          {/* Phase 26.2: staff-only notes, shown once confirmed */}
+          {(listing.staff_notes || bookedPosition?.staff_notes) && (
+            <div className="mt-3 space-y-2">
+              {listing.staff_notes && (
+                <div className="p-2.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs whitespace-pre-line">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1 mb-0.5"><Lock className="w-3 h-3" /> For confirmed staff</div>
+                  {listing.staff_notes}
+                </div>
+              )}
+              {bookedPosition?.staff_notes && (
+                <div className="p-2.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs whitespace-pre-line">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1 mb-0.5"><Lock className="w-3 h-3" /> For confirmed {bookedPosition.role_type} staff</div>
+                  {bookedPosition.staff_notes}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

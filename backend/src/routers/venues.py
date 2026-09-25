@@ -29,6 +29,7 @@ from src.services.team import get_venue_team
 from src.services.venue_positions import ensure_default_positions, clean_venue_payload
 from src.services.venue_public import build_directory, build_profile, build_public_events
 from src.services.shift_views import to_shift_responses
+from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -772,7 +773,9 @@ async def get_venue_events(
 
     assigned_by_shift = defaultdict(list)
     requested_by_shift = defaultdict(list)
+    ack_by_request = {}   # Phase 26.2: request_id -> (info_seen_at, booked_at)
     for req, worker in req_rows:
+        ack_by_request[req.id] = (req.info_seen_at, req.approved_at or req.created_at)
         clocked_in, clocked_out = clock_state.get((req.shift_id, req.worker_id), (False, False))
         person = RosterPerson(
             request_id=req.id,
@@ -795,13 +798,28 @@ async def get_venue_events(
 
     event_ids = {s.event_id for s in shifts if s.event_id}
     event_notes, event_cancel = {}, {}
+    event_objs = {}   # Phase 26.2
     if event_ids:
-        for eid, enotes, ecan, ereason in (await db.execute(
-            select(ShiftEvent.id, ShiftEvent.notes, ShiftEvent.cancelled_at, ShiftEvent.cancel_reason)
-            .where(ShiftEvent.id.in_(event_ids))
-        )).all():
-            event_notes[eid] = enotes
-            event_cancel[eid] = (ecan is not None, ereason)
+        for ev_obj in (await db.execute(
+            select(ShiftEvent).where(ShiftEvent.id.in_(event_ids))
+        )).scalars().all():
+            event_objs[ev_obj.id] = ev_obj
+            event_notes[ev_obj.id] = ev_obj.notes
+            event_cancel[ev_obj.id] = (ev_obj.cancelled_at is not None, ev_obj.cancel_reason)
+    venue_obj = await db.scalar(select(Venue).where(Venue.id == venue_id))
+
+    # Phase 26.2: has each booked person read the latest info?
+    for s in shifts:
+        ev_obj = event_objs.get(s.event_id) if s.event_id else None
+        notes_exist = has_any_notes(venue_obj, ev_obj, s)
+        updated = latest_info_update(ev_obj, s)
+        for person in assigned_by_shift[s.id]:
+            seen_at, booked_at = ack_by_request.get(person.request_id, (None, None))
+            if notes_exist or updated is not None:
+                person.info_seen = not needs_ack(
+                    booked=True, has_notes=notes_exist, updated_at=updated,
+                    seen_at=seen_at, booked_at=booked_at,
+                )
 
     events = {}
     order = []
@@ -815,6 +833,7 @@ async def get_venue_events(
                 "start_time": s.start_time,
                 "end_time": s.end_time,
                 "description": event_notes.get(s.event_id) if s.event_id else None,
+                "staff_notes": event_objs[s.event_id].staff_notes if s.event_id in event_objs else None,
                 "cancelled": event_cancel.get(s.event_id, (False, None))[0] if s.event_id else False,
                 "cancel_reason": event_cancel.get(s.event_id, (False, None))[1] if s.event_id else None,
                 "positions": [],
@@ -829,6 +848,7 @@ async def get_venue_events(
             tips_eligible=bool(s.tips_eligible),
             tip_pool=bool(s.tip_pool),
             role_notes=s.description,
+            staff_notes=s.staff_notes,
             approval_mode=s.approval_mode or "venue_default",
             capacity=s.capacity if s.capacity is not None else 1,
             spots_filled=s.spots_filled if s.spots_filled is not None else 0,

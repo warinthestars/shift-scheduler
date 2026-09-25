@@ -165,6 +165,7 @@ async def build_listings(
                 est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
                 my_status=my_status,
                 my_status_reason=r.status_reason if r is not None else None,
+                staff_notes=s.staff_notes if (can_see_all_pay or my_status in ASSIGNED_STATUSES) else None,
             ))
 
         open_positions = [p for p in positions if p.status == "OPEN"]
@@ -226,5 +227,8 @@ async def build_listings(
             cancel_reason=ev.cancel_reason,
             started=started,
             can_request=can_request,
+            staff_notes=ev.staff_notes if (
+                can_see_all_pay or (my_request is not None and my_request.status in ASSIGNED_STATUSES)
+            ) else None,
         ))
     return out

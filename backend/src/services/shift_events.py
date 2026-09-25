@@ -32,6 +32,21 @@ def _clean(text):
     return text or None
 
 
+def _money(v):
+    return None if v is None else round(float(v), 2)
+
+
+def _fmt_range(start, end, tz_name: str) -> str:
+    """Phase 26.2: 'Fri Oct 3, 6:00 PM – 11:00 PM' in the venue's timezone."""
+    try:
+        tz = ZoneInfo(tz_name or "America/New_York")
+    except Exception:
+        tz = ZoneInfo("America/New_York")
+    s_local = _as_utc(start).astimezone(tz)
+    e_local = _as_utc(end).astimezone(tz)
+    return f"{s_local.strftime('%a %b %-d, %-I:%M %p')} – {e_local.strftime('%-I:%M %p')}"
+
+
 def _validate_basics(data) -> None:
     if not (data.title or "").strip():
         raise HTTPException(status_code=400, detail="Give the event a name.")
@@ -56,21 +71,46 @@ def _validate_position(p: EventPositionInput) -> None:
         raise HTTPException(status_code=400, detail=f"{name}: approval must be venue_default, auto, or manual.")
 
 
-def _apply_position(shift: Shift, p: EventPositionInput, event: ShiftEvent) -> None:
+def _apply_position(shift: Shift, p: EventPositionInput, event: ShiftEvent, track_changes: bool = False) -> None:
+    """
+    Copy form values onto a Shift row. track_changes=True (existing positions being edited)
+    records what changed in shift.info_change / info_updated_at so booked workers are told (Phase 26.2).
+    """
     mode = (p.approval_mode or "venue_default").lower()
+    new_role = p.role_type.strip()[:100]
+    new_rate_max = p.hourly_rate_max if (p.hourly_rate_max is not None and p.hourly_rate_max > p.hourly_rate) else None
+    new_desc = _clean(p.role_notes)
+    new_staff = _clean(p.staff_notes)
+
+    changes = []
+    if track_changes:
+        if (shift.role_type or "") != new_role:
+            changes.append(f"Position renamed to {new_role}")
+        if _money(shift.hourly_rate) != _money(p.hourly_rate) or _money(shift.hourly_rate_max) != _money(new_rate_max):
+            changes.append("Pay updated")
+        if _clean(shift.description) != new_desc:
+            changes.append("Position notes updated")
+        if _clean(shift.staff_notes) != new_staff:
+            changes.append("Staff-only notes updated")
+
     shift.title = event.title
     shift.start_time = event.start_time
     shift.end_time = event.end_time
-    shift.role_type = p.role_type.strip()[:100]
+    shift.role_type = new_role
     shift.capacity = int(p.capacity)
     shift.hourly_rate = p.hourly_rate
-    shift.hourly_rate_max = p.hourly_rate_max if (p.hourly_rate_max is not None and p.hourly_rate_max > p.hourly_rate) else None
+    shift.hourly_rate_max = new_rate_max
     shift.hide_rate = bool(p.hide_rate)
     shift.tips_eligible = bool(p.tips_eligible)
     shift.tip_pool = bool(p.tips_eligible and p.tip_pool)
-    shift.description = _clean(p.role_notes)          # description = position notes
+    shift.description = new_desc                      # description = position notes
+    shift.staff_notes = new_staff                     # Phase 26.2: booked staff only
     shift.approval_mode = mode
     shift.is_shift_auto_confirm = (mode == "auto")    # kept in sync for older screens
+
+    if changes:
+        shift.info_updated_at = datetime.now(timezone.utc)
+        shift.info_change = "; ".join(changes)
 
 
 async def _request_counts(db: AsyncSession, shift_ids) -> Dict:
@@ -105,6 +145,7 @@ async def create_event_with_positions(db: AsyncSession, venue: Venue, user: User
             start_time=_as_utc(data.start_time),
             end_time=_as_utc(data.end_time),
             notes=_clean(data.notes),
+            staff_notes=_clean(data.staff_notes),
         )
         db.add(event)
         await db.flush()
@@ -160,10 +201,30 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
                 )
 
     try:
-        event.title = data.title.strip()[:255]
-        event.start_time = _as_utc(data.start_time)
-        event.end_time = _as_utc(data.end_time)
+        # Phase 26.2: work out what changed so booked workers are told
+        tz_name = await db.scalar(select(Venue.timezone).where(Venue.id == event.venue_id)) or "America/New_York"
+        new_title = data.title.strip()[:255]
+        new_start, new_end = _as_utc(data.start_time), _as_utc(data.end_time)
+        changes = []
+        if _as_utc(event.start_time) != new_start or _as_utc(event.end_time) != new_end:
+            changes.append(
+                f"Time changed: {_fmt_range(event.start_time, event.end_time, tz_name)} → {_fmt_range(new_start, new_end, tz_name)}"
+            )
+        if (event.title or "") != new_title:
+            changes.append(f"Renamed to \u201c{new_title}\u201d")
+        if _clean(event.notes) != _clean(data.notes):
+            changes.append("Event notes updated")
+        if _clean(event.staff_notes) != _clean(data.staff_notes):
+            changes.append("Staff-only notes updated")
+
+        event.title = new_title
+        event.start_time = new_start
+        event.end_time = new_end
         event.notes = _clean(data.notes)
+        event.staff_notes = _clean(data.staff_notes)
+        if changes:
+            event.info_updated_at = datetime.now(timezone.utc)
+            event.info_change = "; ".join(changes)
 
         remove_ids = [s.id for s in existing if s.id not in keep_ids]
         if remove_ids:
@@ -172,7 +233,7 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
         for p in data.positions:
             if p.shift_id:
                 s = by_id[p.shift_id]
-                _apply_position(s, p, event)
+                _apply_position(s, p, event, track_changes=True)
                 if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
                     s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
             else:
@@ -206,6 +267,7 @@ async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail
         start_time=event.start_time,
         end_time=event.end_time,
         notes=event.notes,
+        staff_notes=event.staff_notes,
         cancelled=event.cancelled_at is not None,
         cancel_reason=event.cancel_reason,
         positions=[
@@ -222,6 +284,7 @@ async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail
                 tips_eligible=bool(s.tips_eligible),
                 tip_pool=bool(s.tip_pool),
                 role_notes=s.description,
+                staff_notes=s.staff_notes,
                 approval_mode=s.approval_mode or "venue_default",
                 status=s.status or "OPEN",
             )
@@ -350,6 +413,7 @@ async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, use
             tips_eligible=bool(s.tips_eligible),
             tip_pool=bool(s.tip_pool),
             role_notes=s.description,
+            staff_notes=s.staff_notes,
             approval_mode=s.approval_mode or "venue_default",
         )
         for s in shifts
@@ -370,6 +434,7 @@ async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, use
             start_time=new_start,
             end_time=new_start + duration,
             notes=event.notes,
+            staff_notes=event.staff_notes,
             positions=positions,
         ))
         created.append(ev)
