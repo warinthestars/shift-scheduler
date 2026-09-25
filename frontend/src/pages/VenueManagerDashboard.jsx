@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
@@ -482,6 +483,16 @@ export default function VenueManagerDashboard() {
               <Settings className="w-4 h-4 text-amber-400" />
               <span>Venue Settings</span>
             </button>
+
+            {currentVenueId && (
+              <Link
+                to={`/venues/${currentVenueId}`}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm"
+              >
+                <Users className="w-4 h-4 text-emerald-400" />
+                <span>Public page</span>
+              </Link>
+            )}
 
             {/* Download Payroll CSV Button */}
             <button

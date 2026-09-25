@@ -118,6 +118,7 @@ class Venue(Base):
     dress_code = Column(Text, nullable=True)
     default_shift_notes = Column(Text, nullable=True)
     approval_policy = Column(String(20), nullable=False, default="team_auto")
+    show_rates_publicly = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

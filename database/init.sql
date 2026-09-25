@@ -58,6 +58,7 @@ CREATE TABLE venues (
     dress_code TEXT,
     default_shift_notes TEXT,
     approval_policy VARCHAR(20) NOT NULL DEFAULT 'team_auto',
+    show_rates_publicly BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

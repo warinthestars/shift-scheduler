@@ -20,12 +20,14 @@ from src.schemas import (
     ShiftResponse, ShiftRequestResponse,
     WorkerContactSchema, ShiftRosterResponse, UserBrief,
     WorkerReliability, VenueEventResponse, EventPosition, RosterPerson,
-    VenuePositionCreate, VenuePositionUpdate, VenuePositionResponse
+    VenuePositionCreate, VenuePositionUpdate, VenuePositionResponse,
+    VenueDirectoryItem, VenueProfileResponse, PublicVenueEvent
 )
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 from src.services.reliability import compute_reliability
 from src.services.team import get_venue_team
 from src.services.venue_positions import ensure_default_positions, clean_venue_payload
+from src.services.venue_public import build_directory, build_profile, build_public_events
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -77,6 +79,14 @@ async def list_managed_venues(
             .order_by(Venue.name)
         )
     return result.scalars().all()
+
+@router.get("/directory", response_model=List[VenueDirectoryItem])
+async def venue_directory(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 25.1: Worker-facing list of venues with open spots and (optional) pay ranges."""
+    return await build_directory(db)
 
 @router.post("", response_model=VenueResponse, status_code=status.HTTP_201_CREATED)
 async def create_venue(
@@ -792,4 +802,28 @@ async def get_venue_events(
     return result
 
 
+@router.get("/{venue_id}/profile", response_model=VenueProfileResponse)
+async def venue_public_profile(
+    venue_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 25.1: Public venue profile (no worker PII)."""
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    return await build_profile(db, venue, current_user)
 
+
+@router.get("/{venue_id}/public-events", response_model=List[PublicVenueEvent])
+async def venue_public_events(
+    venue_id: UUID,
+    scope: str = Query("upcoming", pattern="^(upcoming|past)$"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 25.1: Upcoming or past (90 days) shifts grouped by event, with fill counts only."""
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    return await build_public_events(db, venue, current_user, scope)

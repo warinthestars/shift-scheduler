@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X, Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info,
 } from 'lucide-react';
@@ -37,6 +38,7 @@ function emptyForm(venue) {
     lng: venue?.lng != null ? String(venue.lng) : '',
     geofence_radius_meters: String(venue?.geofence_radius_meters ?? 150),
     approval_policy: venue?.approval_policy || 'team_auto',
+    show_rates_publicly: venue?.show_rates_publicly ?? true,
     auto_approve_rating_threshold:
       venue?.auto_approve_rating_threshold != null ? String(venue.auto_approve_rating_threshold) : '',
     arrival_instructions: venue?.arrival_instructions || '',
@@ -215,6 +217,14 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
   const useMyLocation = () => {
     setError('');
     if (!navigator.geolocation) {
@@ -259,6 +269,7 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
       timezone: form.timezone,
       geofence_radius_meters: parseInt(form.geofence_radius_meters, 10) || 150,
       approval_policy: form.approval_policy,
+      show_rates_publicly: !!form.show_rates_publicly,
       auto_approve_rating_threshold: form.auto_approve_rating_threshold === '' ? null : parseFloat(form.auto_approve_rating_threshold),
       arrival_instructions: form.arrival_instructions,
       dress_code: form.dress_code,
@@ -309,10 +320,10 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
 
   const mapUrl = form.lat && form.lng ? `https://www.google.com/maps?q=${form.lat},${form.lng}` : null;
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl max-h-[92vh] flex flex-col">
-        <div className="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-800">
+  return createPortal(
+    <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <div className="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-800 shrink-0">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <Building2 className="w-5 h-5 text-emerald-400" />
             {isEdit ? `Venue settings — ${venue.name}` : 'Add a venue'}
@@ -323,7 +334,7 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
         </div>
 
         {isEdit && (
-          <div className="px-6 pt-3 flex gap-2">
+          <div className="px-6 pt-3 flex gap-2 shrink-0">
             {[
               { id: 'details', label: 'Details' },
               { id: 'positions', label: 'Positions & pay' },
@@ -343,10 +354,10 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
         )}
 
         {error && (
-          <div className="mx-6 mt-3 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>
+          <div className="mx-6 mt-3 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm shrink-0">{error}</div>
         )}
 
-        <div className="overflow-y-auto px-6 py-4 flex-1">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-6 py-4">
           {tab === 'details' ? (
             <form id="venue-settings-form" onSubmit={handleSave} className="space-y-5">
               <section className="space-y-3">
@@ -454,6 +465,23 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
                 </details>
               </section>
 
+              <section className="p-4 rounded-xl bg-slate-950 border border-slate-800">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!form.show_rates_publicly}
+                    onChange={(e) => setForm({ ...form, show_rates_publicly: e.target.checked })}
+                    className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-white">Show our default pay rates on the public venue page</span>
+                    <span className="block text-xs text-slate-400">
+                      Workers browsing venues will see each position's usual pay. If off, they only see pay on individual posted shifts.
+                    </span>
+                  </span>
+                </label>
+              </section>
+
               <section className="space-y-3">
                 <div>
                   <label className={labelCls}>Arrival instructions</label>
@@ -555,7 +583,7 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-slate-800 flex justify-end gap-3">
+        <div className="px-6 py-4 border-t border-slate-800 flex justify-end gap-3 shrink-0">
           <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
             {tab === 'positions' ? 'Done' : 'Cancel'}
           </button>
@@ -571,6 +599,7 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

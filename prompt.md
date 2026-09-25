@@ -1,1548 +1,1063 @@
-# Phase 25: Venue Profiles, Positions & Rates, Approval Policy, and Venue-Local Time
+# Phase 25.1: Modal Scrolling Fix + Public Venue Profiles
 
-Makes venues fully editable and gives each venue its own list of positions with default pay. Built on the CURRENT code (Phases 20–24 are implemented).
+Patch on top of Phase 25 (implemented). Two parts:
 
-1. **Editable venue profile** — by platform admins (Admin Panel → Venues → pencil) and by the venue's own managers (Venue dashboard → **Venue Settings**). New fields: timezone, phone, arrival instructions (parking / which door), dress code, default notes for staff, and an **approval policy** in plain language.
-2. **Location that actually works** — "Use my current location" button (manager standing in the venue sets lat/lng with one tap) plus manual lat/lng and a "check on map" link. Required before geofenced clock-in (Phase 31) can work.
-3. **Positions & default rates per venue** — e.g. Bartender $30 + pooled tips, AV Tech $32. The Create Shift form's position dropdown comes from this list and pre-fills rate and tips. Every new venue gets 5 starter positions.
-4. **Approval policy** replaces the confusing "auto-approve rating" as the main control:
-   * `manual` — the manager approves every request.
-   * `team_auto` — people on the venue's team (whitelist) are booked instantly, everyone else waits for approval. **(default — matches today's behavior)**
-   * `everyone_auto` — anyone who requests is booked instantly.
-   The optional rating threshold and per-shift "instant booking" still work on top of this.
-5. **Venue-local time** — shift times are entered and displayed in the **venue's** timezone (not the viewer's phone), with the zone abbreviation shown (e.g. "7:00 PM – 1:00 AM EDT").
-6. **Bug fix** — the Admin Panel venues table reads `shifts_count / managers_count / workers_count`, but the API returns `total_shifts / total_managers / assigned_workers_count`, so every count shows 0.
+**A. Modal scrolling bug.** `VenueSettingsModal` (and `EventRosterModal`) overflow the screen and can't be scrolled. Cause: the panel is a `flex flex-col` box with `max-h-[..vh]`, and the scrolling body is `flex-1 overflow-y-auto` **without `min-h-0`**. Flex children default to `min-height: auto`, so the body grows to its full content height, pushes past the cap, and never scrolls. Fix: add `min-h-0` to the scrolling body, make header/footer `shrink-0`, use `dvh` units (correct on phones with browser toolbars), render through a React portal on `document.body` so no parent can clip it, and lock page scroll behind the modal.
 
-⚠️ **SCHEMA CHANGE — destructive rebuild required** (see §10).
+**B. Public venue profiles for workers.**
+* **`/venues` — Venue directory.** Every venue, sorted by open spots, with next shift, pay range (if the venue allows it), and how many shifts it has posted. Searchable.
+* **`/venues/:venueId` — Venue profile.** Name, address (Directions link), phone, about, dress code, positions (with default pay if the venue allows it), a transparency strip (events and fill rate in the last 90 days, people who've worked there), and **Upcoming** and **Past (90 days)** shifts grouped by event with positions, pay, tips, and how many spots are filled. Workers can request an open position right from the profile.
+* **Privacy:** no worker names or contact info appear anywhere on the public pages. Arrival instructions (can contain door codes) are shown only to that venue's managers/admins and to workers who have been booked there.
+* **New venue setting:** "Show our default pay rates on the public profile" (`show_rates_publicly`, default ON). When off, the profile and directory hide default rates; posted shifts still show their own pay (as they already do on Find Shifts).
+* Navbar gets a **Venues** link for everyone; venue names on the worker's Find Shifts cards link to the profile; the manager dashboard gets a **Public page** button.
+
+⚠️ **One new column** (`venues.show_rates_publicly`). See §9 for the rebuild options.
 
 ---
 
 ## 0. Guardrails (read before editing)
-* DO NOT modify: `.gitignore`, anything in `.secrets/`, `docker-compose.yml`, `backend/src/auth.py`, `backend/src/main.py`, `backend/src/routers/auth.py`, `backend/src/serializers.py`, `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/src/components/Navbar.jsx`, `frontend/src/App.jsx`, `frontend/src/pages/LoginPage.jsx`.
-* **No native PostgreSQL ENUMs.** `approval_policy` is `VARCHAR(20)`, validated in Python.
-* Schema changes go in BOTH `database/init.sql` AND `backend/src/models.py`.
-* NEVER call `UserResponse.model_validate(<User ORM>)`; never read ORM relationships that weren't `selectinload`-ed in the same query. The new `Venue.positions` relationship must NEVER be read directly — always query `VenuePosition` explicitly.
-* All backend datetime comparisons use `datetime.now(timezone.utc)`. The backend stores/returns UTC; venue timezone is used for DISPLAY and for converting the manager's typed-in local time (frontend §6).
-* New files are created with the EXACT content given. Do not add npm packages (use the built-in `Intl` API for timezones).
+* DO NOT modify: `.gitignore`, anything in `.secrets/`, `docker-compose.yml`, `backend/src/auth.py`, `backend/src/main.py`, `backend/src/routers/auth.py`, `backend/src/serializers.py`, `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/src/components/ProtectedRoute.jsx`, `frontend/src/pages/LoginPage.jsx`.
+* `frontend/src/App.jsx` and `frontend/src/components/Navbar.jsx`: ONLY the edits listed in §7 and §8.
+* No native PostgreSQL ENUMs. Schema changes go in BOTH `database/init.sql` and `backend/src/models.py`.
+* Public endpoints (`/directory`, `/{venue_id}/profile`, `/{venue_id}/public-events`) must NEVER return worker names, emails, phones, or IDs of other users.
+* Route ORDER in `venues.py`: `GET /directory` must be declared ABOVE `@router.get("/{venue_id}", ...)`.
+* Never read ORM relationship attributes that weren't `selectinload`-ed; use explicit `select(...)` queries.
+* All backend datetime comparisons use `datetime.now(timezone.utc)`.
+* New files are created with the EXACT content given. Only use `lucide-react` icons already used elsewhere in the app (the ones imported below are all safe).
 
 ---
 
-## 1. Database Schema
+## 1. Part A — Modal scrolling fix
 
-### A. `database/init.sql`
+### A1. `frontend/src/components/VenueSettingsModal.jsx`
+1. Change the first import line to:
+```jsx
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+```
+2. Inside the `VenueSettingsModal` component (NOT `PositionRow`), directly after the existing `useEffect` that calls `loadPositions()`, add a scroll lock:
+```jsx
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+```
+3. In the component's main `return`, change `return (` → `return createPortal(` and change the final
+```jsx
+    </div>
+  );
+}
+```
+at the very end of the file to:
+```jsx
+    </div>,
+    document.body
+  );
+}
+```
+4. Replace the two outermost wrapper `<div>` opening tags:
+```jsx
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl max-h-[92vh] flex flex-col">
+```
+with:
+```jsx
+    <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+```
+5. Add `shrink-0` to the className of each of these fixed (non-scrolling) blocks:
+   * the header `<div className="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-800">`
+   * the tabs `<div className="px-6 pt-3 flex gap-2">`
+   * the error `<div className="mx-6 mt-3 p-3 bg-rose-500/10 ...">`
+   * the footer `<div className="px-6 py-4 border-t border-slate-800 flex justify-end gap-3">`
+6. Change the scrolling body `<div className="overflow-y-auto px-6 py-4 flex-1">` to:
+```jsx
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-6 py-4">
+```
 
-**Venues** — in `CREATE TABLE venues (...)`, add these lines directly after `logo_url TEXT,`:
+### A2. `frontend/src/components/EventRosterModal.jsx` (same bug)
+1. Add `import { createPortal } from 'react-dom';` below the React import.
+2. Change `return (` (the main return that renders the modal, AFTER the `if (!event) return null;` line) → `return createPortal(`, and the final `</div>\n  );\n}` → `</div>,\n    document.body\n  );\n}`.
+3. Outer wrapper: `<div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">` → `<div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">`
+4. Panel: replace `max-h-[90vh] flex flex-col` with `max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden` (keep the other classes on that element).
+5. Header `<div className="flex justify-between items-start pb-4 border-b border-slate-800">` → add `shrink-0`.
+6. Body `<div className="overflow-y-auto flex-1 pt-4 space-y-5 pr-1">` → `<div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pt-4 space-y-5 pr-1">`
+
+---
+
+## 2. Database — `show_rates_publicly`
+
+### `database/init.sql`
+In `CREATE TABLE venues (...)`, directly after `approval_policy VARCHAR(20) NOT NULL DEFAULT 'team_auto',` add:
 ```sql
-    timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
-    phone VARCHAR(30),
-    arrival_instructions TEXT,
-    dress_code TEXT,
-    default_shift_notes TEXT,
-    approval_policy VARCHAR(20) NOT NULL DEFAULT 'team_auto',
+    show_rates_publicly BOOLEAN NOT NULL DEFAULT TRUE,
 ```
 
-**Venue positions** — directly after the `venue_whitelists` section (after `CREATE INDEX idx_whitelist_worker ...;`), add:
-```sql
--- ------------------------------------------------------------------------------
--- 4b. Venue Positions (Phase 25): per-venue roles with default pay
--- ------------------------------------------------------------------------------
-CREATE TABLE venue_positions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
-    name VARCHAR(100) NOT NULL,
-    default_rate NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
-    tips_eligible BOOLEAN NOT NULL DEFAULT FALSE,
-    tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
-    sort_order INT NOT NULL DEFAULT 0,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_venue_position_name UNIQUE (venue_id, name),
-    CONSTRAINT chk_position_tip_pool CHECK (tip_pool = FALSE OR tips_eligible = TRUE),
-    CONSTRAINT chk_position_rate CHECK (default_rate > 0)
-);
-
-CREATE INDEX idx_venue_positions_venue ON venue_positions(venue_id);
-```
-
-**Trigger** — next to the other `CREATE TRIGGER trg_..._updated_at` lines, add:
-```sql
-CREATE TRIGGER trg_venue_positions_updated_at BEFORE UPDATE ON venue_positions FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
-```
-
-### B. `backend/src/models.py`
-
-In `class Venue`, directly after `logo_url = Column(Text, nullable=True)`:
+### `backend/src/models.py`
+In `class Venue`, directly after the `approval_policy = Column(...)` line:
 ```python
-    timezone = Column(String(64), nullable=False, default="America/New_York")
-    phone = Column(String(30), nullable=True)
-    arrival_instructions = Column(Text, nullable=True)
-    dress_code = Column(Text, nullable=True)
-    default_shift_notes = Column(Text, nullable=True)
-    approval_policy = Column(String(20), nullable=False, default="team_auto")
-```
-In `class Venue`'s `# Relationships` block, add:
-```python
-    positions = relationship("VenuePosition", back_populates="venue", cascade="all, delete-orphan")
-```
-
-Add a new model directly AFTER `class VenueWhitelist` (use the same imports already at the top of the file; add `UniqueConstraint`/`CheckConstraint` to the `from sqlalchemy import (...)` list only if missing):
-```python
-class VenuePosition(Base):
-    __tablename__ = "venue_positions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
-    name = Column(String(100), nullable=False)
-    default_rate = Column(Numeric(10, 2), nullable=False, default=25.00)
-    tips_eligible = Column(Boolean, nullable=False, default=False)
-    tip_pool = Column(Boolean, nullable=False, default=False)
-    sort_order = Column(Integer, nullable=False, default=0)
-    is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("venue_id", "name", name="uq_venue_position_name"),
-        CheckConstraint("tip_pool = FALSE OR tips_eligible = TRUE", name="chk_position_tip_pool"),
-        CheckConstraint("default_rate > 0", name="chk_position_rate"),
-    )
-
-    venue = relationship("Venue", back_populates="positions")
-```
-
-### C. `backend/requirements.txt`
-Append (guarantees timezone data inside the slim Python image):
-```
-tzdata>=2024.1
+    show_rates_publicly = Column(Boolean, nullable=False, default=True)
 ```
 
 ---
 
-## 2. Schemas (`backend/src/schemas.py`)
-
-### A. Venue schemas — replace `VenueBase`, `VenueCreate`, and `VenueUpdateSettings` with:
+## 3. Schemas (`backend/src/schemas.py`)
+1. Add `show_rates_publicly: bool = True` to `VenueBase` (after `approval_policy`).
+2. Add `show_rates_publicly: Optional[bool] = True` to `VenueCreate` (after `approval_policy`).
+3. Add `show_rates_publicly: Optional[bool] = None` to `VenueUpdateSettings` (after `approval_policy`).
+4. Append at the END of the file:
 ```python
-class VenueBase(BaseModel):
+# ------------------------------------------------------------------------------
+# Phase 25.1: Public venue directory & profile (no worker PII)
+# ------------------------------------------------------------------------------
+class VenueDirectoryItem(BaseModel):
+    id: UUID
     name: str
     address: str
-    lat: float
-    lng: float
-    geofence_radius_meters: int = 100
-    auto_approve_rating_threshold: Optional[float] = None
     description: Optional[str] = None
     logo_url: Optional[str] = None
     timezone: str = "America/New_York"
-    phone: Optional[str] = None
-    arrival_instructions: Optional[str] = None
-    dress_code: Optional[str] = None
-    default_shift_notes: Optional[str] = None
-    approval_policy: str = "team_auto"
+    lat: float
+    lng: float
+    open_spots: int = 0
+    upcoming_shift_count: int = 0
+    total_shifts_posted: int = 0
+    next_shift_start: Optional[datetime] = None
+    show_rates_publicly: bool = True
+    rate_min: Optional[float] = None
+    rate_max: Optional[float] = None
 
-class VenueCreate(BaseModel):
+
+class PublicPosition(BaseModel):
     name: str
-    address: str
-    lat: Optional[float] = 40.7128
-    lng: Optional[float] = -74.0060
-    geofence_radius_meters: Optional[int] = 100
-    auto_approve_rating_threshold: Optional[float] = None
-    description: Optional[str] = None
-    logo_url: Optional[str] = None
-    timezone: Optional[str] = "America/New_York"
-    phone: Optional[str] = None
-    arrival_instructions: Optional[str] = None
-    dress_code: Optional[str] = None
-    default_shift_notes: Optional[str] = None
-    approval_policy: Optional[str] = "team_auto"
-    manager_email: Optional[EmailStr] = None
-    initial_manager_email: Optional[EmailStr] = None
-
-class VenueUpdateSettings(BaseModel):
-    """Phase 25: partial update — only fields that are sent are changed."""
-    name: Optional[str] = None
-    address: Optional[str] = None
-    lat: Optional[float] = None
-    lng: Optional[float] = None
-    geofence_radius_meters: Optional[int] = None
-    auto_approve_rating_threshold: Optional[float] = None
-    description: Optional[str] = None
-    logo_url: Optional[str] = None
-    timezone: Optional[str] = None
-    phone: Optional[str] = None
-    arrival_instructions: Optional[str] = None
-    dress_code: Optional[str] = None
-    default_shift_notes: Optional[str] = None
-    approval_policy: Optional[str] = None
-```
-`VenueResponse(VenueBase)` stays as is (it inherits the new fields).
-
-### B. Append at the END of the file:
-```python
-# ------------------------------------------------------------------------------
-# Phase 25: Venue positions
-# ------------------------------------------------------------------------------
-class VenuePositionCreate(BaseModel):
-    name: str
-    default_rate: float
+    default_rate: Optional[float] = None
     tips_eligible: bool = False
     tip_pool: bool = False
 
 
-class VenuePositionUpdate(BaseModel):
-    name: Optional[str] = None
-    default_rate: Optional[float] = None
-    tips_eligible: Optional[bool] = None
-    tip_pool: Optional[bool] = None
-    is_active: Optional[bool] = None
-    sort_order: Optional[int] = None
-
-
-class VenuePositionResponse(BaseModel):
+class VenueProfileResponse(BaseModel):
     id: UUID
-    venue_id: UUID
     name: str
-    default_rate: float
-    tips_eligible: bool
-    tip_pool: bool
-    sort_order: int
-    is_active: bool
+    address: str
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    phone: Optional[str] = None
+    timezone: str = "America/New_York"
+    lat: float
+    lng: float
+    dress_code: Optional[str] = None
+    arrival_instructions: Optional[str] = None
+    show_rates_publicly: bool = True
+    positions: List[PublicPosition] = []
+    events_last_90_days: int = 0
+    spots_posted_last_90_days: int = 0
+    spots_filled_last_90_days: int = 0
+    workers_booked_all_time: int = 0
+    can_manage: bool = False
 
-    class Config:
-        from_attributes = True
+
+class PublicEventPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    hourly_rate: float
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    capacity: int
+    filled: int
+    spots_left: int
+    status: str
+    my_status: Optional[str] = None
+
+
+class PublicVenueEvent(BaseModel):
+    event_key: str
+    title: str
+    start_time: datetime
+    end_time: datetime
+    description: Optional[str] = None
+    total_capacity: int
+    total_filled: int
+    positions: List[PublicEventPosition]
+```
+
+### `backend/src/routers/admin.py` — `get_admin_venues`
+In the `VenueResponse(...)` constructor, directly after `approval_policy=v.approval_policy or "team_auto",` add:
+```python
+            show_rates_publicly=bool(v.show_rates_publicly),
 ```
 
 ---
 
-## 3. Services
-
-### A. NEW FILE `backend/src/services/venue_positions.py`
+## 4. NEW FILE `backend/src/services/venue_public.py`
 ```python
-"""Phase 25: Default positions and venue field validation."""
-from zoneinfo import ZoneInfo
+"""
+Phase 25.1: Worker-facing venue directory, profile, and shift history.
+Never returns other users' names, emails, phones, or IDs.
+"""
+from datetime import datetime, timezone, timedelta
+from typing import List
 
-from fastapi import HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import VenuePosition
-
-# (name, default_rate, tips_eligible, tip_pool)
-DEFAULT_POSITIONS = [
-    ("Bartender", 30.00, True, True),
-    ("Server", 25.00, True, False),
-    ("Barback", 22.00, True, True),
-    ("Dishwasher", 20.00, False, False),
-    ("AV Tech", 32.00, False, False),
-]
-
-VALID_APPROVAL_POLICIES = ("manual", "team_auto", "everyone_auto")
-NOT_NULL_VENUE_FIELDS = ("name", "address", "lat", "lng", "geofence_radius_meters", "timezone", "approval_policy")
-TEXT_VENUE_FIELDS = (
-    "name", "address", "phone", "arrival_instructions", "dress_code",
-    "default_shift_notes", "description", "logo_url", "timezone", "approval_policy",
+from src.models import Venue, Shift, ShiftRequest, VenuePosition, VenueManager, User
+from src.auth import normalize_role
+from src.schemas import (
+    VenueDirectoryItem, PublicPosition, VenueProfileResponse,
+    PublicEventPosition, PublicVenueEvent,
 )
 
+ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
+PAST_WINDOW_DAYS = 90
+MAX_SHIFTS = 300
 
-async def ensure_default_positions(db: AsyncSession, venue_id) -> None:
-    """Adds the starter positions if the venue has none. Caller commits."""
-    existing = await db.scalar(select(func.count(VenuePosition.id)).where(VenuePosition.venue_id == venue_id))
-    if existing:
-        return
-    for idx, (name, rate, tips, pool) in enumerate(DEFAULT_POSITIONS):
-        db.add(VenuePosition(
-            venue_id=venue_id, name=name, default_rate=rate,
-            tips_eligible=tips, tip_pool=(tips and pool), sort_order=idx, is_active=True,
+
+async def can_manage_venue(db: AsyncSession, user: User, venue_id) -> bool:
+    if normalize_role(user.role) in ("platform_admin", "super_admin"):
+        return True
+    row = await db.scalar(
+        select(VenueManager.user_id).where(
+            VenueManager.venue_id == venue_id,
+            VenueManager.user_id == user.id,
+        )
+    )
+    return row is not None
+
+
+async def build_directory(db: AsyncSession) -> List[VenueDirectoryItem]:
+    now = datetime.now(timezone.utc)
+    venues = (await db.execute(select(Venue).order_by(Venue.name))).scalars().all()
+
+    stats_rows = (await db.execute(
+        select(
+            Shift.venue_id.label("venue_id"),
+            func.count(Shift.id).label("total"),
+            func.count(Shift.id).filter(Shift.end_time >= now).label("upcoming"),
+            func.coalesce(
+                func.sum(Shift.capacity - Shift.spots_filled).filter(
+                    and_(Shift.start_time >= now, Shift.status == "OPEN")
+                ),
+                0,
+            ).label("open_spots"),
+            func.min(Shift.start_time).filter(Shift.start_time >= now).label("next_start"),
+        ).group_by(Shift.venue_id)
+    )).all()
+    stats = {r.venue_id: r for r in stats_rows}
+
+    rate_rows = (await db.execute(
+        select(VenuePosition.venue_id, func.min(VenuePosition.default_rate), func.max(VenuePosition.default_rate))
+        .where(VenuePosition.is_active == True)
+        .group_by(VenuePosition.venue_id)
+    )).all()
+    rates = {vid: (mn, mx) for vid, mn, mx in rate_rows}
+
+    items = []
+    for v in venues:
+        s = stats.get(v.id)
+        show = bool(v.show_rates_publicly)
+        mn, mx = rates.get(v.id, (None, None))
+        items.append(VenueDirectoryItem(
+            id=v.id,
+            name=v.name,
+            address=v.address,
+            description=v.description,
+            logo_url=v.logo_url,
+            timezone=v.timezone or "America/New_York",
+            lat=float(v.lat),
+            lng=float(v.lng),
+            open_spots=max(0, int(s.open_spots or 0)) if s else 0,
+            upcoming_shift_count=int(s.upcoming or 0) if s else 0,
+            total_shifts_posted=int(s.total or 0) if s else 0,
+            next_shift_start=s.next_start if s else None,
+            show_rates_publicly=show,
+            rate_min=float(mn) if (show and mn is not None) else None,
+            rate_max=float(mx) if (show and mx is not None) else None,
+        ))
+    items.sort(key=lambda i: (-i.open_spots, -i.upcoming_shift_count, i.name.lower()))
+    return items
+
+
+async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProfileResponse:
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=PAST_WINDOW_DAYS)
+    manage = await can_manage_venue(db, user, venue.id)
+
+    booked_here = await db.scalar(
+        select(ShiftRequest.id)
+        .join(Shift, ShiftRequest.shift_id == Shift.id)
+        .where(
+            Shift.venue_id == venue.id,
+            ShiftRequest.worker_id == user.id,
+            func.lower(ShiftRequest.status).in_(ASSIGNED_STATUSES),
+        )
+        .limit(1)
+    )
+
+    positions = (await db.execute(
+        select(VenuePosition)
+        .where(VenuePosition.venue_id == venue.id, VenuePosition.is_active == True)
+        .order_by(VenuePosition.sort_order.asc(), VenuePosition.name.asc())
+    )).scalars().all()
+    show_rates = bool(venue.show_rates_publicly) or manage
+
+    events_count, spots_posted = (await db.execute(
+        select(
+            func.count(distinct(func.concat(Shift.title, "|", Shift.start_time, "|", Shift.end_time))),
+            func.coalesce(func.sum(Shift.capacity), 0),
+        ).where(Shift.venue_id == venue.id, Shift.start_time >= since, Shift.start_time < now)
+    )).one()
+
+    spots_filled = await db.scalar(
+        select(func.count(ShiftRequest.id))
+        .join(Shift, ShiftRequest.shift_id == Shift.id)
+        .where(
+            Shift.venue_id == venue.id,
+            Shift.start_time >= since,
+            Shift.start_time < now,
+            func.lower(ShiftRequest.status).in_(ASSIGNED_STATUSES),
+        )
+    ) or 0
+
+    workers_booked = await db.scalar(
+        select(func.count(distinct(ShiftRequest.worker_id)))
+        .join(Shift, ShiftRequest.shift_id == Shift.id)
+        .where(Shift.venue_id == venue.id, func.lower(ShiftRequest.status).in_(ASSIGNED_STATUSES))
+    ) or 0
+
+    return VenueProfileResponse(
+        id=venue.id,
+        name=venue.name,
+        address=venue.address,
+        description=venue.description,
+        logo_url=venue.logo_url,
+        phone=venue.phone,
+        timezone=venue.timezone or "America/New_York",
+        lat=float(venue.lat),
+        lng=float(venue.lng),
+        dress_code=venue.dress_code,
+        arrival_instructions=venue.arrival_instructions if (manage or booked_here) else None,
+        show_rates_publicly=bool(venue.show_rates_publicly),
+        positions=[
+            PublicPosition(
+                name=p.name,
+                default_rate=float(p.default_rate) if show_rates else None,
+                tips_eligible=bool(p.tips_eligible),
+                tip_pool=bool(p.tip_pool),
+            )
+            for p in positions
+        ],
+        events_last_90_days=int(events_count or 0),
+        spots_posted_last_90_days=int(spots_posted or 0),
+        spots_filled_last_90_days=int(spots_filled),
+        workers_booked_all_time=int(workers_booked),
+        can_manage=manage,
+    )
+
+
+async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
+    now = datetime.now(timezone.utc)
+    q = select(Shift).where(Shift.venue_id == venue.id)
+    if scope == "past":
+        q = q.where(
+            Shift.end_time < now,
+            Shift.start_time >= now - timedelta(days=PAST_WINDOW_DAYS),
+        ).order_by(Shift.start_time.desc(), Shift.role_type.asc())
+    else:
+        q = q.where(Shift.end_time >= now).order_by(Shift.start_time.asc(), Shift.role_type.asc())
+    shifts = (await db.execute(q.limit(MAX_SHIFTS))).scalars().all()
+    if not shifts:
+        return []
+
+    ids = [s.id for s in shifts]
+    filled_rows = (await db.execute(
+        select(ShiftRequest.shift_id, func.count(ShiftRequest.id))
+        .where(ShiftRequest.shift_id.in_(ids), func.lower(ShiftRequest.status).in_(ASSIGNED_STATUSES))
+        .group_by(ShiftRequest.shift_id)
+    )).all()
+    filled = {sid: int(n) for sid, n in filled_rows}
+
+    mine_rows = (await db.execute(
+        select(ShiftRequest.shift_id, ShiftRequest.status)
+        .where(ShiftRequest.shift_id.in_(ids), ShiftRequest.worker_id == user.id)
+    )).all()
+    mine = {sid: (st or "").lower() for sid, st in mine_rows}
+
+    events, order = {}, []
+    for s in shifts:
+        key = f"{s.title}|{s.start_time.isoformat()}|{s.end_time.isoformat()}"
+        if key not in events:
+            events[key] = {
+                "event_key": key,
+                "title": s.title or "Shift",
+                "start_time": s.start_time,
+                "end_time": s.end_time,
+                "description": s.description,
+                "positions": [],
+            }
+            order.append(key)
+        cap = s.capacity if s.capacity is not None else 1
+        f = filled.get(s.id, 0)
+        events[key]["positions"].append(PublicEventPosition(
+            shift_id=s.id,
+            role_type=s.role_type or "Worker",
+            hourly_rate=float(s.hourly_rate) if s.hourly_rate is not None else 0.0,
+            tips_eligible=bool(s.tips_eligible),
+            tip_pool=bool(s.tip_pool),
+            capacity=cap,
+            filled=f,
+            spots_left=max(0, cap - f),
+            status=s.status or "OPEN",
+            my_status=mine.get(s.id),
         ))
 
-
-def clean_venue_payload(data: dict) -> dict:
-    """Normalizes and validates venue fields in-place. Raises HTTPException(400) on bad input."""
-    for key in NOT_NULL_VENUE_FIELDS:
-        if key in data and data[key] is None:
-            data.pop(key)
-
-    for key in TEXT_VENUE_FIELDS:
-        if key in data and isinstance(data[key], str):
-            data[key] = data[key].strip()
-            if data[key] == "" and key not in ("name", "address", "timezone", "approval_policy"):
-                data[key] = None
-
-    if "name" in data and not data["name"]:
-        raise HTTPException(status_code=400, detail="Venue name can't be empty.")
-    if "address" in data and not data["address"]:
-        raise HTTPException(status_code=400, detail="Venue address can't be empty.")
-
-    if "timezone" in data:
-        try:
-            ZoneInfo(data["timezone"])
-        except Exception:
-            raise HTTPException(status_code=400, detail=f"Unknown timezone '{data['timezone']}'.")
-
-    if "approval_policy" in data and data["approval_policy"] not in VALID_APPROVAL_POLICIES:
-        raise HTTPException(status_code=400, detail="Approval policy must be manual, team_auto, or everyone_auto.")
-
-    if "lat" in data and not (-90 <= float(data["lat"]) <= 90):
-        raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90.")
-    if "lng" in data and not (-180 <= float(data["lng"]) <= 180):
-        raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180.")
-    if "geofence_radius_meters" in data and not (25 <= int(data["geofence_radius_meters"]) <= 5000):
-        raise HTTPException(status_code=400, detail="Clock-in radius must be between 25 and 5000 meters.")
-    if data.get("auto_approve_rating_threshold") is not None:
-        t = float(data["auto_approve_rating_threshold"])
-        if not (1.0 <= t <= 5.0):
-            raise HTTPException(status_code=400, detail="Auto-approve rating must be between 1 and 5.")
-    return data
-```
-
-### B. `backend/src/services/auto_confirm.py` — approval policy
-In `evaluate_shift_request`:
-1. Update the docstring order list to:
-```
-    1. Shift-level instant booking (shift.is_shift_auto_confirm)      -> APPROVED "shift_auto_confirm"
-    2. Venue policy 'everyone_auto'                                   -> APPROVED "venue_everyone_auto"
-    3. Venue policy 'team_auto' AND worker on venue whitelist         -> APPROVED "venue_whitelist"
-    4. Rating threshold (worker has >= 1 rating and meets threshold)  -> APPROVED "rating_threshold"
-    5. Otherwise                                                      -> PENDING
-```
-2. Directly AFTER the Condition 1 block (`if shift.is_shift_auto_confirm: ... return RequestStatus.APPROVED, "shift_auto_confirm"`) and BEFORE the `# Condition 2: Venue Whitelist` banner, insert:
-```python
-    policy = (getattr(venue, "approval_policy", None) or "team_auto").lower()
-
-    # --------------------------------------------------------------------------
-    # Condition 1b: Venue policy - everyone is booked instantly
-    # --------------------------------------------------------------------------
-    if policy == "everyone_auto":
-        logger.info("[Auto-Confirm Engine] Venue policy is everyone_auto.")
-        await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
-        return RequestStatus.APPROVED, "venue_everyone_auto"
-```
-3. In the Condition 2 (whitelist) block, change the `if whitelist_entry:` line to:
-```python
-    if whitelist_entry and policy == "team_auto":
-```
-Leave Conditions 3 (rating) and 4 (fallback) unchanged.
-
----
-
-## 4. Venue Endpoints (`backend/src/routers/venues.py`)
-
-### A. Imports
-* Add `VenuePosition` to the `from src.models import (...)` block.
-* Add `VenuePositionCreate, VenuePositionUpdate, VenuePositionResponse` to the `from src.schemas import (...)` block.
-* Add: `from src.services.venue_positions import ensure_default_positions, clean_venue_payload`
-
-### B. `create_venue` — two edits (keep everything else from Phase 24)
-1. Directly after `venue_dict = venue_in.model_dump(exclude={"manager_email", "initial_manager_email"})`, add:
-```python
-        venue_dict = clean_venue_payload({k: v for k, v in venue_dict.items() if v is not None or k == "auto_approve_rating_threshold"})
-```
-2. Directly after `await db.flush()` (the one right after `db.add(venue)`), add:
-```python
-        await ensure_default_positions(db, venue.id)
-```
-
-### C. Replace the ENTIRE `update_venue_settings` function with:
-```python
-@router.put("/{venue_id}/settings", response_model=VenueResponse)
-async def update_venue_settings(
-    venue_id: UUID,
-    settings_in: VenueUpdateSettings,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Phase 25: Edit the venue profile. Admins: any venue. Managers: venues they manage."""
-    venue = await verify_venue_manager_access(venue_id, current_user, db)
-    data = clean_venue_payload(settings_in.model_dump(exclude_unset=True))
-    try:
-        for field, value in data.items():
-            setattr(venue, field, value)
-        await db.commit()
-        await db.refresh(venue)
-    except HTTPException:
-        await db.rollback()
-        raise
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update venue: {str(e)}")
-    return venue
-```
-
-### D. New position endpoints — add directly AFTER `update_venue_settings`:
-```python
-# ------------------------------------------------------------------------------
-# Phase 25: Venue positions (roles + default pay)
-# ------------------------------------------------------------------------------
-@router.get("/{venue_id}/positions", response_model=List[VenuePositionResponse])
-async def list_venue_positions(
-    venue_id: UUID,
-    include_inactive: bool = Query(False),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    await verify_venue_manager_access(venue_id, current_user, db)
-    q = select(VenuePosition).where(VenuePosition.venue_id == venue_id)
-    if not include_inactive:
-        q = q.where(VenuePosition.is_active == True)
-    q = q.order_by(VenuePosition.sort_order.asc(), VenuePosition.name.asc())
-    return (await db.execute(q)).scalars().all()
-
-
-@router.post("/{venue_id}/positions", response_model=VenuePositionResponse, status_code=status.HTTP_201_CREATED)
-async def create_venue_position(
-    venue_id: UUID,
-    pos_in: VenuePositionCreate,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    await verify_venue_manager_access(venue_id, current_user, db)
-    name = (pos_in.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Position name can't be empty.")
-    if pos_in.default_rate is None or pos_in.default_rate <= 0:
-        raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
-
-    existing = await db.scalar(
-        select(VenuePosition).where(
-            VenuePosition.venue_id == venue_id,
-            func.lower(VenuePosition.name) == name.lower()
-        )
-    )
-    if existing:
-        if existing.is_active:
-            raise HTTPException(status_code=409, detail=f"'{existing.name}' already exists at this venue.")
-        # Re-activate a previously removed position instead of duplicating it
-        try:
-            existing.is_active = True
-            existing.default_rate = pos_in.default_rate
-            existing.tips_eligible = bool(pos_in.tips_eligible)
-            existing.tip_pool = bool(pos_in.tips_eligible and pos_in.tip_pool)
-            await db.commit()
-            await db.refresh(existing)
-        except Exception as e:
-            await db.rollback()
-            raise HTTPException(status_code=500, detail=f"Failed to restore position: {str(e)}")
-        return existing
-
-    try:
-        max_order = await db.scalar(
-            select(func.coalesce(func.max(VenuePosition.sort_order), -1)).where(VenuePosition.venue_id == venue_id)
-        )
-        pos = VenuePosition(
-            venue_id=venue_id,
-            name=name[:100],
-            default_rate=pos_in.default_rate,
-            tips_eligible=bool(pos_in.tips_eligible),
-            tip_pool=bool(pos_in.tips_eligible and pos_in.tip_pool),
-            sort_order=int(max_order) + 1,
-            is_active=True,
-        )
-        db.add(pos)
-        await db.commit()
-        await db.refresh(pos)
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to add position: {str(e)}")
-    return pos
-
-
-@router.patch("/{venue_id}/positions/{position_id}", response_model=VenuePositionResponse)
-async def update_venue_position(
-    venue_id: UUID,
-    position_id: UUID,
-    pos_in: VenuePositionUpdate,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    await verify_venue_manager_access(venue_id, current_user, db)
-    pos = await db.scalar(
-        select(VenuePosition).where(VenuePosition.id == position_id, VenuePosition.venue_id == venue_id)
-    )
-    if not pos:
-        raise HTTPException(status_code=404, detail="Position not found.")
-
-    data = pos_in.model_dump(exclude_unset=True)
-    if "name" in data:
-        new_name = (data["name"] or "").strip()
-        if not new_name:
-            raise HTTPException(status_code=400, detail="Position name can't be empty.")
-        clash = await db.scalar(
-            select(VenuePosition).where(
-                VenuePosition.venue_id == venue_id,
-                func.lower(VenuePosition.name) == new_name.lower(),
-                VenuePosition.id != position_id
-            )
-        )
-        if clash:
-            raise HTTPException(status_code=409, detail=f"'{clash.name}' already exists at this venue.")
-        data["name"] = new_name[:100]
-    if "default_rate" in data and (data["default_rate"] is None or data["default_rate"] <= 0):
-        raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
-
-    try:
-        for field, value in data.items():
-            if value is None and field in ("tips_eligible", "tip_pool", "is_active", "sort_order"):
-                continue
-            setattr(pos, field, value)
-        if not pos.tips_eligible:
-            pos.tip_pool = False
-        await db.commit()
-        await db.refresh(pos)
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update position: {str(e)}")
-    return pos
-
-
-@router.delete("/{venue_id}/positions/{position_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_venue_position(
-    venue_id: UUID,
-    position_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Soft-remove: hides the position from the Create Shift list. Existing shifts are untouched."""
-    await verify_venue_manager_access(venue_id, current_user, db)
-    pos = await db.scalar(
-        select(VenuePosition).where(VenuePosition.id == position_id, VenuePosition.venue_id == venue_id)
-    )
-    if not pos:
-        raise HTTPException(status_code=404, detail="Position not found.")
-    try:
-        pos.is_active = False
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to remove position: {str(e)}")
-    return None
+    result = []
+    for key in order:
+        ev = events[key]
+        result.append(PublicVenueEvent(
+            **ev,
+            total_capacity=sum(p.capacity for p in ev["positions"]),
+            total_filled=sum(p.filled for p in ev["positions"]),
+        ))
+    return result
 ```
 
 ---
 
-## 5. Other backend touch-ups
-
-### A. `backend/src/routers/admin.py` — `get_admin_venues`
-In the `VenueResponse(...)` constructor, add these arguments directly after `logo_url=v.logo_url,`:
+## 5. Venue routes (`backend/src/routers/venues.py`)
+1. Add `VenueDirectoryItem, VenueProfileResponse, PublicVenueEvent` to the `from src.schemas import (...)` block.
+2. Add: `from src.services.venue_public import build_directory, build_profile, build_public_events`
+3. Directly AFTER the `list_managed_venues` function (and therefore ABOVE `@router.get("/{venue_id}", ...)`), add:
 ```python
-            timezone=v.timezone or "America/New_York",
-            phone=v.phone,
-            arrival_instructions=v.arrival_instructions,
-            dress_code=v.dress_code,
-            default_shift_notes=v.default_shift_notes,
-            approval_policy=v.approval_policy or "team_auto",
+@router.get("/directory", response_model=List[VenueDirectoryItem])
+async def venue_directory(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 25.1: Worker-facing list of venues with open spots and (optional) pay ranges."""
+    return await build_directory(db)
 ```
-
-### B. `backend/src/routers/shifts.py` — `create_shift`
-Inside the `try:` block, in BOTH `Shift(...)` constructors, change `description=shift_in.description,` to:
+4. Add these two routes at the END of the file:
 ```python
-                    description=shift_in.description or venue.default_shift_notes,
-```
-(match each constructor's existing indentation). Nothing else changes.
+@router.get("/{venue_id}/profile", response_model=VenueProfileResponse)
+async def venue_public_profile(
+    venue_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 25.1: Public venue profile (no worker PII)."""
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    return await build_profile(db, venue, current_user)
 
-### C. `backend/src/seed.py`
-1. Add import near the top: `from src.services.venue_positions import ensure_default_positions`
-2. In the demo venue block, directly after `await db.refresh(demo_venue)` (inside `if not demo_venue:`), add:
-```python
-            await ensure_default_positions(db, demo_venue.id)
-            await db.commit()
-```
-3. In the additional venue block, directly after `await db.refresh(venue1)`, add:
-```python
-            await ensure_default_positions(db, venue1.id)
-            await db.commit()
-```
-Do not change anything else in `seed.py`.
 
----
-
-## 6. Frontend — time helpers (NEW FILE `frontend/src/utils/venueTime.js`)
-```js
-/**
- * Phase 25: Venue-local time helpers (built-in Intl only, no extra packages).
- * All values from the API are UTC ISO strings; `tz` is the venue's IANA zone, e.g. 'America/New_York'.
- * If tz is missing, the viewer's device timezone is used.
- */
-
-export const TIMEZONE_OPTIONS = [
-  { value: 'America/New_York', label: 'Eastern (New York)' },
-  { value: 'America/Chicago', label: 'Central (Chicago)' },
-  { value: 'America/Denver', label: 'Mountain (Denver)' },
-  { value: 'America/Phoenix', label: 'Arizona (Phoenix, no DST)' },
-  { value: 'America/Los_Angeles', label: 'Pacific (Los Angeles)' },
-  { value: 'America/Anchorage', label: 'Alaska (Anchorage)' },
-  { value: 'Pacific/Honolulu', label: 'Hawaii (Honolulu)' },
-  { value: 'America/Puerto_Rico', label: 'Atlantic (Puerto Rico)' },
-  { value: 'America/Toronto', label: 'Eastern (Toronto)' },
-  { value: 'America/Vancouver', label: 'Pacific (Vancouver)' },
-  { value: 'Europe/London', label: 'UK (London)' },
-  { value: 'UTC', label: 'UTC' },
-];
-
-function fmt(value, tz, options) {
-  if (!value) return '';
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  try {
-    return new Intl.DateTimeFormat([], { ...options, timeZone: tz || undefined }).format(d);
-  } catch (e) {
-    return new Intl.DateTimeFormat([], options).format(d);
-  }
-}
-
-/** "Fri, Oct 3" */
-export const fmtDate = (value, tz) => fmt(value, tz, { weekday: 'short', month: 'short', day: 'numeric' });
-
-/** "Oct 3" */
-export const fmtShortDate = (value, tz) => fmt(value, tz, { month: 'short', day: 'numeric' });
-
-/** "Friday, October 3, 2026" */
-export const fmtLongDate = (value, tz) =>
-  fmt(value, tz, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
-/** "7:00 PM" */
-export const fmtTime = (value, tz) => fmt(value, tz, { hour: 'numeric', minute: '2-digit' });
-
-/** "Oct 3, 2026, 7:00 PM EDT" */
-export const fmtDateTime = (value, tz) =>
-  fmt(value, tz, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-
-/** "EDT" */
-export function tzAbbrev(value, tz) {
-  if (!value) return '';
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz || undefined, timeZoneName: 'short' })
-      .formatToParts(new Date(value));
-    return (parts.find((p) => p.type === 'timeZoneName') || {}).value || '';
-  } catch (e) {
-    return '';
-  }
-}
-
-/** "7:00 PM – 1:00 AM EDT" */
-export function fmtTimeRange(start, end, tz) {
-  if (!start) return '';
-  const abbr = tzAbbrev(start, tz);
-  return `${fmtTime(start, tz)} – ${fmtTime(end, tz)}${abbr ? ` ${abbr}` : ''}`;
-}
-
-function tzOffsetMs(date, tz) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    hourCycle: 'h23',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).formatToParts(date);
-  const m = {};
-  parts.forEach((p) => { m[p.type] = p.value; });
-  const asUtc = Date.UTC(+m.year, +m.month - 1, +m.day, (+m.hour) % 24, +m.minute, +m.second);
-  return asUtc - (date.getTime() - date.getMilliseconds());
-}
-
-/**
- * Converts a <input type="datetime-local"> value ("2026-10-03T19:00"), interpreted as wall-clock
- * time AT THE VENUE, into a UTC ISO string for the API.
- */
-export function zonedLocalToUtcIso(localValue, tz) {
-  if (!localValue) return null;
-  if (!tz) return new Date(localValue).toISOString();
-  const [datePart, timePart = '00:00'] = localValue.split('T');
-  const [y, mo, d] = datePart.split('-').map(Number);
-  const [h, mi] = timePart.split(':').map(Number);
-  const guess = Date.UTC(y, mo - 1, d, h, mi);
-  const off1 = tzOffsetMs(new Date(guess), tz);
-  let utc = guess - off1;
-  const off2 = tzOffsetMs(new Date(utc), tz);
-  if (off2 !== off1) utc = guess - off2;
-  return new Date(utc).toISOString();
-}
-
-/** Calendar-day key in the venue timezone, used for grouping lists by day. */
-export const dayKey = (value, tz) => fmtLongDate(value, tz);
+@router.get("/{venue_id}/public-events", response_model=List[PublicVenueEvent])
+async def venue_public_events(
+    venue_id: UUID,
+    scope: str = Query("upcoming", pattern="^(upcoming|past)$"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 25.1: Upcoming or past (90 days) shifts grouped by event, with fill counts only."""
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    return await build_public_events(db, venue, current_user, scope)
 ```
 
 ---
 
-## 7. Frontend — `VenueSettingsModal` (NEW FILE `frontend/src/components/VenueSettingsModal.jsx`)
-Shared by the Admin Panel (create + edit) and the Venue dashboard (edit).
+## 6. Venue setting toggle (`frontend/src/components/VenueSettingsModal.jsx`)
+1. In `emptyForm(venue)`, add after the `approval_policy` line:
 ```jsx
-import React, { useState, useEffect } from 'react';
-import {
-  X, Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info,
-} from 'lucide-react';
+    show_rates_publicly: venue?.show_rates_publicly ?? true,
+```
+2. In `handleSave`'s `payload` object, add after `approval_policy: form.approval_policy,`:
+```jsx
+      show_rates_publicly: !!form.show_rates_publicly,
+```
+3. Directly BEFORE the `<section className="space-y-3">` that contains the `Arrival instructions` label, add:
+```jsx
+              <section className="p-4 rounded-xl bg-slate-950 border border-slate-800">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!form.show_rates_publicly}
+                    onChange={(e) => setForm({ ...form, show_rates_publicly: e.target.checked })}
+                    className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-white">Show our default pay rates on the public venue page</span>
+                    <span className="block text-xs text-slate-400">
+                      Workers browsing venues will see each position's usual pay. If off, they only see pay on individual posted shifts.
+                    </span>
+                  </span>
+                </label>
+              </section>
+```
+
+---
+
+## 7. New pages
+
+### 7A. NEW FILE `frontend/src/pages/VenuesDirectory.jsx`
+```jsx
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Building2, MapPin, Search, Calendar, ChevronRight, DollarSign } from 'lucide-react';
 import api from '../api/client';
-import { TIMEZONE_OPTIONS } from '../utils/venueTime';
+import { fmtDate, fmtTime } from '../utils/venueTime';
 
-const POLICIES = [
-  {
-    id: 'team_auto',
-    title: 'Book my team instantly',
-    body: "People on this venue's team are confirmed right away. Everyone else waits for a manager.",
-  },
-  {
-    id: 'manual',
-    title: 'I approve everyone',
-    body: 'Every request waits for a manager to approve it.',
-  },
-  {
-    id: 'everyone_auto',
-    title: 'Book anyone instantly',
-    body: 'Anyone who picks up a shift is confirmed right away. Best when you need bodies fast.',
-  },
-];
-
-const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
-const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
-
-function emptyForm(venue) {
-  return {
-    name: venue?.name || '',
-    address: venue?.address || '',
-    phone: venue?.phone || '',
-    timezone: venue?.timezone || 'America/New_York',
-    lat: venue?.lat != null ? String(venue.lat) : '',
-    lng: venue?.lng != null ? String(venue.lng) : '',
-    geofence_radius_meters: String(venue?.geofence_radius_meters ?? 150),
-    approval_policy: venue?.approval_policy || 'team_auto',
-    auto_approve_rating_threshold:
-      venue?.auto_approve_rating_threshold != null ? String(venue.auto_approve_rating_threshold) : '',
-    arrival_instructions: venue?.arrival_instructions || '',
-    dress_code: venue?.dress_code || '',
-    default_shift_notes: venue?.default_shift_notes || '',
-    description: venue?.description || '',
-    manager_email: '',
-  };
-}
-
-function PositionRow({ venueId, position, onChanged, onError }) {
-  const [draft, setDraft] = useState({
-    name: position.name,
-    default_rate: Number(position.default_rate).toFixed(2),
-    tips_eligible: position.tips_eligible,
-    tip_pool: position.tip_pool,
-  });
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setDraft({
-      name: position.name,
-      default_rate: Number(position.default_rate).toFixed(2),
-      tips_eligible: position.tips_eligible,
-      tip_pool: position.tip_pool,
-    });
-  }, [position]);
-
-  const dirty =
-    draft.name !== position.name ||
-    Number(draft.default_rate) !== Number(position.default_rate) ||
-    draft.tips_eligible !== position.tips_eligible ||
-    draft.tip_pool !== position.tip_pool;
-
-  const save = async () => {
-    const rate = parseFloat(draft.default_rate);
-    if (!draft.name.trim() || !rate || rate <= 0) {
-      onError('Each position needs a name and a rate above $0.');
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.patch(`/venues/${venueId}/positions/${position.id}`, {
-        name: draft.name.trim(),
-        default_rate: rate,
-        tips_eligible: draft.tips_eligible,
-        tip_pool: draft.tips_eligible ? draft.tip_pool : false,
-      });
-      onChanged();
-    } catch (err) {
-      onError(err.response?.data?.detail || 'Could not save position.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const toggleActive = async () => {
-    setSaving(true);
-    try {
-      if (position.is_active) {
-        await api.delete(`/venues/${venueId}/positions/${position.id}`);
-      } else {
-        await api.patch(`/venues/${venueId}/positions/${position.id}`, { is_active: true });
-      }
-      onChanged();
-    } catch (err) {
-      onError(err.response?.data?.detail || 'Could not update position.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
+function VenueAvatar({ venue, size = 'w-14 h-14' }) {
+  if (venue.logo_url) {
+    return <img src={venue.logo_url} alt="" className={`${size} rounded-2xl object-cover border border-slate-700 flex-shrink-0`} />;
+  }
   return (
-    <div className={`p-3 rounded-xl border ${position.is_active ? 'border-slate-700 bg-slate-800/50' : 'border-slate-800 bg-slate-950 opacity-60'} space-y-2`}>
-      <div className="flex items-center gap-2">
-        <input
-          value={draft.name}
-          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          disabled={!position.is_active}
-          className={`${inputCls} flex-1`}
-        />
-        <div className="relative w-28">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
-          <input
-            type="number"
-            step="0.5"
-            min="0"
-            value={draft.default_rate}
-            onChange={(e) => setDraft({ ...draft, default_rate: e.target.value })}
-            disabled={!position.is_active}
-            className={`${inputCls} pl-6`}
-          />
-        </div>
-        <span className="text-xs text-slate-400">/hr</span>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 text-xs text-slate-300">
-            <input
-              type="checkbox"
-              checked={draft.tips_eligible}
-              disabled={!position.is_active}
-              onChange={(e) => setDraft({ ...draft, tips_eligible: e.target.checked, tip_pool: e.target.checked ? draft.tip_pool : false })}
-              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
-            />
-            Tips
-          </label>
-          {draft.tips_eligible && (
-            <label className="flex items-center gap-2 text-xs text-amber-300">
-              <input
-                type="checkbox"
-                checked={draft.tip_pool}
-                disabled={!position.is_active}
-                onChange={(e) => setDraft({ ...draft, tip_pool: e.target.checked })}
-                className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
-              />
-              Tip pool
-            </label>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {position.is_active && dirty && (
-            <button
-              type="button"
-              onClick={save}
-              disabled={saving}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50"
-            >
-              <Save className="w-3.5 h-3.5" /> Save
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={toggleActive}
-            disabled={saving}
-            title={position.is_active ? 'Remove from the Create Shift list' : 'Bring back'}
-            className={`p-2 rounded-lg text-xs ${position.is_active ? 'text-slate-400 hover:text-rose-400 hover:bg-rose-500/10' : 'text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10'}`}
-          >
-            {position.is_active ? <Trash2 className="w-4 h-4" /> : <RotateCcw className="w-4 h-4" />}
-          </button>
-        </div>
-      </div>
+    <div className={`${size} rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-400 flex items-center justify-center text-slate-950 font-black text-xl flex-shrink-0`}>
+      {(venue.name || '?').slice(0, 1).toUpperCase()}
     </div>
   );
 }
 
-export default function VenueSettingsModal({ mode = 'edit', venue = null, showManagerEmail = false, onClose, onSaved }) {
-  const isEdit = mode === 'edit' && venue?.id;
-  const [tab, setTab] = useState('details'); // 'details' | 'positions'
-  const [form, setForm] = useState(emptyForm(venue));
-  const [saving, setSaving] = useState(false);
+export { VenueAvatar };
+
+export default function VenuesDirectory() {
+  const [venues, setVenues] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [locating, setLocating] = useState(false);
-
-  const [positions, setPositions] = useState([]);
-  const [loadingPositions, setLoadingPositions] = useState(false);
-  const [newPos, setNewPos] = useState({ name: '', default_rate: '25.00', tips_eligible: false, tip_pool: false });
-
-  const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
-
-  const loadPositions = async () => {
-    if (!isEdit) return;
-    setLoadingPositions(true);
-    try {
-      const res = await api.get(`/venues/${venue.id}/positions`, { params: { include_inactive: true } });
-      setPositions(res.data || []);
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not load positions.');
-    } finally {
-      setLoadingPositions(false);
-    }
-  };
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
-    if (tab === 'positions') loadPositions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+    api
+      .get('/venues/directory')
+      .then((res) => setVenues(res.data || []))
+      .catch((err) => setError(err.response?.data?.detail || 'Could not load venues.'))
+      .finally(() => setLoading(false));
+  }, []);
 
-  const useMyLocation = () => {
-    setError('');
-    if (!navigator.geolocation) {
-      setError("This browser can't share its location.");
-      return;
-    }
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setForm((f) => ({
-          ...f,
-          lat: pos.coords.latitude.toFixed(6),
-          lng: pos.coords.longitude.toFixed(6),
-        }));
-        setLocating(false);
-      },
-      (err) => {
-        setError(err.code === 1 ? 'Location permission was denied. Allow location for this site and try again.' : 'Could not get your location. Try again outside or near a window.');
-        setLocating(false);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return venues;
+    return venues.filter(
+      (v) => v.name.toLowerCase().includes(q) || (v.address || '').toLowerCase().includes(q)
     );
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (!form.name.trim() || !form.address.trim()) {
-      setError('Name and address are required.');
-      return;
-    }
-    const lat = form.lat === '' ? null : parseFloat(form.lat);
-    const lng = form.lng === '' ? null : parseFloat(form.lng);
-    if ((lat === null) !== (lng === null) || (lat !== null && (Number.isNaN(lat) || Number.isNaN(lng)))) {
-      setError('Enter both latitude and longitude, or use "Use my current location".');
-      return;
-    }
-    const payload = {
-      name: form.name.trim(),
-      address: form.address.trim(),
-      phone: form.phone.trim(),
-      timezone: form.timezone,
-      geofence_radius_meters: parseInt(form.geofence_radius_meters, 10) || 150,
-      approval_policy: form.approval_policy,
-      auto_approve_rating_threshold: form.auto_approve_rating_threshold === '' ? null : parseFloat(form.auto_approve_rating_threshold),
-      arrival_instructions: form.arrival_instructions,
-      dress_code: form.dress_code,
-      default_shift_notes: form.default_shift_notes,
-      description: form.description,
-    };
-    if (lat !== null) {
-      payload.lat = lat;
-      payload.lng = lng;
-    }
-    if (!isEdit && showManagerEmail && form.manager_email.trim()) {
-      payload.manager_email = form.manager_email.trim();
-    }
-
-    setSaving(true);
-    try {
-      const res = isEdit
-        ? await api.put(`/venues/${venue.id}/settings`, payload)
-        : await api.post('/venues', payload);
-      onSaved && onSaved(res.data);
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not save venue.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const addPosition = async () => {
-    setError('');
-    const rate = parseFloat(newPos.default_rate);
-    if (!newPos.name.trim() || !rate || rate <= 0) {
-      setError('New position needs a name and a rate above $0.');
-      return;
-    }
-    try {
-      await api.post(`/venues/${venue.id}/positions`, {
-        name: newPos.name.trim(),
-        default_rate: rate,
-        tips_eligible: newPos.tips_eligible,
-        tip_pool: newPos.tips_eligible ? newPos.tip_pool : false,
-      });
-      setNewPos({ name: '', default_rate: '25.00', tips_eligible: false, tip_pool: false });
-      loadPositions();
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not add position.');
-    }
-  };
-
-  const mapUrl = form.lat && form.lng ? `https://www.google.com/maps?q=${form.lat},${form.lng}` : null;
+  }, [venues, query]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl max-h-[92vh] flex flex-col">
-        <div className="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-800">
-          <h3 className="text-lg font-bold text-white flex items-center gap-2">
-            <Building2 className="w-5 h-5 text-emerald-400" />
-            {isEdit ? `Venue settings — ${venue.name}` : 'Add a venue'}
-          </h3>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-white">
-            <X className="w-5 h-5" />
-          </button>
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-16">
+      <section className="bg-slate-900 border-b border-slate-800 py-8 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-5xl mx-auto">
+          <h1 className="text-2xl font-black text-white flex items-center gap-2">
+            <Building2 className="w-7 h-7 text-amber-400" /> Venues
+          </h1>
+          <p className="text-sm text-slate-400 mt-1">See who's posting shifts, what they pay, and what they've posted before.</p>
+          <div className="mt-5 relative">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name or neighborhood"
+              className="w-full pl-9 pr-3 py-3 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
+            />
+          </div>
         </div>
+      </section>
 
-        {isEdit && (
-          <div className="px-6 pt-3 flex gap-2">
-            {[
-              { id: 'details', label: 'Details' },
-              { id: 'positions', label: 'Positions & pay' },
-            ].map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
-                  tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+        {error && (
+          <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>
+        )}
+        {loading ? (
+          <p className="text-center text-sm text-slate-500 py-16">Loading venues…</p>
+        ) : filtered.length === 0 ? (
+          <p className="text-center text-sm text-slate-500 py-16">No venues match your search.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {filtered.map((v) => (
+              <Link
+                key={v.id}
+                to={`/venues/${v.id}`}
+                className="group bg-slate-900 border border-slate-800 hover:border-slate-600 rounded-2xl p-5 flex gap-4 transition"
               >
-                {t.label}
-              </button>
+                <VenueAvatar venue={v} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <h2 className="text-base font-bold text-white truncate">{v.name}</h2>
+                    <ChevronRight className="w-5 h-5 text-slate-600 group-hover:text-slate-300 flex-shrink-0" />
+                  </div>
+                  <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5 truncate">
+                    <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="truncate">{v.address}</span>
+                  </p>
+
+                  <div className="flex flex-wrap items-center gap-2 mt-3">
+                    {v.open_spots > 0 ? (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                        {v.open_spots} open spot{v.open_spots === 1 ? '' : 's'}
+                      </span>
+                    ) : v.upcoming_shift_count > 0 ? (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+                        Fully booked
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-500 border border-slate-700">
+                        No upcoming shifts
+                      </span>
+                    )}
+                    {v.show_rates_publicly && v.rate_min != null && (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-200 border border-slate-700 inline-flex items-center gap-1">
+                        <DollarSign className="w-3 h-3 text-emerald-400" />
+                        {v.rate_min === v.rate_max
+                          ? `${v.rate_min.toFixed(0)}/hr`
+                          : `${v.rate_min.toFixed(0)}–${v.rate_max.toFixed(0)}/hr`}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-[11px] text-slate-500 mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                    {v.next_shift_start && (
+                      <span className="inline-flex items-center gap-1">
+                        <Calendar className="w-3 h-3" />
+                        Next: {fmtDate(v.next_shift_start, v.timezone)} · {fmtTime(v.next_shift_start, v.timezone)}
+                      </span>
+                    )}
+                    <span>{v.total_shifts_posted} shift{v.total_shifts_posted === 1 ? '' : 's'} posted</span>
+                  </div>
+                </div>
+              </Link>
             ))}
           </div>
         )}
-
-        {error && (
-          <div className="mx-6 mt-3 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>
-        )}
-
-        <div className="overflow-y-auto px-6 py-4 flex-1">
-          {tab === 'details' ? (
-            <form id="venue-settings-form" onSubmit={handleSave} className="space-y-5">
-              <section className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="sm:col-span-2">
-                    <label className={labelCls}>Venue name *</label>
-                    <input value={form.name} onChange={set('name')} className={inputCls} placeholder="The Copper & Oak Lounge" />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className={labelCls}>Street address *</label>
-                    <input value={form.address} onChange={set('address')} className={inputCls} placeholder="142 Grand St, New York, NY" />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Venue phone</label>
-                    <input value={form.phone} onChange={set('phone')} className={inputCls} placeholder="(555) 555-0100" />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Timezone</label>
-                    <select value={form.timezone} onChange={set('timezone')} className={inputCls}>
-                      {TIMEZONE_OPTIONS.map((tz) => (
-                        <option key={tz.value} value={tz.value}>{tz.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </section>
-
-              <section className="space-y-2 p-4 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <MapPin className="w-4 h-4 text-emerald-400" /> Location for clock-in
-                  </div>
-                  <button
-                    type="button"
-                    onClick={useMyLocation}
-                    disabled={locating}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    <Crosshair className="w-3.5 h-3.5" />
-                    {locating ? 'Locating…' : 'Use my current location'}
-                  </button>
-                </div>
-                <p className="text-[11px] text-slate-500">Easiest while you're standing inside the venue. Staff must be within the radius to clock in (coming soon).</p>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className={labelCls}>Latitude</label>
-                    <input value={form.lat} onChange={set('lat')} className={inputCls} placeholder="40.7205" />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Longitude</label>
-                    <input value={form.lng} onChange={set('lng')} className={inputCls} placeholder="-74.0011" />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Radius (m)</label>
-                    <input type="number" min="25" max="5000" value={form.geofence_radius_meters} onChange={set('geofence_radius_meters')} className={inputCls} />
-                  </div>
-                </div>
-                {mapUrl && (
-                  <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300">
-                    Check this spot on Google Maps <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
-              </section>
-
-              <section className="space-y-2">
-                <label className={labelCls}>How should shift requests be approved?</label>
-                <div className="grid gap-2">
-                  {POLICIES.map((p) => (
-                    <label
-                      key={p.id}
-                      className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${
-                        form.approval_policy === p.id ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="approval_policy"
-                        value={p.id}
-                        checked={form.approval_policy === p.id}
-                        onChange={set('approval_policy')}
-                        className="mt-1 text-emerald-500"
-                      />
-                      <span>
-                        <span className="block text-sm font-semibold text-white">{p.title}</span>
-                        <span className="block text-xs text-slate-400">{p.body}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                <details className="text-xs text-slate-400">
-                  <summary className="cursor-pointer select-none">Advanced: also auto-approve highly rated workers</summary>
-                  <div className="mt-2 flex items-center gap-2">
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="1"
-                      max="5"
-                      value={form.auto_approve_rating_threshold}
-                      onChange={set('auto_approve_rating_threshold')}
-                      placeholder="e.g. 4.5"
-                      className={`${inputCls} w-32`}
-                    />
-                    <span>★ or higher (only workers who have been rated). Leave blank to turn off.</span>
-                  </div>
-                </details>
-              </section>
-
-              <section className="space-y-3">
-                <div>
-                  <label className={labelCls}>Arrival instructions</label>
-                  <textarea rows={2} value={form.arrival_instructions} onChange={set('arrival_instructions')} className={inputCls} placeholder="Staff entrance on Mercer St. Street parking only. Check in with the bar lead." />
-                </div>
-                <div>
-                  <label className={labelCls}>Dress code</label>
-                  <textarea rows={2} value={form.dress_code} onChange={set('dress_code')} className={inputCls} placeholder="All black, non-slip shoes. Hair tied back." />
-                </div>
-                <div>
-                  <label className={labelCls}>Default notes added to new shifts</label>
-                  <textarea rows={2} value={form.default_shift_notes} onChange={set('default_shift_notes')} className={inputCls} placeholder="Family meal at 4:30. Bring a wine key." />
-                </div>
-                <div>
-                  <label className={labelCls}>About this venue</label>
-                  <textarea rows={2} value={form.description} onChange={set('description')} className={inputCls} />
-                </div>
-                {!isEdit && showManagerEmail && (
-                  <div>
-                    <label className={labelCls}>Manager email (optional)</label>
-                    <input type="email" value={form.manager_email} onChange={set('manager_email')} className={inputCls} placeholder="manager@example.com" />
-                    <p className="text-[10px] text-slate-500 mt-1">Must be an existing account. You can also assign a manager later from Users → Edit.</p>
-                  </div>
-                )}
-                {!isEdit && (
-                  <p className="text-[11px] text-slate-500 flex items-start gap-1.5">
-                    <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                    Starter positions (Bartender, Server, Barback, Dishwasher, AV Tech) are added automatically. Edit their pay under Venue settings → Positions & pay.
-                  </p>
-                )}
-              </section>
-            </form>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-xs text-slate-400">
-                These show up in the Create Shift form and pre-fill the pay and tips. Changing a rate here does not change shifts you already posted.
-              </p>
-              {loadingPositions ? (
-                <p className="text-xs text-slate-500">Loading…</p>
-              ) : (
-                positions.map((p) => (
-                  <PositionRow key={p.id} venueId={venue.id} position={p} onChanged={loadPositions} onError={setError} />
-                ))
-              )}
-              <div className="p-3 rounded-xl border border-dashed border-slate-600 space-y-2">
-                <div className="text-xs font-semibold text-slate-300">Add a position</div>
-                <div className="flex items-center gap-2">
-                  <input
-                    value={newPos.name}
-                    onChange={(e) => setNewPos({ ...newPos, name: e.target.value })}
-                    placeholder="e.g. Coat Check"
-                    className={`${inputCls} flex-1`}
-                  />
-                  <div className="relative w-28">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      value={newPos.default_rate}
-                      onChange={(e) => setNewPos({ ...newPos, default_rate: e.target.value })}
-                      className={`${inputCls} pl-6`}
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 text-xs text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={newPos.tips_eligible}
-                        onChange={(e) => setNewPos({ ...newPos, tips_eligible: e.target.checked, tip_pool: e.target.checked ? newPos.tip_pool : false })}
-                        className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
-                      />
-                      Tips
-                    </label>
-                    {newPos.tips_eligible && (
-                      <label className="flex items-center gap-2 text-xs text-amber-300">
-                        <input
-                          type="checkbox"
-                          checked={newPos.tip_pool}
-                          onChange={(e) => setNewPos({ ...newPos, tip_pool: e.target.checked })}
-                          className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
-                        />
-                        Tip pool
-                      </label>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={addPosition}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Add
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="px-6 py-4 border-t border-slate-800 flex justify-end gap-3">
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-            {tab === 'positions' ? 'Done' : 'Cancel'}
-          </button>
-          {tab === 'details' && (
-            <button
-              type="submit"
-              form="venue-settings-form"
-              disabled={saving}
-              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create venue'}
-            </button>
-          )}
-        </div>
-      </div>
+      </main>
     </div>
   );
 }
 ```
 
----
-
-## 8. Frontend — Venue Manager Dashboard (`frontend/src/pages/VenueManagerDashboard.jsx`) — targeted edits
-
-### A. Imports
-* Add `Settings` to the existing `lucide-react` import list.
-* Add:
+### 7B. NEW FILE `frontend/src/pages/VenueProfile.jsx`
 ```jsx
-import VenueSettingsModal from '../components/VenueSettingsModal';
-import { zonedLocalToUtcIso, fmtShortDate } from '../utils/venueTime';
-```
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import {
+  ArrowLeft, MapPin, Phone, ExternalLink, Info, Users, Calendar, Clock, Building2, Check, AlertCircle,
+} from 'lucide-react';
+import api from '../api/client';
+import { useAuth } from '../context/AuthContext';
+import TipBadge from '../components/TipBadge';
+import { VenueAvatar } from './VenuesDirectory';
+import { fmtDate, fmtTimeRange } from '../utils/venueTime';
 
-### B. New state (directly below `const [boardRefreshKey, setBoardRefreshKey] = useState(0);`)
-```jsx
-  const [venuePositions, setVenuePositions] = useState([]);
-  const [showVenueSettings, setShowVenueSettings] = useState(false);
-```
+const MY_STATUS = {
+  pending: { label: 'Requested', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  pending_manager_approval: { label: 'Requested', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  approved: { label: "You're booked", cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  confirmed: { label: "You're booked", cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  checked_in: { label: 'Clocked in', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/30' },
+  completed: { label: 'Worked', cls: 'bg-slate-700/40 text-slate-300 border-slate-600/40' },
+  rejected: { label: 'Not selected', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  dropped: { label: 'Released', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  transferred: { label: 'Handed off', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+};
 
-### C. Load positions — add this effect directly after the existing `useEffect` that listens for `admin_venue_changed`:
-```jsx
-  const loadVenuePositions = async (venueId) => {
-    if (!venueId) {
-      setVenuePositions([]);
-      return;
-    }
-    try {
-      const res = await api.get(`/venues/${venueId}/positions`);
-      setVenuePositions(res.data || []);
-    } catch (err) {
-      setVenuePositions([]);
-    }
-  };
+export default function VenueProfile() {
+  const { venueId } = useParams();
+  const { user } = useAuth();
+  const isWorker = (user?.role || '').toLowerCase() === 'worker';
+
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [scope, setScope] = useState('upcoming');
+  const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [requestingId, setRequestingId] = useState(null);
+  const [notice, setNotice] = useState(null);
 
   useEffect(() => {
-    loadVenuePositions(currentVenueId);
-  }, [currentVenueId]);
-```
+    setLoading(true);
+    setError('');
+    api
+      .get(`/venues/${venueId}/profile`)
+      .then((res) => setProfile(res.data))
+      .catch((err) => setError(err.response?.data?.detail || 'Could not load this venue.'))
+      .finally(() => setLoading(false));
+  }, [venueId, refreshKey]);
 
-### D. Position-driven role rows — replace `handleAddRoleRow` and add helpers
-Replace the ENTIRE `handleAddRoleRow` function with:
-```jsx
-  const FALLBACK_ROLES = ['Bartender', 'Server', 'Dishwasher', 'Barback', 'AV Tech'];
+  const loadEvents = useCallback(() => {
+    setEventsLoading(true);
+    api
+      .get(`/venues/${venueId}/public-events`, { params: { scope } })
+      .then((res) => setEvents(res.data || []))
+      .catch(() => setEvents([]))
+      .finally(() => setEventsLoading(false));
+  }, [venueId, scope]);
 
-  const rowForPosition = (pos, fallbackName = 'Bartender') => ({
-    role: pos ? pos.name : fallbackName,
-    quantity: 1,
-    hourly_rate: pos ? Number(pos.default_rate).toFixed(2) : '25.00',
-    tips_eligible: pos ? !!pos.tips_eligible : false,
-    tip_pool: pos ? !!pos.tip_pool : false,
-  });
+  useEffect(() => {
+    loadEvents();
+  }, [loadEvents, refreshKey]);
 
-  const openCreateShiftModal = () => {
-    setRoleRequirements([rowForPosition(venuePositions[0])]);
-    setShowCreateModal(true);
+  const handleRequest = async (shiftId) => {
+    setRequestingId(shiftId);
+    setNotice(null);
+    try {
+      const res = await api.post(`/shifts/${shiftId}/request`);
+      const st = String(res.data?.status || '').toLowerCase();
+      setNotice({
+        type: 'success',
+        message: st === 'approved' ? "You're booked! It's on your schedule." : 'Request sent. The manager will review it.',
+      });
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setNotice({ type: 'error', message: err.response?.data?.detail || 'Could not request this shift.' });
+    } finally {
+      setRequestingId(null);
+    }
   };
 
-  const handleAddRoleRow = () => {
-    const used = new Set(roleRequirements.map((r) => r.role));
-    const next = venuePositions.find((p) => !used.has(p.name)) || venuePositions[0];
-    setRoleRequirements([...roleRequirements, rowForPosition(next, 'Server')]);
-  };
-```
-In `handleRoleChange`, replace the final `else { next[field] = value; ... }` branch with:
-```jsx
-      } else if (field === 'role') {
-        next.role = value;
-        const pos = venuePositions.find((p) => p.name === value);
-        if (pos) {
-          next.hourly_rate = Number(pos.default_rate).toFixed(2);
-          next.tips_eligible = !!pos.tips_eligible;
-          next.tip_pool = !!pos.tip_pool;
-        }
-      } else {
-        next[field] = value; // 'hourly_rate' (kept as string while typing)
-      }
+  if (loading && !profile) {
+    return <div className="min-h-screen bg-slate-950 text-slate-500 text-sm text-center py-24">Loading venue…</div>;
+  }
+  if (error || !profile) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 p-6">
+        <Link to="/venues" className="text-sm text-slate-400 hover:text-white inline-flex items-center gap-1">
+          <ArrowLeft className="w-4 h-4" /> All venues
+        </Link>
+        <p className="mt-8 text-center text-rose-400">{error || 'Venue not found.'}</p>
+      </div>
+    );
+  }
+
+  const tz = profile.timezone;
+  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    profile.lat && profile.lng ? `${profile.lat},${profile.lng}` : profile.address
+  )}`;
+  const fillPct =
+    profile.spots_posted_last_90_days > 0
+      ? Math.round((profile.spots_filled_last_90_days / profile.spots_posted_last_90_days) * 100)
+      : null;
+  const ratesVisible = profile.positions.some((p) => p.default_rate != null);
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-16">
+      <section className="bg-slate-900 border-b border-slate-800 py-6 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-5xl mx-auto">
+          <Link to="/venues" className="text-sm text-slate-400 hover:text-white inline-flex items-center gap-1 mb-4">
+            <ArrowLeft className="w-4 h-4" /> All venues
+          </Link>
+          <div className="flex flex-col sm:flex-row gap-4 sm:items-center">
+            <VenueAvatar venue={profile} size="w-16 h-16" />
+            <div className="min-w-0 flex-1">
+              <h1 className="text-2xl font-black text-white">{profile.name}</h1>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-slate-400">
+                <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-emerald-400">
+                  <MapPin className="w-4 h-4" /> {profile.address} <ExternalLink className="w-3 h-3" />
+                </a>
+                {profile.phone && (
+                  <a href={`tel:${profile.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400">
+                    <Phone className="w-4 h-4" /> {profile.phone}
+                  </a>
+                )}
+              </div>
+            </div>
+            {profile.can_manage && (
+              <Link
+                to="/venue"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-semibold text-slate-200 inline-flex items-center gap-2 self-start"
+              >
+                <Building2 className="w-4 h-4 text-amber-400" /> Manage venue
+              </Link>
+            )}
+          </div>
+          {profile.description && <p className="text-sm text-slate-300 mt-4 max-w-3xl">{profile.description}</p>}
+
+          <div className="grid grid-cols-3 gap-2 sm:gap-3 mt-5">
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+              <div className="text-xl font-black text-white">{profile.events_last_90_days}</div>
+              <div className="text-[11px] text-slate-400">events in the last 90 days</div>
+            </div>
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+              <div className="text-xl font-black text-white">{fillPct == null ? '—' : `${fillPct}%`}</div>
+              <div className="text-[11px] text-slate-400">of spots filled</div>
+            </div>
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+              <div className="text-xl font-black text-white">{profile.workers_booked_all_time}</div>
+              <div className="text-[11px] text-slate-400">people have worked here</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        {notice && (
+          <div
+            className={`p-3 rounded-xl border text-sm flex items-center gap-2 ${
+              notice.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+            }`}
+          >
+            {notice.type === 'success' ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+            {notice.message}
+          </div>
+        )}
+
+        {(profile.dress_code || profile.arrival_instructions) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {profile.dress_code && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Dress code</div>
+                <p className="text-sm text-slate-200 whitespace-pre-line">{profile.dress_code}</p>
+              </div>
+            )}
+            {profile.arrival_instructions && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Arrival instructions</div>
+                <p className="text-sm text-slate-200 whitespace-pre-line">{profile.arrival_instructions}</p>
+                {!profile.can_manage && (
+                  <p className="text-[11px] text-slate-500 mt-2">Shown to you because you've been booked here.</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Positions{ratesVisible ? ' & usual pay' : ''}</div>
+          {profile.positions.length === 0 ? (
+            <p className="text-sm text-slate-500">No positions listed yet.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {profile.positions.map((p) => (
+                <div key={p.name} className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2">
+                  <span className="text-sm font-semibold text-white">{p.name}</span>
+                  {p.default_rate != null && <span className="text-sm text-emerald-400 font-bold">${p.default_rate.toFixed(2)}/hr</span>}
+                  <TipBadge shift={p} />
+                </div>
+              ))}
+            </div>
+          )}
+          {!profile.show_rates_publicly && (
+            <p className="text-[11px] text-slate-500 mt-3 flex items-center gap-1">
+              <Info className="w-3.5 h-3.5" />
+              {profile.can_manage
+                ? 'Default rates are hidden from workers (Venue Settings). Pay still shows on each posted shift.'
+                : 'This venue shows pay on each posted shift instead.'}
+            </p>
+          )}
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Calendar className="w-5 h-5 text-emerald-400" /> Shifts
+            </h2>
+            <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1 self-start">
+              {[
+                { id: 'upcoming', label: 'Upcoming' },
+                { id: 'past', label: 'Past 90 days' },
+              ].map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setScope(s.id)}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    scope === s.id ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {eventsLoading && events.length === 0 ? (
+            <p className="text-center text-sm text-slate-500 py-10">Loading shifts…</p>
+          ) : events.length === 0 ? (
+            <p className="text-center text-sm text-slate-500 py-10">
+              {scope === 'upcoming' ? 'No upcoming shifts posted right now.' : 'No shifts in the last 90 days.'}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {events.map((ev) => (
+                <div key={ev.event_key} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-800 bg-slate-800/30 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <div>
+                      <div className="text-sm font-bold text-white">{ev.title}</div>
+                      <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-x-3">
+                        <span className="inline-flex items-center gap-1"><Calendar className="w-3 h-3" />{fmtDate(ev.start_time, tz)}</span>
+                        <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{fmtTimeRange(ev.start_time, ev.end_time, tz)}</span>
+                      </div>
+                    </div>
+                    <span className="text-xs text-slate-400 inline-flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5" /> {ev.total_filled}/{ev.total_capacity} staffed
+                    </span>
+                  </div>
+                  <div className="divide-y divide-slate-800/60">
+                    {ev.positions.map((p) => {
+                      const mine = p.my_status ? MY_STATUS[p.my_status] : null;
+                      const canRequest =
+                        scope === 'upcoming' && isWorker && !p.my_status && p.status === 'OPEN' && p.spots_left > 0;
+                      return (
+                        <div key={p.shift_id} className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{p.role_type}</span>
+                            <span className="text-sm text-emerald-400 font-semibold">${p.hourly_rate.toFixed(2)}/hr</span>
+                            <TipBadge shift={p} />
+                            <span className="text-xs text-slate-400">{p.filled}/{p.capacity} filled</span>
+                          </div>
+                          <div>
+                            {mine ? (
+                              <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${mine.cls}`}>{mine.label}</span>
+                            ) : canRequest ? (
+                              <button
+                                type="button"
+                                onClick={() => handleRequest(p.shift_id)}
+                                disabled={requestingId === p.shift_id}
+                                className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50"
+                              >
+                                {requestingId === p.shift_id ? 'Sending…' : 'Pick up shift'}
+                              </button>
+                            ) : scope === 'upcoming' && p.spots_left === 0 ? (
+                              <span className="text-xs text-slate-500">Full</span>
+                            ) : scope === 'past' ? (
+                              <span className={`text-xs ${p.filled >= p.capacity ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                {p.filled >= p.capacity ? 'Fully staffed' : 'Partly staffed'}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
 ```
 
-### E. Venue-local start/end in `handleCreateShiftSubmit`
-Replace:
+### 7C. `frontend/src/App.jsx`
+1. Add imports below the existing page imports:
 ```jsx
-      const start = startDateTime
-        ? new Date(startDateTime).toISOString()
-        : new Date(now.getTime() + 86400000).toISOString();
-      const end = endDateTime
-        ? new Date(endDateTime).toISOString()
-        : new Date(now.getTime() + 86400000 + 21600000).toISOString();
+import VenuesDirectory from './pages/VenuesDirectory';
+import VenueProfile from './pages/VenueProfile';
+```
+2. Directly BEFORE the `{/* Catch-all fallback */}` route, add:
+```jsx
+            {/* Phase 25.1: Public venue directory & profiles (any signed-in role) */}
+            <Route
+              path="/venues"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
+                  <Navbar />
+                  <VenuesDirectory />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/venues/:venueId"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
+                  <Navbar />
+                  <VenueProfile />
+                </ProtectedRoute>
+              }
+            />
+```
+Change nothing else in `App.jsx`.
+
+---
+
+## 8. Links into the new pages
+
+### 8A. `frontend/src/components/Navbar.jsx`
+1. Add `MapPin` to the `lucide-react` import list.
+2. In the `links` array, add this entry as the LAST item (before `].filter(Boolean);`):
+```jsx
+    {
+      to: '/venues',
+      label: 'Venues',
+      icon: MapPin,
+      active: 'bg-slate-800 text-amber-400',
+    },
+```
+3. In BOTH places that compute the active style (`location.pathname === to ? active : ...`), replace `location.pathname === to` with:
+```jsx
+(location.pathname === to || (to === '/venues' && location.pathname.startsWith('/venues/')))
+```
+Change nothing else in `Navbar.jsx`.
+
+### 8B. `frontend/src/pages/WorkerDashboard.jsx`
+1. Add `import { Link } from 'react-router-dom';` below the React import.
+2. On the Find Shifts card, replace:
+```jsx
+                        <p className="text-xs font-semibold text-slate-300 mb-1">
+                          {shift.venue?.name || 'Hospitality Venue'}
+                        </p>
 ```
 with:
 ```jsx
-      const venueTz = venueDetails?.timezone;
-      const start = startDateTime
-        ? zonedLocalToUtcIso(startDateTime, venueTz)
-        : new Date(now.getTime() + 86400000).toISOString();
-      const end = endDateTime
-        ? zonedLocalToUtcIso(endDateTime, venueTz)
-        : new Date(now.getTime() + 86400000 + 21600000).toISOString();
-      if (new Date(end) <= new Date(start)) {
-        setNotification({ type: 'error', message: 'End time must be after the start time.' });
-        return;
-      }
-```
-In the success reset inside the same function, replace the `setRoleRequirements([{ role: 'Bartender', ... }]);` line with:
-```jsx
-      setRoleRequirements([rowForPosition(venuePositions[0])]);
-```
-
-### F. Header buttons
-1. Change the Create New Shift button's `onClick={() => setShowCreateModal(true)}` → `onClick={openCreateShiftModal}`.
-2. Directly BEFORE the `{/* Download Payroll CSV Button */}` comment, add:
-```jsx
-            <button
-              type="button"
-              onClick={() => setShowVenueSettings(true)}
-              disabled={!venueDetails}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
-            >
-              <Settings className="w-4 h-4 text-amber-400" />
-              <span>Venue Settings</span>
-            </button>
-```
-
-### G. Create Shift modal
-1. Change the label `Start DateTime` → `{`Starts (${venueDetails?.timezone || 'local'} time)`}` and `End DateTime` → `{`Ends (${venueDetails?.timezone || 'local'} time)`}` (keep them inside the existing `<label>` elements).
-2. Replace the five hard-coded `<option value="Bartender">…<option value="AV Tech">AV Tech</option>` lines inside the role `<select>` with:
-```jsx
-                          {(venuePositions.length > 0 ? venuePositions.map((p) => p.name) : FALLBACK_ROLES).map((name) => (
-                            <option key={name} value={name}>{name}</option>
-                          ))}
-                          {row.role && !(venuePositions.length > 0 ? venuePositions.map((p) => p.name) : FALLBACK_ROLES).includes(row.role) && (
-                            <option value={row.role}>{row.role}</option>
+                        <p className="text-xs font-semibold text-slate-300 mb-1">
+                          {shift.venue_id ? (
+                            <Link to={`/venues/${shift.venue_id}`} className="hover:text-emerald-400 underline underline-offset-2 decoration-slate-600">
+                              {shift.venue?.name || 'Hospitality Venue'}
+                            </Link>
+                          ) : (
+                            shift.venue?.name || 'Hospitality Venue'
                           )}
+                        </p>
 ```
-3. Change the auto-confirm checkbox label text `Auto-Confirm Anyone (Instant auto-booking for all applicants)` → `Instant booking for this shift (anyone who picks it up is confirmed)`.
 
-### H. Pending transfers date
-Replace
-`<span>{new Date(shift?.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>`
-with
-`<span>{fmtShortDate(shift?.start_time, venueDetails?.timezone)}</span>`
-
-### I. Pass timezone to the board
-In the `<PostedShiftsBoard ... />` element, add the prop `timeZone={venueDetails?.timezone}`.
-
-### J. Render the settings modal
-Directly BEFORE the final closing `</div>` of the component's main return (next to the other modals), add:
+### 8C. `frontend/src/pages/VenueManagerDashboard.jsx`
+1. Add `import { Link } from 'react-router-dom';` below the React import (skip if already imported).
+2. Directly AFTER the closing `</button>` of the **Venue Settings** button in the header, add:
 ```jsx
-      {showVenueSettings && venueDetails && (
-        <VenueSettingsModal
-          mode="edit"
-          venue={venueDetails}
-          onClose={() => {
-            setShowVenueSettings(false);
-            loadVenuePositions(currentVenueId);
-          }}
-          onSaved={(updated) => {
-            setVenueDetails(updated);
-            setShowVenueSettings(false);
-            loadVenuePositions(currentVenueId);
-            setNotification({ type: 'success', message: 'Venue settings saved.' });
-            setBoardRefreshKey((k) => k + 1);
-          }}
-        />
-      )}
+            {currentVenueId && (
+              <Link
+                to={`/venues/${currentVenueId}`}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm"
+              >
+                <Users className="w-4 h-4 text-emerald-400" />
+                <span>Public page</span>
+              </Link>
+            )}
 ```
+(`Users` is already imported in this file.)
 
 ---
 
-## 9. Frontend — other screens
+## 9. Rebuild & Verification
 
-### A. `frontend/src/components/PostedShiftsBoard.jsx`
-1. Add import: `import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';`
-2. Add `timeZone` to the destructured props (after `actionLoading,`).
-3. In the `eventsByDate` memo, replace the `const dateKey = new Date(ev.start_time).toLocaleDateString([], { ... });` statement with `const dateKey = fmtLongDate(ev.start_time, timeZone);` and add `timeZone` to that memo's dependency array (`[events, timeZone]`).
-4. In the event card, replace the line that builds `timeStr` with:
-```jsx
-                  const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
-```
-(the `start`/`end` consts above it may be left or removed.)
-5. Pass the zone to the modal: add `timeZone={timeZone}` to the `<EventRosterModal ... />` props.
-6. Directly under the header's `<p className="text-xs text-slate-400">…</p>` subtitle, add:
-```jsx
-            {timeZone && <p className="text-[11px] text-slate-500">Times shown in venue time ({timeZone}). Calendar view uses your device's time.</p>}
-```
+**Schema changed (one column).** Choose ONE:
 
-### B. `frontend/src/components/EventRosterModal.jsx`
-1. Add import: `import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';`
-2. Add `timeZone` to the destructured props.
-3. Replace the `dateStr` and `timeStr` const lines with:
-```jsx
-  const dateStr = fmtDate(event.start_time, timeZone);
-  const timeStr = fmtTimeRange(event.start_time, event.end_time, timeZone);
-```
-4. Replace `new Date(p.requested_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })` with `fmtDateTime(p.requested_at, timeZone)`.
-
-### C. `frontend/src/pages/WorkerDashboard.jsx`
-1. Change the React import to include `useMemo`: `import React, { useState, useEffect, useMemo } from 'react';`
-2. Add import: `import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';`
-3. Open-shift card date — replace:
-```jsx
-                              {new Date(shift.start_time).toLocaleDateString(undefined, {
-                                weekday: 'short',
-                                month: 'short',
-                                day: 'numeric',
-                              })}
-```
-with `{fmtDate(shift.start_time, shift.venue?.timezone)}`
-4. Open-shift card time — replace the three lines:
-```jsx
-                              {new Date(shift.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              {' - '}
-                              {new Date(shift.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-```
-with `{fmtTimeRange(shift.start_time, shift.end_time, shift.venue?.timezone)}`
-5. Replace BOTH occurrences of `{new Date(shift?.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` with `{fmtDateTime(shift?.start_time, shift?.venue?.timezone)}`.
-6. Replace `{new Date(shiftToDrop.shift.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` with `{fmtDateTime(shiftToDrop.shift.start_time, shiftToDrop.shift.venue?.timezone)}`.
-7. **Role filter from real data** — directly above `const filteredAvailable = ...`, add:
-```jsx
-  const roleOptions = useMemo(
-    () => Array.from(new Set(availableShifts.map((s) => s.role_type).filter(Boolean))).sort(),
-    [availableShifts]
-  );
-```
-and replace the five hard-coded `<option value="Bartender">…<option value="AV Tech">AV Tech</option>` lines in the role filter `<select>` (keep `<option value="ALL">All Roles</option>`) with:
-```jsx
-                {roleOptions.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-```
-
-### D. `frontend/src/components/TransferModal.jsx`
-1. Add import: `import { fmtShortDate, fmtDateTime } from '../utils/venueTime';`
-2. Replace `{new Date(s?.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' })}` with `{fmtShortDate(s?.start_time, s?.venue?.timezone)}`.
-3. Replace `{new Date(currentShiftObj.start_time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` with `{fmtDateTime(currentShiftObj.start_time, currentShiftObj.venue?.timezone)}`.
-
-### E. `frontend/src/pages/AdminPanel.jsx`
-1. Add import: `import VenueSettingsModal from '../components/VenueSettingsModal';` (`Pencil` is already imported from Phase 23).
-2. Add state below `const [showCreateModal, setShowCreateModal] = useState(false);`:
-```jsx
-  const [venueModal, setVenueModal] = useState(null); // { mode: 'create' | 'edit', venue }
-```
-3. Change BOTH occurrences of `onClick={() => setShowCreateModal(true)}` → `onClick={() => setVenueModal({ mode: 'create', venue: null })}`.
-4. **Delete** the entire old create-venue modal: from the comment `{/* Modal: Create New Venue */}` down to (but NOT including) the comment `{/* Modal: Create New User (Phase 20) */}`. Leave `handleCreateVenue` and its state variables in place (unused is fine).
-5. **Fix the venue counts** in the venues table body:
-   * `{venue.shifts_count ?? 0}` → `{venue.total_shifts ?? 0}`
-   * `{venue.managers_count ?? 0}` → `{venue.total_managers ?? 0}`
-   * `{venue.workers_count ?? 0}` → `{venue.assigned_workers_count ?? 0}`
-6. In the venues table Actions cell, directly BEFORE the delete `<button onClick={() => handleDeleteVenue(venue.id)} ...>`, add:
-```jsx
-                          <button
-                            onClick={() => setVenueModal({ mode: 'edit', venue })}
-                            title="Edit venue"
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-amber-400 hover:bg-slate-800 transition mr-1"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-```
-7. Render the modal directly BEFORE `{/* Modal: Create New User (Phase 20) */}`:
-```jsx
-      {venueModal && (
-        <VenueSettingsModal
-          mode={venueModal.mode}
-          venue={venueModal.venue}
-          showManagerEmail={venueModal.mode === 'create'}
-          onClose={() => {
-            setVenueModal(null);
-            fetchAdminData();
-          }}
-          onSaved={(saved) => {
-            setVenueModal(null);
-            setNotification({
-              type: 'success',
-              message: venueModal.mode === 'create' ? `Venue "${saved.name}" created.` : `Venue "${saved.name}" updated.`,
-            });
-            fetchAdminData();
-          }}
-        />
-      )}
-```
-
----
-
-## 10. Rebuild & Verification
-
-**⚠️ Schema changed — destructive rebuild required (wipes all data; the seed recreates demo data):**
+* **Standard (wipes data, matches project policy):**
 ```bash
 docker compose down -v
 docker compose up -d --build
 ```
+* **Keep current data (adds the column in place, then rebuilds code):**
+```bash
+docker compose exec database psql -U shiftboard_user -d shiftboard -c "ALTER TABLE venues ADD COLUMN IF NOT EXISTS show_rates_publicly BOOLEAN NOT NULL DEFAULT TRUE;"
+docker compose up -d --build backend frontend
+```
+(`init.sql` is still updated so fresh databases get the column.)
 
 Verify:
-1. `docker compose exec database psql -U shiftboard_user -d shiftboard -c "\d venue_positions"` shows the table; `SELECT name, timezone, approval_policy FROM venues;` shows `America/New_York` / `team_auto` for seeded venues.
-2. `SELECT v.name, p.name, p.default_rate, p.tips_eligible, p.tip_pool FROM venue_positions p JOIN venues v ON v.id = p.venue_id ORDER BY v.name, p.sort_order;` → 5 starter positions per seeded venue.
-3. **Admin → Venues:** counts now show real numbers (not 0). **Add venue** opens the new form; create one with no manager → it appears with 5 positions. Pencil → edit phone, arrival instructions, dress code, timezone → save → values persist on reopen.
-4. **Location:** on a phone, Venue Settings → "Use my current location" → browser asks permission → lat/lng fill in → "Check this spot on Google Maps" opens the right place → Save.
-5. **Positions:** Venue Settings → Positions & pay → change Bartender to $30 with Tips + Tip pool → Save. Add "Coat Check" $18. Remove Dishwasher (trash icon) → it greys out; restore icon brings it back.
-6. **Create Shift:** the position dropdown lists that venue's active positions; picking one fills in its rate and tips; "Add Role" adds the next unused position. The date labels say "Starts (America/New_York time)".
-7. **Timezone:** set a test venue to `America/Los_Angeles`, create a shift for 7:00 PM → the board and the worker card show "7:00 PM – … PDT" even when viewed from an Eastern-time device. `SELECT start_time FROM shifts ORDER BY created_at DESC LIMIT 1;` shows 02:00 UTC next day (during PDT).
-8. **Approval policy:**
-   * `team_auto` (default): a whitelisted worker's request → Confirmed instantly; a non-team worker → Pending.
-   * `manual`: the whitelisted worker → Pending.
-   * `everyone_auto`: any worker → Confirmed instantly.
-9. A manager can edit their own venue but gets 403 editing a venue they don't manage (`PUT /api/venues/{other_id}/settings`).
-10. Worker "Find Shifts" role filter lists only roles that are actually posted.
-11. Everything from Phases 20–24 still works: approvals, Posted Shifts board, clock in/out, transfers, payroll CSV.
+1. **Scrolling:** Venue Settings on a laptop and on a phone (or dev tools at 375×667): the header and Save/Cancel footer stay visible, the middle scrolls, the page behind does not scroll, and the modal never runs off-screen. Same for the Posted Shifts → View Roster modal with many positions.
+2. **Directory:** as a worker, navbar → **Venues** → every venue listed; venues with open spots first; badges show "N open spots" / "Fully booked" / "No upcoming shifts", next shift in venue time, pay range when allowed. Search filters by name/address.
+3. **Profile:** tap a venue → header with Directions link and phone; the 3 stats; dress code; positions with usual pay; Upcoming tab shows events with positions, pay, tips, "x/y filled".
+4. **Pick up from profile:** as a worker, **Pick up shift** on an open position → notice "You're booked!" or "Request sent…", and the row changes to the matching status badge. It also appears in My Schedule.
+5. **Past tab:** shows the last 90 days of events with "Fully staffed" / "Partly staffed".
+6. **Privacy:** `GET /api/venues/{id}/public-events` and `/profile` contain no names, emails, phones, or other users' IDs. A worker never booked at the venue does NOT see arrival instructions; after being approved there, they do.
+7. **Rate toggle:** Venue Settings → uncheck "Show our default pay rates…" → Save. As a worker: the directory card has no pay range, the profile positions show no rates and say "This venue shows pay on each posted shift instead." Posted shifts still show their pay. As that venue's manager, the profile still shows rates plus the "hidden from workers" note.
+8. Manager dashboard **Public page** button opens the venue's profile; the profile's **Manage venue** button (managers/admins only) returns to `/venue`.
+9. Venue names on Find Shifts cards link to the venue profile.

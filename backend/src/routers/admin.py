@@ -84,6 +84,7 @@ async def get_admin_venues(
             dress_code=v.dress_code,
             default_shift_notes=v.default_shift_notes,
             approval_policy=v.approval_policy or "team_auto",
+            show_rates_publicly=bool(v.show_rates_publicly),
             created_at=v.created_at,
             updated_at=v.updated_at,
             total_shifts=shift_count,

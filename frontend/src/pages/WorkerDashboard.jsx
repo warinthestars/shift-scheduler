@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
@@ -396,7 +397,13 @@ export default function WorkerDashboard() {
 
                         <h3 className="text-base font-bold text-white mb-1">{shift.title}</h3>
                         <p className="text-xs font-semibold text-slate-300 mb-1">
-                          {shift.venue?.name || 'Hospitality Venue'}
+                          {shift.venue_id ? (
+                            <Link to={`/venues/${shift.venue_id}`} className="hover:text-emerald-400 underline underline-offset-2 decoration-slate-600">
+                              {shift.venue?.name || 'Hospitality Venue'}
+                            </Link>
+                          ) : (
+                            shift.venue?.name || 'Hospitality Venue'
+                          )}
                         </p>
                         <p className="text-xs text-slate-400 flex items-center space-x-1 mb-4">
                           <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />

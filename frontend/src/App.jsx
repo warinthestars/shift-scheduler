@@ -7,6 +7,8 @@ import LoginPage from './pages/LoginPage';
 import WorkerDashboard from './pages/WorkerDashboard';
 import VenueManagerDashboard from './pages/VenueManagerDashboard';
 import AdminPanel from './pages/AdminPanel';
+import VenuesDirectory from './pages/VenuesDirectory';
+import VenueProfile from './pages/VenueProfile';
 
 function HomeRedirect() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -77,6 +79,26 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['platform_admin']}>
                   <Navbar />
                   <AdminPanel />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Phase 25.1: Public venue directory & profiles (any signed-in role) */}
+            <Route
+              path="/venues"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
+                  <Navbar />
+                  <VenuesDirectory />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/venues/:venueId"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
+                  <Navbar />
+                  <VenueProfile />
                 </ProtectedRoute>
               }
             />

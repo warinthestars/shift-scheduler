@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
-import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X } from 'lucide-react';
+import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin } from 'lucide-react';
 
 export default function Navbar() {
   const { user, logout, isAdmin, isWorker } = useAuth();
@@ -80,6 +80,12 @@ export default function Navbar() {
       icon: Shield,
       active: 'bg-indigo-950 text-indigo-300 border border-indigo-700/50',
     },
+    {
+      to: '/venues',
+      label: 'Venues',
+      icon: MapPin,
+      active: 'bg-slate-800 text-amber-400',
+    },
   ].filter(Boolean);
 
   const venueSwitcher = (idSuffix) =>
@@ -129,7 +135,7 @@ export default function Navbar() {
                   key={to}
                   to={to}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
-                    location.pathname === to ? active : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                    (location.pathname === to || (to === '/venues' && location.pathname.startsWith('/venues/'))) ? active : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
@@ -212,7 +218,7 @@ export default function Navbar() {
                 key={to}
                 to={to}
                 className={`px-4 py-3 rounded-xl text-base font-semibold transition flex items-center space-x-3 ${
-                  location.pathname === to ? active : 'text-slate-200 bg-slate-800/60 hover:bg-slate-800'
+                  (location.pathname === to || (to === '/venues' && location.pathname.startsWith('/venues/'))) ? active : 'text-slate-200 bg-slate-800/60 hover:bg-slate-800'
                 }`}
               >
                 <Icon className="w-5 h-5" />

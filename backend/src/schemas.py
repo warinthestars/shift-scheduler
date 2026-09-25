@@ -166,6 +166,7 @@ class VenueBase(BaseModel):
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
     approval_policy: str = "team_auto"
+    show_rates_publicly: bool = True
 
 class VenueCreate(BaseModel):
     name: str
@@ -182,6 +183,7 @@ class VenueCreate(BaseModel):
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
     approval_policy: Optional[str] = "team_auto"
+    show_rates_publicly: Optional[bool] = True
     manager_email: Optional[EmailStr] = None
     initial_manager_email: Optional[EmailStr] = None
 
@@ -201,6 +203,7 @@ class VenueUpdateSettings(BaseModel):
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
     approval_policy: Optional[str] = None
+    show_rates_publicly: Optional[bool] = None
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -479,4 +482,77 @@ class VenuePositionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ------------------------------------------------------------------------------
+# Phase 25.1: Public venue directory & profile (no worker PII)
+# ------------------------------------------------------------------------------
+class VenueDirectoryItem(BaseModel):
+    id: UUID
+    name: str
+    address: str
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    timezone: str = "America/New_York"
+    lat: float
+    lng: float
+    open_spots: int = 0
+    upcoming_shift_count: int = 0
+    total_shifts_posted: int = 0
+    next_shift_start: Optional[datetime] = None
+    show_rates_publicly: bool = True
+    rate_min: Optional[float] = None
+    rate_max: Optional[float] = None
+
+
+class PublicPosition(BaseModel):
+    name: str
+    default_rate: Optional[float] = None
+    tips_eligible: bool = False
+    tip_pool: bool = False
+
+
+class VenueProfileResponse(BaseModel):
+    id: UUID
+    name: str
+    address: str
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    phone: Optional[str] = None
+    timezone: str = "America/New_York"
+    lat: float
+    lng: float
+    dress_code: Optional[str] = None
+    arrival_instructions: Optional[str] = None
+    show_rates_publicly: bool = True
+    positions: List[PublicPosition] = []
+    events_last_90_days: int = 0
+    spots_posted_last_90_days: int = 0
+    spots_filled_last_90_days: int = 0
+    workers_booked_all_time: int = 0
+    can_manage: bool = False
+
+
+class PublicEventPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    hourly_rate: float
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    capacity: int
+    filled: int
+    spots_left: int
+    status: str
+    my_status: Optional[str] = None
+
+
+class PublicVenueEvent(BaseModel):
+    event_key: str
+    title: str
+    start_time: datetime
+    end_time: datetime
+    description: Optional[str] = None
+    total_capacity: int
+    total_filled: int
+    positions: List[PublicEventPosition]
 

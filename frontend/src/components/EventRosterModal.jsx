@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { X, Users, Clock, Check, MessageSquare, Phone, Mail, UserPlus } from 'lucide-react';
 import TipBadge from './TipBadge';
 import ReliabilityBadge from './ReliabilityBadge';
@@ -36,10 +37,10 @@ export default function EventRosterModal({
   const dateStr = fmtDate(event.start_time, timeZone);
   const timeStr = fmtTimeRange(event.start_time, event.end_time, timeZone);
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl max-h-[90vh] flex flex-col">
-        <div className="flex justify-between items-start pb-4 border-b border-slate-800">
+  return createPortal(
+    <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <div className="flex justify-between items-start pb-4 border-b border-slate-800 shrink-0">
           <div>
             <div className="flex items-center space-x-2 mb-1">
               <Users className="w-5 h-5 text-emerald-400" />
@@ -65,7 +66,7 @@ export default function EventRosterModal({
           </button>
         </div>
 
-        <div className="overflow-y-auto flex-1 pt-4 space-y-5 pr-1">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pt-4 space-y-5 pr-1">
           {event.positions.map((pos) => {
             const isFull = pos.assigned.length >= pos.capacity;
             return (
@@ -186,6 +187,7 @@ export default function EventRosterModal({
           })}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
