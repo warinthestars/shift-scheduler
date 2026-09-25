@@ -10,6 +10,17 @@ from src.schemas import UserResponse
 from src.auth import normalize_role
 
 
+def auth_source_for(user: User) -> str:
+    """'local' (ShiftBoard password), 'firebase' (Firebase only), or 'both'."""
+    has_pw = bool(user.hashed_password)
+    has_fb = bool(user.firebase_uid)
+    if has_pw and has_fb:
+        return "both"
+    if has_fb:
+        return "firebase"
+    return "local"
+
+
 async def get_user_affiliations(db: AsyncSession, user: User):
     """Returns (venue_ids, venue_names) for managers (managed venues) or workers (team/whitelist)."""
     role = normalize_role(user.role)
@@ -53,4 +64,6 @@ async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
         total_shifts=int(user.total_shifts or 0),
         is_active=bool(user.is_active),
         created_at=user.created_at,
+        auth_source=auth_source_for(user),
+        has_password=bool(user.hashed_password),
     )

@@ -4,9 +4,11 @@ import api from '../api/client';
 import {
   Shield, Building2, Plus, Users, Calendar, AlertCircle,
   Check, X, MapPin, Trash2, BarChart3, Briefcase, Search,
-  UserPlus, CheckCircle2, XCircle, Power, UserCheck, Pencil
+  UserPlus, CheckCircle2, XCircle, Power, UserCheck, Pencil,
+  KeyRound, Flame
 } from 'lucide-react';
 import VenueSettingsModal from '../components/VenueSettingsModal';
+import ResetPasswordModal from '../components/ResetPasswordModal';
 
 export default function AdminPanel() {
   const { user: currentUser } = useAuth();
@@ -31,6 +33,8 @@ export default function AdminPanel() {
   const [editRole, setEditRole] = useState('worker');
   const [editVenueIds, setEditVenueIds] = useState([]);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [resetUser, setResetUser] = useState(null);
+  const [authFilter, setAuthFilter] = useState('ALL'); // 'ALL' | 'local' | 'firebase'
   const [notification, setNotification] = useState(null);
 
   // Form state for Create New User Modal
@@ -219,6 +223,28 @@ export default function AdminPanel() {
     );
   };
 
+  const AuthBadge = ({ source }) => {
+    if (source === 'firebase') {
+      return (
+        <span title="Signs in with Firebase (Google, email link, etc.)" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30">
+          <Flame className="w-3 h-3" /> Firebase
+        </span>
+      );
+    }
+    if (source === 'both') {
+      return (
+        <span title="Has a ShiftBoard password and is linked to Firebase" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
+          <KeyRound className="w-3 h-3" /> Local <span className="text-slate-500">+</span> <Flame className="w-3 h-3 text-amber-300" /> Firebase
+        </span>
+      );
+    }
+    return (
+      <span title="Signs in with a ShiftBoard password" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-700/40 text-slate-300 border border-slate-600/50">
+        <KeyRound className="w-3 h-3" /> Local
+      </span>
+    );
+  };
+
   // Filter users based on search term & role filter
   const filteredUsers = users.filter((u) => {
     const matchesSearch =
@@ -230,7 +256,13 @@ export default function AdminPanel() {
       userRoleFilter === 'ALL' ||
       u.role.toLowerCase() === userRoleFilter.toLowerCase();
 
-    return matchesSearch && matchesRole;
+    const src = u.auth_source || 'local';
+    const matchesAuth =
+      authFilter === 'ALL' ||
+      (authFilter === 'local' && (src === 'local' || src === 'both')) ||
+      (authFilter === 'firebase' && (src === 'firebase' || src === 'both'));
+
+    return matchesSearch && matchesRole && matchesAuth;
   });
 
   return (
@@ -484,6 +516,17 @@ export default function AdminPanel() {
                   <option value="platform_admin">Platform Admins</option>
                 </select>
 
+                <select
+                  value={authFilter}
+                  onChange={(e) => setAuthFilter(e.target.value)}
+                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
+                  title="Filter by sign-in method"
+                >
+                  <option value="ALL">All sign-in methods</option>
+                  <option value="local">Local password</option>
+                  <option value="firebase">Firebase</option>
+                </select>
+
                 <button
                   onClick={() => setShowCreateUserModal(true)}
                   className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-white text-xs flex items-center space-x-1.5 transition shadow-md shadow-indigo-600/20"
@@ -527,7 +570,10 @@ export default function AdminPanel() {
                               {u.first_name?.[0] || 'U'}{u.last_name?.[0] || ''}
                             </div>
                             <div>
-                              <div className="text-white font-bold">{u.first_name} {u.last_name}</div>
+                              <div className="text-white font-bold flex flex-wrap items-center gap-1.5">
+                                <span>{u.first_name} {u.last_name}</span>
+                                <AuthBadge source={u.auth_source} />
+                              </div>
                               {u.phone && <div className="text-[11px] text-slate-500">{u.phone}</div>}
                             </div>
                           </td>
@@ -620,6 +666,23 @@ export default function AdminPanel() {
                               >
                                 <Pencil className="w-4 h-4" />
                               </button>
+                              {u.has_password ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setResetUser(u)}
+                                  className="p-2 text-slate-500 hover:text-indigo-300 rounded-lg hover:bg-indigo-500/10 transition"
+                                  title="Reset password"
+                                >
+                                  <KeyRound className="w-4 h-4" />
+                                </button>
+                              ) : (
+                                <span
+                                  className="p-2 text-slate-700 cursor-not-allowed inline-flex"
+                                  title="Firebase account: password is managed in Firebase ('Forgot password' on the login page)"
+                                >
+                                  <KeyRound className="w-4 h-4" />
+                                </span>
+                              )}
                               {currentUser?.id !== u.id && (
                                 <button
                                   type="button"
@@ -939,6 +1002,14 @@ export default function AdminPanel() {
             </div>
           </div>
         </div>
+      )}
+
+      {resetUser && (
+        <ResetPasswordModal
+          user={resetUser}
+          onClose={() => setResetUser(null)}
+          onDone={() => setNotification({ type: 'success', message: `Password reset for ${resetUser.email}.` })}
+        />
       )}
 
       {/* Modal: Confirm User Deletion */}

@@ -99,6 +99,8 @@ class UserResponse(UserBase):
     total_shifts: int
     is_active: bool
     created_at: datetime
+    auth_source: Optional[str] = None     # "local" | "firebase" | "both"
+    has_password: bool = False
 
     # For UI compatibility
     @property
@@ -639,4 +641,17 @@ class EventDetail(BaseModel):
     end_time: datetime
     notes: Optional[str] = None
     positions: List[EventDetailPosition]
+
+
+# ------------------------------------------------------------------------------
+# Phase 25.4: Admin password reset
+# ------------------------------------------------------------------------------
+class AdminPasswordReset(BaseModel):
+    new_password: Optional[str] = None     # omit to generate a temporary password
+
+
+class AdminPasswordResetResponse(BaseModel):
+    user_id: UUID
+    generated: bool
+    temporary_password: Optional[str] = None   # only returned when generated=True
 

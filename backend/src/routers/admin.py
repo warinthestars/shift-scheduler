@@ -1,3 +1,4 @@
+import secrets
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 from datetime import datetime, timezone
@@ -7,11 +8,19 @@ from sqlalchemy import select, delete, func, distinct
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import Venue, Shift, User, ShiftRequest, UserRole, VenueManager, VenueWhitelist, TimeEntry
-from src.schemas import VenueResponse, UserResponse, UserCreateAdmin, UserUpdateAdmin
+from src.schemas import VenueResponse, UserResponse, UserCreateAdmin, UserUpdateAdmin, AdminPasswordReset, AdminPasswordResetResponse
 from src.auth import require_admin, get_password_hash, normalize_role
+from src.serializers import auth_source_for
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 VALID_ROLES = ("worker", "venue_manager", "platform_admin")
+
+# No 0/O, 1/l/I so it's easy to read aloud or copy by hand
+_TEMP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+
+
+def _generate_temp_password(length: int = 12) -> str:
+    return "".join(secrets.choice(_TEMP_ALPHABET) for _ in range(length))
 
 def _build_user_response(user: User, venue_ids: list, venue_names: list) -> UserResponse:
     """Build UserResponse from column attributes only. Never touches ORM relationships."""
@@ -33,6 +42,8 @@ def _build_user_response(user: User, venue_ids: list, venue_names: list) -> User
         total_shifts=int(user.total_shifts or 0),
         is_active=bool(user.is_active),
         created_at=user.created_at,
+        auth_source=auth_source_for(user),
+        has_password=bool(user.hashed_password),
     )
 
 @router.get("/venues", response_model=List[VenueResponse])
@@ -308,6 +319,45 @@ async def update_admin_user(
         venue_names = [w[1] for w in wl_entries]
 
     return _build_user_response(user, venue_ids, venue_names)
+
+@router.post("/users/{user_id}/reset-password", response_model=AdminPasswordResetResponse)
+async def admin_reset_password(
+    user_id: UUID,
+    body: AdminPasswordReset,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 25.4: Reset a LOCAL password. Firebase-only accounts are refused (their password is in Firebase).
+    If new_password is omitted, a 12-character temporary password is generated and returned once.
+    """
+    user = await db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if not user.hashed_password:
+        raise HTTPException(
+            status_code=400,
+            detail="This person signs in with Firebase, so there's no ShiftBoard password to reset. "
+                   "They can use 'Forgot password' on the login page, or you can reset it in the Firebase Console."
+        )
+
+    generated = body.new_password is None or body.new_password.strip() == ""
+    new_password = _generate_temp_password() if generated else body.new_password
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    try:
+        user.hashed_password = get_password_hash(new_password)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to reset password: {str(e)}")
+
+    return AdminPasswordResetResponse(
+        user_id=user.id,
+        generated=generated,
+        temporary_password=new_password if generated else None,
+    )
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_admin_user(
