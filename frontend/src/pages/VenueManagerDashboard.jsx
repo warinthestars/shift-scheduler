@@ -18,6 +18,7 @@ import ReliabilityBadge from '../components/ReliabilityBadge';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
 import ShiftEventFormModal from '../components/ShiftEventFormModal';
+import ShiftBoardModal from '../components/ShiftBoardModal';
 import PayLabel from '../components/PayLabel';
 import { zonedLocalToUtcIso, fmtShortDate } from '../utils/venueTime';
 
@@ -625,6 +626,7 @@ export default function VenueManagerDashboard() {
           mode={eventForm.mode}
           eventId={eventForm.eventId}
           venue={venueDetails}
+          positions={venuePositions}
           onClose={() => setEventForm(null)}
           onSaved={() => {
             setEventForm(null);
@@ -633,22 +635,19 @@ export default function VenueManagerDashboard() {
               type: 'success',
               message: eventForm.mode === 'edit' ? 'Event updated.' : 'Event and shifts published.',
             });
+            loadVenuePositions(currentVenueId);
           }}
         />
       )}
 
-      {/* Discussion Board Modal */}
+      {/* Discussion Board Modal (Phase 25.3: always on top) */}
       {activeDiscussionShift && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="max-w-2xl w-full">
-            <ShiftBoard
-              shiftId={activeDiscussionShift.id}
-              shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.role_type})`}
-              currentUserRole={user?.role}
-              onClose={() => setActiveDiscussionShift(null)}
-            />
-          </div>
-        </div>
+        <ShiftBoardModal
+          shiftId={activeDiscussionShift.id}
+          shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.role_type})`}
+          currentUserRole={user?.role}
+          onClose={() => setActiveDiscussionShift(null)}
+        />
       )}
 
       {showVenueSettings && venueDetails && (

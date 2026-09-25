@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import TransferModal from '../components/TransferModal';
 import ShiftBoard from '../components/ShiftBoard';
+import ShiftBoardModal from '../components/ShiftBoardModal';
 import TipBadge from '../components/TipBadge';
 import PayLabel from '../components/PayLabel';
 import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';
@@ -749,18 +750,14 @@ export default function WorkerDashboard() {
         />
       )}
 
-      {/* Shift Discussion Board Modal */}
+      {/* Shift Discussion Board Modal (Phase 25.3: always on top) */}
       {activeDiscussionShift && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="max-w-2xl w-full">
-            <ShiftBoard
-              shiftId={activeDiscussionShift.id}
-              shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.venue?.name || ''})`}
-              currentUserRole={user?.role}
-              onClose={() => setActiveDiscussionShift(null)}
-            />
-          </div>
-        </div>
+        <ShiftBoardModal
+          shiftId={activeDiscussionShift.id}
+          shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.venue?.name || ''})`}
+          currentUserRole={user?.role}
+          onClose={() => setActiveDiscussionShift(null)}
+        />
       )}
 
       {/* Confirm Drop Modal (Phase 14) */}

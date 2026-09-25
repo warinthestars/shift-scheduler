@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useModalLayer } from './modalLayer';
 
 /**
- * Phase 25.2: One modal wrapper for the whole app.
+ * One modal wrapper for the whole app (Phase 25.2, stacking-aware in 25.3).
  * The dark backdrop scrolls (not the panel), so long content always fits on any screen.
  * Header and footer are sticky inside the scrolling backdrop.
  */
@@ -17,21 +18,7 @@ export default function ModalShell({
   footer = null,
   children,
 }) {
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKey = (e) => {
-      if (e.key === 'Escape' && closeRef.current) closeRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener('keydown', onKey);
-    };
-  }, []);
+  useModalLayer(onClose);
 
   return createPortal(
     <div className="fixed inset-0 z-[60] overflow-y-auto overscroll-contain bg-slate-950/85">

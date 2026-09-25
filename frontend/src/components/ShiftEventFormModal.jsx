@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users } from 'lucide-react';
+import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
+import { payText } from './PayLabel';
 import { zonedLocalToUtcIso, utcToZonedLocalInput } from '../utils/venueTime';
+
+const CUSTOM = '__custom__';
 
 const APPROVAL_OPTIONS = [
   { value: 'venue_default', label: 'Venue default' },
@@ -19,6 +22,29 @@ const inputCls =
   'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
 const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
 
+function tipsText(p) {
+  if (!p?.tips_eligible) return '';
+  return p.tip_pool ? 'pooled tips' : 'tips';
+}
+
+function optionLabel(p) {
+  const parts = [payText(p.default_rate, p.default_rate_max)];
+  const t = tipsText(p);
+  if (t) parts.push(t);
+  if (p.hide_rate) parts.push('pay hidden');
+  return `${p.name} — ${parts.filter(Boolean).join(' · ')}`;
+}
+
+function defaultsFor(pos) {
+  return {
+    hourly_rate: pos ? Number(pos.default_rate).toFixed(2) : '25.00',
+    hourly_rate_max: pos?.default_rate_max != null ? Number(pos.default_rate_max).toFixed(2) : '',
+    hide_rate: !!pos?.hide_rate,
+    tips_eligible: !!pos?.tips_eligible,
+    tip_pool: !!pos?.tip_pool,
+  };
+}
+
 let rowSeq = 0;
 function blankRow(pos) {
   rowSeq += 1;
@@ -26,12 +52,9 @@ function blankRow(pos) {
     key: `new-${rowSeq}`,
     shift_id: null,
     role_type: pos?.name || '',
+    custom: !pos,
     capacity: 1,
-    hourly_rate: pos ? Number(pos.default_rate).toFixed(2) : '25.00',
-    hourly_rate_max: pos?.default_rate_max != null ? Number(pos.default_rate_max).toFixed(2) : '',
-    hide_rate: !!pos?.hide_rate,
-    tips_eligible: !!pos?.tips_eligible,
-    tip_pool: !!pos?.tip_pool,
+    ...defaultsFor(pos),
     role_notes: '',
     approval_mode: 'venue_default',
     booked: 0,
@@ -40,10 +63,31 @@ function blankRow(pos) {
   };
 }
 
-export default function ShiftEventFormModal({ mode = 'create', venue, positions = [], eventId = null, onClose, onSaved }) {
+export default function ShiftEventFormModal({ mode = 'create', venue, positions = null, eventId = null, onClose, onSaved }) {
   const tz = venue?.timezone;
   const isEdit = mode === 'edit' && !!eventId;
-  const activePositions = positions.filter((p) => p.is_active !== false);
+
+  // ---- Positions: use the prop if given, otherwise load them for this venue ----
+  const [fetchedPositions, setFetchedPositions] = useState(null);
+  const hasPropPositions = Array.isArray(positions) && positions.length > 0;
+  useEffect(() => {
+    if (hasPropPositions || !venue?.id) return;
+    let active = true;
+    api
+      .get(`/venues/${venue.id}/positions`)
+      .then((res) => active && setFetchedPositions(res.data || []))
+      .catch(() => active && setFetchedPositions([]));
+    return () => {
+      active = false;
+    };
+  }, [hasPropPositions, venue?.id]);
+
+  const activePositions = useMemo(() => {
+    const src = hasPropPositions ? positions : fetchedPositions || [];
+    return src.filter((p) => p.is_active !== false);
+  }, [hasPropPositions, positions, fetchedPositions]);
+  const positionsLoading = !hasPropPositions && fetchedPositions === null;
+  const findPos = (name) => activePositions.find((p) => p.name === name);
 
   const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
@@ -52,7 +96,14 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [notes, setNotes] = useState('');
-  const [rows, setRows] = useState(() => (isEdit ? [] : [blankRow(activePositions[0])]));
+  const [rows, setRows] = useState(() => (isEdit ? [] : [blankRow(null)]));
+  const [touched, setTouched] = useState(false);
+
+  // Auto-fill the first empty row once the venue's positions arrive (create mode only)
+  useEffect(() => {
+    if (isEdit || touched || activePositions.length === 0) return;
+    setRows((rs) => (rs.length === 1 && !rs[0].role_type ? [blankRow(activePositions[0])] : rs));
+  }, [isEdit, touched, activePositions]);
 
   useEffect(() => {
     if (!isEdit) return;
@@ -70,6 +121,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
             key: p.shift_id,
             shift_id: p.shift_id,
             role_type: p.role_type,
+            custom: false,
             capacity: p.capacity,
             hourly_rate: Number(p.hourly_rate).toFixed(2),
             hourly_rate_max: p.hourly_rate_max != null ? Number(p.hourly_rate_max).toFixed(2) : '',
@@ -88,31 +140,36 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
       .finally(() => setLoading(false));
   }, [isEdit, eventId, tz]);
 
-  const updateRow = (key, patch) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const updateRow = (key, patch) => {
+    setTouched(true);
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  };
 
-  const changeRole = (key, name) => {
-    const pos = activePositions.find((p) => p.name === name);
-    if (!pos) {
-      updateRow(key, { role_type: name });
+  const pickPosition = (key, value) => {
+    if (value === CUSTOM) {
+      updateRow(key, { custom: true, role_type: '' });
       return;
     }
-    updateRow(key, {
-      role_type: name,
-      hourly_rate: Number(pos.default_rate).toFixed(2),
-      hourly_rate_max: pos.default_rate_max != null ? Number(pos.default_rate_max).toFixed(2) : '',
-      hide_rate: !!pos.hide_rate,
-      tips_eligible: !!pos.tips_eligible,
-      tip_pool: !!pos.tip_pool,
-    });
+    const pos = findPos(value);
+    updateRow(key, { custom: false, role_type: value, ...(pos ? defaultsFor(pos) : {}) });
+  };
+
+  const resetToDefault = (key, name) => {
+    const pos = findPos(name);
+    if (pos) updateRow(key, defaultsFor(pos));
   };
 
   const addRow = () => {
+    setTouched(true);
     const used = new Set(rows.map((r) => r.role_type));
-    const next = activePositions.find((p) => !used.has(p.name)) || activePositions[0];
+    const next = activePositions.find((p) => !used.has(p.name)) || activePositions[0] || null;
     setRows((rs) => [...rs, blankRow(next)]);
   };
 
-  const removeRow = (key) => setRows((rs) => rs.filter((r) => r.key !== key));
+  const removeRow = (key) => {
+    setTouched(true);
+    setRows((rs) => rs.filter((r) => r.key !== key));
+  };
 
   const eventApproval = useMemo(() => {
     const modes = new Set(rows.map((r) => r.approval_mode));
@@ -121,6 +178,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
 
   const setAllApproval = (value) => {
     if (value === 'mixed') return;
+    setTouched(true);
     setRows((rs) => rs.map((r) => ({ ...r, approval_mode: value })));
   };
 
@@ -141,7 +199,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
       const lo = parseFloat(r.hourly_rate);
       const hi = r.hourly_rate_max === '' ? null : parseFloat(r.hourly_rate_max);
       const cap = parseInt(r.capacity, 10) || 1;
-      if (!name) return setError('Every row needs a position.');
+      if (!name) return setError('Pick a position for every row.');
       if (!lo || lo <= 0) return setError(`${name}: pay must be more than $0.`);
       if (hi !== null && (Number.isNaN(hi) || hi < lo)) return setError(`${name}: the top of the pay range can't be lower than the bottom.`);
       if (cap < (r.booked || 0)) return setError(`${name}: ${r.booked} people are already booked, so it needs at least ${r.booked} spots.`);
@@ -283,23 +341,69 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
               </button>
             </div>
 
+            {!positionsLoading && activePositions.length === 0 && (
+              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
+                This venue has no positions set up yet. Add them in Venue Settings → Positions & pay to get dropdowns with pay filled in. You can still type a position below.
+              </p>
+            )}
+
             {rows.map((r) => {
               const locked = (r.booked || 0) + (r.pending || 0) > 0;
-              const names = activePositions.map((p) => p.name);
+              const pos = findPos(r.role_type);
+              const inList = !!pos;
+              const showSelect = activePositions.length > 0 && !r.custom;
+              const def = pos ? defaultsFor(pos) : null;
+              const differsFromDefault =
+                def &&
+                (Number(def.hourly_rate) !== Number(r.hourly_rate) ||
+                  String(def.hourly_rate_max || '') !== String(r.hourly_rate_max || '') ||
+                  def.hide_rate !== r.hide_rate ||
+                  def.tips_eligible !== r.tips_eligible ||
+                  def.tip_pool !== r.tip_pool);
+
               return (
                 <div key={r.key} className="p-3 rounded-xl border border-slate-700 bg-slate-800/40 space-y-3">
                   <div className="flex flex-wrap items-end gap-2">
-                    <div className="flex-1 min-w-[10rem]">
+                    <div className="flex-1 min-w-[12rem]">
                       <label className={labelCls}>Position</label>
-                      {names.length > 0 ? (
-                        <select value={r.role_type} onChange={(e) => changeRole(r.key, e.target.value)} className={inputCls}>
-                          {!names.includes(r.role_type) && r.role_type && <option value={r.role_type}>{r.role_type}</option>}
-                          {names.map((n) => (
-                            <option key={n} value={n}>{n}</option>
+                      {showSelect ? (
+                        <select
+                          value={inList ? r.role_type : r.role_type ? `__legacy__${r.role_type}` : ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v.startsWith('__legacy__')) return;
+                            pickPosition(r.key, v);
+                          }}
+                          className={inputCls}
+                        >
+                          {!r.role_type && <option value="" disabled>Choose a position…</option>}
+                          {!inList && r.role_type && (
+                            <option value={`__legacy__${r.role_type}`}>{r.role_type} (not in venue list)</option>
+                          )}
+                          {activePositions.map((p) => (
+                            <option key={p.id || p.name} value={p.name}>{optionLabel(p)}</option>
                           ))}
+                          <option value={CUSTOM}>Other (type a name)…</option>
                         </select>
                       ) : (
-                        <input value={r.role_type} onChange={(e) => updateRow(r.key, { role_type: e.target.value })} className={inputCls} placeholder="Bartender" />
+                        <div className="space-y-1">
+                          <input
+                            value={r.role_type}
+                            onChange={(e) => updateRow(r.key, { role_type: e.target.value })}
+                            className={inputCls}
+                            placeholder={positionsLoading ? 'Loading positions…' : 'e.g. Coat Check'}
+                            disabled={positionsLoading}
+                          />
+                          {activePositions.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => pickPosition(r.key, activePositions[0].name)}
+                              className="text-[11px] text-emerald-400 hover:text-emerald-300"
+                            >
+                              ← Pick from venue positions
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                     <div className="w-20">
@@ -322,6 +426,25 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
+
+                  {pos && (
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                      <span>
+                        Venue default: {payText(pos.default_rate, pos.default_rate_max)}
+                        {tipsText(pos) ? ` · ${tipsText(pos)}` : ''}
+                        {pos.hide_rate ? ' · pay hidden' : ''}
+                      </span>
+                      {differsFromDefault && (
+                        <button
+                          type="button"
+                          onClick={() => resetToDefault(r.key, r.role_type)}
+                          className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
+                        >
+                          <RotateCcw className="w-3 h-3" /> Reset to venue default
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {isEdit && (r.booked > 0 || r.pending > 0) && (
                     <p className="text-[11px] text-slate-400">{r.booked} booked · {r.pending} waiting</p>
