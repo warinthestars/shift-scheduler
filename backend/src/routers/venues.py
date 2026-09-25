@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
     Venue, VenueManager, VenueWhitelist, User, UserRole,
-    Shift, ShiftRequest, RequestStatus, TimeEntry, VenuePosition
+    Shift, ShiftRequest, RequestStatus, TimeEntry, VenuePosition, ShiftEvent
 )
 from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
@@ -28,6 +28,7 @@ from src.services.reliability import compute_reliability
 from src.services.team import get_venue_team
 from src.services.venue_positions import ensure_default_positions, clean_venue_payload
 from src.services.venue_public import build_directory, build_profile, build_public_events
+from src.services.shift_views import to_shift_responses
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -167,7 +168,7 @@ async def get_venue_shifts(
         .where(Shift.venue_id == venue_id)
         .order_by(Shift.start_time.asc())
     )
-    return result.scalars().all()
+    return await to_shift_responses(db, result.scalars().all(), None)
 
 @router.get("/{venue_id}/requests/pending", response_model=List[ShiftRequestResponse])
 async def get_venue_pending_requests(
@@ -266,6 +267,9 @@ async def create_venue_position(
         raise HTTPException(status_code=400, detail="Position name can't be empty.")
     if pos_in.default_rate is None or pos_in.default_rate <= 0:
         raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
+    if pos_in.default_rate_max is not None and pos_in.default_rate_max < pos_in.default_rate:
+        raise HTTPException(status_code=400, detail="The top of the pay range can't be lower than the bottom.")
+    rate_max = pos_in.default_rate_max if (pos_in.default_rate_max and pos_in.default_rate_max > pos_in.default_rate) else None
 
     existing = await db.scalar(
         select(VenuePosition).where(
@@ -280,6 +284,8 @@ async def create_venue_position(
         try:
             existing.is_active = True
             existing.default_rate = pos_in.default_rate
+            existing.default_rate_max = rate_max
+            existing.hide_rate = bool(pos_in.hide_rate)
             existing.tips_eligible = bool(pos_in.tips_eligible)
             existing.tip_pool = bool(pos_in.tips_eligible and pos_in.tip_pool)
             await db.commit()
@@ -297,6 +303,8 @@ async def create_venue_position(
             venue_id=venue_id,
             name=name[:100],
             default_rate=pos_in.default_rate,
+            default_rate_max=rate_max,
+            hide_rate=bool(pos_in.hide_rate),
             tips_eligible=bool(pos_in.tips_eligible),
             tip_pool=bool(pos_in.tips_eligible and pos_in.tip_pool),
             sort_order=int(max_order) + 1,
@@ -351,8 +359,15 @@ async def update_venue_position(
             setattr(pos, field, value)
         if not pos.tips_eligible:
             pos.tip_pool = False
+        if pos.default_rate_max is not None and float(pos.default_rate_max) < float(pos.default_rate):
+            raise HTTPException(status_code=400, detail="The top of the pay range can't be lower than the bottom.")
+        if pos.default_rate_max is not None and float(pos.default_rate_max) == float(pos.default_rate):
+            pos.default_rate_max = None
         await db.commit()
         await db.refresh(pos)
+    except HTTPException:
+        await db.rollback()
+        raise
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update position: {str(e)}")
@@ -762,17 +777,25 @@ async def get_venue_events(
         else:
             requested_by_shift[req.shift_id].append(person)
 
+    event_ids = {s.event_id for s in shifts if s.event_id}
+    event_notes = {}
+    if event_ids:
+        event_notes = dict((await db.execute(
+            select(ShiftEvent.id, ShiftEvent.notes).where(ShiftEvent.id.in_(event_ids))
+        )).all())
+
     events = {}
     order = []
     for s in shifts:
-        key = f"{s.title}|{s.start_time.isoformat()}|{s.end_time.isoformat()}"
+        key = str(s.event_id) if s.event_id else f"{s.title}|{s.start_time.isoformat()}|{s.end_time.isoformat()}"
         if key not in events:
             events[key] = {
                 "event_key": key,
+                "event_id": s.event_id,
                 "title": s.title or "Shift",
                 "start_time": s.start_time,
                 "end_time": s.end_time,
-                "description": s.description,
+                "description": event_notes.get(s.event_id) if s.event_id else None,
                 "positions": [],
             }
             order.append(key)
@@ -780,8 +803,12 @@ async def get_venue_events(
             shift_id=s.id,
             role_type=s.role_type or "Worker",
             hourly_rate=float(s.hourly_rate) if s.hourly_rate is not None else 0.0,
+            hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
+            hide_rate=bool(s.hide_rate),
             tips_eligible=bool(s.tips_eligible),
             tip_pool=bool(s.tip_pool),
+            role_notes=s.description,
+            approval_mode=s.approval_mode or "venue_default",
             capacity=s.capacity if s.capacity is not None else 1,
             spots_filled=s.spots_filled if s.spots_filled is not None else 0,
             status=s.status or "OPEN",

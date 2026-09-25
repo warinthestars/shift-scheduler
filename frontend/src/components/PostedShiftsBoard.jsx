@@ -3,9 +3,10 @@ import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { enUS } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus } from 'lucide-react';
+import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff } from 'lucide-react';
 import api from '../api/client';
 import TipBadge from './TipBadge';
+import PayLabel from './PayLabel';
 import EventRosterModal from './EventRosterModal';
 import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
 
@@ -24,6 +25,7 @@ export default function PostedShiftsBoard({
   onApprove,
   onDeny,
   onOpenBoard,
+  onEditEvent,
   actionLoading,
   timeZone,
 }) {
@@ -181,6 +183,7 @@ export default function PostedShiftsBoard({
                       <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
                         <div>
                           <div className="text-sm font-bold text-white">{ev.title}</div>
+                          {ev.description && <div className="text-[11px] text-slate-400 line-clamp-1">{ev.description}</div>}
                           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
                             <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{timeStr}</span>
                             <span>Staffed <strong className="text-white">{ev.total_assigned}/{ev.total_capacity}</strong></span>
@@ -191,14 +194,24 @@ export default function PostedShiftsBoard({
                             )}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedKey(ev.event_key)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-semibold text-xs border border-emerald-600/30 transition inline-flex items-center space-x-1.5 self-start md:self-auto"
-                        >
-                          <Users className="w-3.5 h-3.5" />
-                          <span>View Roster</span>
-                        </button>
+                        <div className="flex items-center gap-2 self-start md:self-auto">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedKey(ev.event_key)}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-semibold text-xs border border-emerald-600/30 transition inline-flex items-center gap-1.5"
+                          >
+                            <Eye className="w-3.5 h-3.5" /> Details
+                          </button>
+                          {onEditEvent && ev.event_id && (
+                            <button
+                              type="button"
+                              onClick={() => onEditEvent(ev.event_id)}
+                              className="px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500 text-amber-300 hover:text-slate-950 font-semibold text-xs border border-amber-500/30 transition inline-flex items-center gap-1.5"
+                            >
+                              <Pencil className="w-3.5 h-3.5" /> Edit
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="divide-y divide-slate-800/60">
                         {ev.positions.map((pos) => {
@@ -209,7 +222,10 @@ export default function PostedShiftsBoard({
                                 <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{pos.role_type}</span>
                               </div>
                               <div className="md:col-span-3 flex items-center gap-1.5 text-emerald-400 font-semibold">
-                                <span>${Number(pos.hourly_rate).toFixed(2)}/hr</span>
+                                <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
+                                {pos.hide_rate && <EyeOff className="w-3 h-3 text-slate-500" title="Pay hidden from workers" />}
+                                {pos.approval_mode === 'auto' && <span className="text-[10px] text-emerald-400">Instant</span>}
+                                {pos.approval_mode === 'manual' && <span className="text-[10px] text-amber-400">Needs OK</span>}
                                 <TipBadge shift={pos} />
                               </div>
                               <div className="md:col-span-3">
@@ -251,6 +267,7 @@ export default function PostedShiftsBoard({
           onApprove={onApprove}
           onDeny={onDeny}
           onOpenBoard={onOpenBoard}
+          onEdit={onEditEvent ? (id) => { setSelectedKey(null); onEditEvent(id); } : undefined}
           actionLoading={actionLoading}
           timeZone={timeZone}
         />

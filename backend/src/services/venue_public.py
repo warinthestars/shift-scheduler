@@ -8,7 +8,7 @@ from typing import List
 from sqlalchemy import select, func, and_, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import Venue, Shift, ShiftRequest, VenuePosition, VenueManager, User
+from src.models import Venue, Shift, ShiftRequest, VenuePosition, VenueManager, User, ShiftEvent
 from src.auth import normalize_role
 from src.schemas import (
     VenueDirectoryItem, PublicPosition, VenueProfileResponse,
@@ -53,8 +53,12 @@ async def build_directory(db: AsyncSession) -> List[VenueDirectoryItem]:
     stats = {r.venue_id: r for r in stats_rows}
 
     rate_rows = (await db.execute(
-        select(VenuePosition.venue_id, func.min(VenuePosition.default_rate), func.max(VenuePosition.default_rate))
-        .where(VenuePosition.is_active == True)
+        select(
+            VenuePosition.venue_id,
+            func.min(VenuePosition.default_rate),
+            func.max(func.coalesce(VenuePosition.default_rate_max, VenuePosition.default_rate)),
+        )
+        .where(VenuePosition.is_active == True, VenuePosition.hide_rate == False)
         .group_by(VenuePosition.venue_id)
     )).all()
     rates = {vid: (mn, mx) for vid, mn, mx in rate_rows}
@@ -148,7 +152,12 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
         positions=[
             PublicPosition(
                 name=p.name,
-                default_rate=float(p.default_rate) if show_rates else None,
+                default_rate=float(p.default_rate) if (show_rates and (manage or not p.hide_rate)) else None,
+                default_rate_max=(
+                    float(p.default_rate_max)
+                    if (p.default_rate_max is not None and show_rates and (manage or not p.hide_rate))
+                    else None
+                ),
                 tips_eligible=bool(p.tips_eligible),
                 tip_pool=bool(p.tip_pool),
             )
@@ -164,6 +173,7 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
 
 async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
     now = datetime.now(timezone.utc)
+    manage = await can_manage_venue(db, user, venue.id)
     q = select(Shift).where(Shift.venue_id == venue.id)
     if scope == "past":
         q = q.where(
@@ -190,32 +200,44 @@ async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope:
     )).all()
     mine = {sid: (st or "").lower() for sid, st in mine_rows}
 
+    event_ids = {s.event_id for s in shifts if s.event_id}
+    event_notes = {}
+    if event_ids:
+        event_notes = dict((await db.execute(
+            select(ShiftEvent.id, ShiftEvent.notes).where(ShiftEvent.id.in_(event_ids))
+        )).all())
+
     events, order = {}, []
     for s in shifts:
-        key = f"{s.title}|{s.start_time.isoformat()}|{s.end_time.isoformat()}"
+        key = str(s.event_id) if s.event_id else f"{s.title}|{s.start_time.isoformat()}|{s.end_time.isoformat()}"
         if key not in events:
             events[key] = {
                 "event_key": key,
                 "title": s.title or "Shift",
                 "start_time": s.start_time,
                 "end_time": s.end_time,
-                "description": s.description,
+                "description": event_notes.get(s.event_id) if s.event_id else None,
                 "positions": [],
             }
             order.append(key)
         cap = s.capacity if s.capacity is not None else 1
         f = filled.get(s.id, 0)
+        my = mine.get(s.id)
+        can_see = (not s.hide_rate) or manage or (my in ASSIGNED_STATUSES)
         events[key]["positions"].append(PublicEventPosition(
             shift_id=s.id,
             role_type=s.role_type or "Worker",
-            hourly_rate=float(s.hourly_rate) if s.hourly_rate is not None else 0.0,
+            hourly_rate=float(s.hourly_rate) if (can_see and s.hourly_rate is not None) else None,
+            hourly_rate_max=float(s.hourly_rate_max) if (can_see and s.hourly_rate_max is not None) else None,
+            hide_rate=bool(s.hide_rate),
             tips_eligible=bool(s.tips_eligible),
             tip_pool=bool(s.tip_pool),
+            role_notes=s.description,
             capacity=cap,
             filled=f,
             spots_left=max(0, cap - f),
             status=s.status or "OPEN",
-            my_status=mine.get(s.id),
+            my_status=my,
         ))
 
     result = []

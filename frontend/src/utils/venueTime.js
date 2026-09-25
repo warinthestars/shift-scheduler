@@ -99,3 +99,19 @@ export function zonedLocalToUtcIso(localValue, tz) {
 
 /** Calendar-day key in the venue timezone, used for grouping lists by day. */
 export const dayKey = (value, tz) => fmtLongDate(value, tz);
+
+/** UTC ISO -> "YYYY-MM-DDTHH:mm" in the venue's timezone, for <input type="datetime-local">. */
+export function utcToZonedLocalInput(value, tz) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz || undefined,
+    hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  }).formatToParts(d);
+  const m = {};
+  parts.forEach((p) => { m[p.type] = p.value; });
+  return `${m.year}-${m.month}-${m.day}T${String(Number(m.hour) % 24).padStart(2, '0')}:${m.minute}`;
+}

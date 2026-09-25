@@ -103,6 +103,8 @@ CREATE TABLE venue_positions (
     venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     default_rate NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+    default_rate_max NUMERIC(10, 2),
+    hide_rate BOOLEAN NOT NULL DEFAULT FALSE,
     tips_eligible BOOLEAN NOT NULL DEFAULT FALSE,
     tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
     sort_order INT NOT NULL DEFAULT 0,
@@ -111,10 +113,30 @@ CREATE TABLE venue_positions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_venue_position_name UNIQUE (venue_id, name),
     CONSTRAINT chk_position_tip_pool CHECK (tip_pool = FALSE OR tips_eligible = TRUE),
-    CONSTRAINT chk_position_rate CHECK (default_rate > 0)
+    CONSTRAINT chk_position_rate CHECK (default_rate > 0),
+    CONSTRAINT chk_position_rate_range CHECK (default_rate_max IS NULL OR default_rate_max >= default_rate)
 );
 
 CREATE INDEX idx_venue_positions_venue ON venue_positions(venue_id);
+
+-- ------------------------------------------------------------------------------
+-- 4c. Shift Events (Phase 25.2): one posting = one event with 1+ positions
+-- ------------------------------------------------------------------------------
+CREATE TABLE shift_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    title VARCHAR(255) NOT NULL,
+    start_time TIMESTAMPTZ NOT NULL,
+    end_time TIMESTAMPTZ NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_event_time CHECK (end_time > start_time)
+);
+
+CREATE INDEX idx_shift_events_venue ON shift_events(venue_id);
+CREATE INDEX idx_shift_events_start ON shift_events(start_time);
 
 -- ------------------------------------------------------------------------------
 -- 5. Shifts Table
@@ -122,12 +144,16 @@ CREATE INDEX idx_venue_positions_venue ON venue_positions(venue_id);
 CREATE TABLE shifts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    event_id UUID REFERENCES shift_events(id) ON DELETE CASCADE,
     created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     title VARCHAR(255) NOT NULL,
     role_type VARCHAR(100) NOT NULL,
     start_time TIMESTAMPTZ NOT NULL,
     end_time TIMESTAMPTZ NOT NULL,
     hourly_rate NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+    hourly_rate_max NUMERIC(10, 2),
+    hide_rate BOOLEAN NOT NULL DEFAULT FALSE,
+    approval_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
     tips_eligible BOOLEAN NOT NULL DEFAULT FALSE,
     tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
     capacity INT NOT NULL DEFAULT 1,
@@ -139,12 +165,14 @@ CREATE TABLE shifts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_shift_time CHECK (end_time > start_time),
     CONSTRAINT chk_spots CHECK (spots_filled <= capacity),
-    CONSTRAINT chk_tip_pool CHECK (tip_pool = FALSE OR tips_eligible = TRUE)
+    CONSTRAINT chk_tip_pool CHECK (tip_pool = FALSE OR tips_eligible = TRUE),
+    CONSTRAINT chk_shift_rate_range CHECK (hourly_rate_max IS NULL OR hourly_rate_max >= hourly_rate)
 );
 
 CREATE INDEX idx_shifts_venue ON shifts(venue_id);
 CREATE INDEX idx_shifts_start_time ON shifts(start_time);
 CREATE INDEX idx_shifts_role_type ON shifts(role_type);
+CREATE INDEX idx_shifts_event ON shifts(event_id);
 
 -- ------------------------------------------------------------------------------
 -- 6. Shift Requests Table
@@ -231,6 +259,7 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_venues_updated_at BEFORE UPDATE ON venues FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_venue_positions_updated_at BEFORE UPDATE ON venue_positions FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+CREATE TRIGGER trg_shift_events_updated_at BEFORE UPDATE ON shift_events FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shifts_updated_at BEFORE UPDATE ON shifts FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shift_requests_updated_at BEFORE UPDATE ON shift_requests FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 

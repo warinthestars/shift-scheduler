@@ -6,6 +6,7 @@ import {
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import TipBadge from '../components/TipBadge';
+import PayLabel from '../components/PayLabel';
 import { VenueAvatar } from './VenuesDirectory';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
 
@@ -194,7 +195,7 @@ export default function VenueProfile() {
               {profile.positions.map((p) => (
                 <div key={p.name} className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2">
                   <span className="text-sm font-semibold text-white">{p.name}</span>
-                  {p.default_rate != null && <span className="text-sm text-emerald-400 font-bold">${p.default_rate.toFixed(2)}/hr</span>}
+                  {p.default_rate != null && <PayLabel rate={p.default_rate} rateMax={p.default_rate_max} className="text-sm text-emerald-400 font-bold" />}
                   <TipBadge shift={p} />
                 </div>
               ))}
@@ -247,6 +248,7 @@ export default function VenueProfile() {
                   <div className="px-4 py-3 border-b border-slate-800 bg-slate-800/30 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                     <div>
                       <div className="text-sm font-bold text-white">{ev.title}</div>
+                      {ev.description && <div className="text-[11px] text-slate-400 whitespace-pre-line">{ev.description}</div>}
                       <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-x-3">
                         <span className="inline-flex items-center gap-1"><Calendar className="w-3 h-3" />{fmtDate(ev.start_time, tz)}</span>
                         <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{fmtTimeRange(ev.start_time, ev.end_time, tz)}</span>
@@ -265,9 +267,10 @@ export default function VenueProfile() {
                         <div key={p.shift_id} className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{p.role_type}</span>
-                            <span className="text-sm text-emerald-400 font-semibold">${p.hourly_rate.toFixed(2)}/hr</span>
+                            <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-sm text-emerald-400 font-semibold" hiddenText="Pay shared when booked" />
                             <TipBadge shift={p} />
                             <span className="text-xs text-slate-400">{p.filled}/{p.capacity} filled</span>
+                            {p.role_notes && <span className="w-full text-[11px] text-slate-400">{p.role_notes}</span>}
                           </div>
                           <div>
                             {mine ? (

@@ -188,6 +188,8 @@ class VenuePosition(Base):
     venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     default_rate = Column(Numeric(10, 2), nullable=False, default=25.00)
+    default_rate_max = Column(Numeric(10, 2), nullable=True)
+    hide_rate = Column(Boolean, nullable=False, default=False)
     tips_eligible = Column(Boolean, nullable=False, default=False)
     tip_pool = Column(Boolean, nullable=False, default=False)
     sort_order = Column(Integer, nullable=False, default=0)
@@ -199,21 +201,41 @@ class VenuePosition(Base):
         UniqueConstraint("venue_id", "name", name="uq_venue_position_name"),
         CheckConstraint("tip_pool = FALSE OR tips_eligible = TRUE", name="chk_position_tip_pool"),
         CheckConstraint("default_rate > 0", name="chk_position_rate"),
+        CheckConstraint("default_rate_max IS NULL OR default_rate_max >= default_rate", name="chk_position_rate_range"),
     )
 
     venue = relationship("Venue", back_populates="positions")
+
+class ShiftEvent(Base):
+    __tablename__ = "shift_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(255), nullable=False)
+    start_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    end_time = Column(DateTime(timezone=True), nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    shifts = relationship("Shift", back_populates="event", cascade="all, delete-orphan")
 
 class Shift(Base):
     __tablename__ = "shifts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="CASCADE"), nullable=True, index=True)
     created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     title = Column(String(255), nullable=False)
     role_type = Column(String(100), nullable=False, index=True)
     start_time = Column(DateTime(timezone=True), nullable=False, index=True)
     end_time = Column(DateTime(timezone=True), nullable=False)
     hourly_rate = Column(Numeric(10, 2), nullable=False, default=25.00)
+    hourly_rate_max = Column(Numeric(10, 2), nullable=True)
+    hide_rate = Column(Boolean, nullable=False, default=False)
+    approval_mode = Column(String(20), nullable=False, default="venue_default")
     tips_eligible = Column(Boolean, nullable=False, default=False)
     tip_pool = Column(Boolean, nullable=False, default=False)
     capacity = Column(Integer, nullable=False, default=1)
@@ -266,6 +288,7 @@ class Shift(Base):
 
 
     venue = relationship("Venue", back_populates="shifts")
+    event = relationship("ShiftEvent", back_populates="shifts")
     requests = relationship("ShiftRequest", back_populates="shift", cascade="all, delete-orphan")
 
 class ShiftRequest(Base):

@@ -74,12 +74,16 @@ async def evaluate_shift_request(
     )
 
     # --------------------------------------------------------------------------
-    # Condition 1: Shift-Level Auto-Confirm
+    # Condition 1: Position-level approval mode (Phase 25.2)
     # --------------------------------------------------------------------------
-    if shift.is_shift_auto_confirm:
-        logger.info(f"[Auto-Confirm Engine] Condition 1 MET: Shift is set to auto-confirm anyone.")
+    shift_mode = (getattr(shift, "approval_mode", None) or "venue_default").lower()
+    if shift_mode == "auto" or (shift_mode == "venue_default" and shift.is_shift_auto_confirm):
+        logger.info("[Auto-Confirm Engine] Position is set to instant booking.")
         await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
         return RequestStatus.APPROVED, "shift_auto_confirm"
+    if shift_mode == "manual":
+        logger.info("[Auto-Confirm Engine] Position requires manager approval.")
+        return RequestStatus.PENDING, None
 
     policy = (getattr(venue, "approval_policy", None) or "team_auto").lower()
 

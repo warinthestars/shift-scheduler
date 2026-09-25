@@ -17,6 +17,8 @@ import TipBadge from '../components/TipBadge';
 import ReliabilityBadge from '../components/ReliabilityBadge';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
+import ShiftEventFormModal from '../components/ShiftEventFormModal';
+import PayLabel from '../components/PayLabel';
 import { zonedLocalToUtcIso, fmtShortDate } from '../utils/venueTime';
 
 const locales = {
@@ -46,7 +48,6 @@ export default function VenueManagerDashboard() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
   const [exportingCSV, setExportingCSV] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [notification, setNotification] = useState(null);
 
@@ -55,19 +56,12 @@ export default function VenueManagerDashboard() {
   const [roster, setRoster] = useState([]); // Holds the data from `/api/venues/{venue_id}/roster`.
   const [selectedShift, setSelectedShift] = useState(null); // Triggers the drill-down modal.
 
-  // Form state for Shift Creation Modal
-  const [eventName, setEventName] = useState('');
-  const [startDateTime, setStartDateTime] = useState('');
-  const [endDateTime, setEndDateTime] = useState('');
-  const [isAutoConfirm, setIsAutoConfirm] = useState(false);
-  const [roleRequirements, setRoleRequirements] = useState([
-    { role: 'Bartender', quantity: 2, hourly_rate: '25.00', tips_eligible: false, tip_pool: false },
-  ]);
   const [reliabilityMap, setReliabilityMap] = useState({});
   const [managedVenues, setManagedVenues] = useState([]);
   const [boardRefreshKey, setBoardRefreshKey] = useState(0);
   const [venuePositions, setVenuePositions] = useState([]);
   const [showVenueSettings, setShowVenueSettings] = useState(false);
+  const [eventForm, setEventForm] = useState(null); // { mode: 'create' } | { mode: 'edit', eventId }
 
   const fetchVenueData = async (venueId) => {
     try {
@@ -308,115 +302,7 @@ export default function VenueManagerDashboard() {
       setExportingCSV(false);
     }
   };
-  const handleExportCSV = exportPayroll;
 
-  // Dynamic role requirements helpers
-  const FALLBACK_ROLES = ['Bartender', 'Server', 'Dishwasher', 'Barback', 'AV Tech'];
-
-  const rowForPosition = (pos, fallbackName = 'Bartender') => ({
-    role: pos ? pos.name : fallbackName,
-    quantity: 1,
-    hourly_rate: pos ? Number(pos.default_rate).toFixed(2) : '25.00',
-    tips_eligible: pos ? !!pos.tips_eligible : false,
-    tip_pool: pos ? !!pos.tip_pool : false,
-  });
-
-  const openCreateShiftModal = () => {
-    setRoleRequirements([rowForPosition(venuePositions[0])]);
-    setShowCreateModal(true);
-  };
-
-  const handleAddRoleRow = () => {
-    const used = new Set(roleRequirements.map((r) => r.role));
-    const next = venuePositions.find((p) => !used.has(p.name)) || venuePositions[0];
-    setRoleRequirements([...roleRequirements, rowForPosition(next, 'Server')]);
-  };
-
-  const handleRemoveRoleRow = (index) => {
-    if (roleRequirements.length <= 1) return;
-    setRoleRequirements(roleRequirements.filter((_, idx) => idx !== index));
-  };
-
-  const handleRoleChange = (index, field, value) => {
-    const updated = roleRequirements.map((row, i) => {
-      if (i !== index) return row;
-      const next = { ...row };
-      if (field === 'quantity') {
-        next.quantity = parseInt(value, 10) || 1;
-      } else if (field === 'tips_eligible') {
-        next.tips_eligible = Boolean(value);
-        if (!value) next.tip_pool = false;
-      } else if (field === 'tip_pool') {
-        next.tip_pool = Boolean(value);
-      } else if (field === 'role') {
-        next.role = value;
-        const pos = venuePositions.find((p) => p.name === value);
-        if (pos) {
-          next.hourly_rate = Number(pos.default_rate).toFixed(2);
-          next.tips_eligible = !!pos.tips_eligible;
-          next.tip_pool = !!pos.tip_pool;
-        }
-      } else {
-        next[field] = value; // 'hourly_rate' (kept as string while typing)
-      }
-      return next;
-    });
-    setRoleRequirements(updated);
-  };
-
-  const handleCreateShiftSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const payloadRoles = roleRequirements.map((r) => ({
-        role: r.role,
-        quantity: r.quantity,
-        hourly_rate: parseFloat(r.hourly_rate),
-        tips_eligible: r.tips_eligible,
-        tip_pool: r.tips_eligible ? r.tip_pool : false,
-      }));
-      if (payloadRoles.some((r) => !r.hourly_rate || r.hourly_rate <= 0)) {
-        setNotification({ type: 'error', message: 'Every role needs an hourly rate greater than $0.' });
-        return;
-      }
-
-      const now = new Date();
-      const venueTz = venueDetails?.timezone;
-      const start = startDateTime
-        ? zonedLocalToUtcIso(startDateTime, venueTz)
-        : new Date(now.getTime() + 86400000).toISOString();
-      const end = endDateTime
-        ? zonedLocalToUtcIso(endDateTime, venueTz)
-        : new Date(now.getTime() + 86400000 + 21600000).toISOString();
-      if (new Date(end) <= new Date(start)) {
-        setNotification({ type: 'error', message: 'End time must be after the start time.' });
-        return;
-      }
-
-      await api.post('/shifts', {
-        venue_id: currentVenueId,
-        title: eventName,
-        start_time: start,
-        end_time: end,
-        is_shift_auto_confirm: isAutoConfirm,
-        role_requirements: payloadRoles,
-      });
-
-      setNotification({
-        type: 'success',
-        message: `Shift "${eventName}" created with ${roleRequirements.length} role requirement(s)!`,
-      });
-
-      setShowCreateModal(false);
-      setEventName('');
-      setRoleRequirements([rowForPosition(venuePositions[0])]);
-      fetchVenueData(currentVenueId);
-    } catch (err) {
-      setNotification({
-        type: 'error',
-        message: err.response?.data?.detail || 'Failed to create shifts.',
-      });
-    }
-  };
 
   const handleManagerVenueChange = (e) => {
     const newId = e.target.value;
@@ -508,11 +394,11 @@ export default function VenueManagerDashboard() {
             {/* Create New Shift Button */}
             <button
               type="button"
-              onClick={openCreateShiftModal}
+              onClick={() => setEventForm({ mode: 'create' })}
               className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-emerald-500/20"
             >
               <Plus className="w-4 h-4" />
-              <span>Create New Shift</span>
+              <span>Post a Shift</span>
             </button>
           </div>
         </div>
@@ -596,7 +482,7 @@ export default function VenueManagerDashboard() {
                         <span>{shift?.role_type}</span>
                         <span>•</span>
                         <span className="inline-flex items-center gap-1.5">
-                          <span>${shift?.hourly_rate}/hr</span>
+                          <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} />
                           <TipBadge shift={shift} />
                         </span>
                         <span>•</span>
@@ -687,7 +573,7 @@ export default function VenueManagerDashboard() {
                         <span>{shift?.role_type}</span>
                         <span>•</span>
                         <span className="inline-flex items-center gap-1.5">
-                          <span>${shift?.hourly_rate}/hr</span>
+                          <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} />
                           <TipBadge shift={shift} />
                         </span>
                       </div>
@@ -728,183 +614,27 @@ export default function VenueManagerDashboard() {
           onApprove={handleApprove}
           onDeny={handleDeny}
           onOpenBoard={setActiveDiscussionShift}
+          onEditEvent={(id) => setEventForm({ mode: 'edit', eventId: id })}
           actionLoading={actionLoading}
           timeZone={venueDetails?.timezone}
         />
       </main>
 
-      {/* Modal: Shift Creation */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-              <h3 className="text-base font-bold text-white">Create New Shift</h3>
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateShiftSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Event / Shift Name</label>
-                <input
-                  type="text"
-                  required
-                  value={eventName}
-                  onChange={(e) => setEventName(e.target.value)}
-                  placeholder="Saturday Night Rooftop Service"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">{`Starts (${venueDetails?.timezone || 'local'} time)`}</label>
-                  <input
-                    type="datetime-local"
-                    value={startDateTime}
-                    onChange={(e) => setStartDateTime(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">{`Ends (${venueDetails?.timezone || 'local'} time)`}</label>
-                  <input
-                    type="datetime-local"
-                    value={endDateTime}
-                    onChange={(e) => setEndDateTime(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-              </div>
-
-              {/* Dynamic List for Positions */}
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="block text-xs font-semibold text-slate-300">
-                    Positions
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleAddRoleRow}
-                    className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center space-x-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Role</span>
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {roleRequirements.map((row, idx) => (
-                    <div key={idx} className="p-3 bg-slate-800/50 border border-slate-700 rounded-xl space-y-2">
-                      <div className="flex items-center space-x-2">
-                        <select
-                          value={row.role}
-                          onChange={(e) => handleRoleChange(idx, 'role', e.target.value)}
-                          className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                        >
-                          {(venuePositions.length > 0 ? venuePositions.map((p) => p.name) : FALLBACK_ROLES).map((name) => (
-                            <option key={name} value={name}>{name}</option>
-                          ))}
-                          {row.role && !(venuePositions.length > 0 ? venuePositions.map((p) => p.name) : FALLBACK_ROLES).includes(row.role) && (
-                            <option value={row.role}>{row.role}</option>
-                          )}
-                        </select>
-                        <input
-                          type="number"
-                          min="1"
-                          value={row.quantity}
-                          onChange={(e) => handleRoleChange(idx, 'quantity', e.target.value)}
-                          className="w-16 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                          placeholder="Qty"
-                          title="Quantity"
-                        />
-                        <div className="relative w-24">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
-                          <input
-                            type="number"
-                            step="0.5"
-                            min="0"
-                            required
-                            value={row.hourly_rate}
-                            onChange={(e) => handleRoleChange(idx, 'hourly_rate', e.target.value)}
-                            className="w-full pl-6 pr-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
-                            placeholder="Rate"
-                            title="Hourly rate"
-                          />
-                        </div>
-                        {roleRequirements.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveRoleRow(idx)}
-                            className="p-2 text-slate-500 hover:text-rose-400"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                      <div className="flex items-center space-x-4 pl-1">
-                        <label className="flex items-center space-x-2 text-xs text-slate-300 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={row.tips_eligible}
-                            onChange={(e) => handleRoleChange(idx, 'tips_eligible', e.target.checked)}
-                            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-amber-500"
-                          />
-                          <span>Tips eligible</span>
-                        </label>
-                        {row.tips_eligible && (
-                          <label className="flex items-center space-x-2 text-xs text-amber-300 cursor-pointer pl-4 border-l border-slate-700">
-                            <input
-                              type="checkbox"
-                              checked={row.tip_pool}
-                              onChange={(e) => handleRoleChange(idx, 'tip_pool', e.target.checked)}
-                              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-amber-500"
-                            />
-                            <span>Tip pool</span>
-                          </label>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="modalAutoConfirm"
-                  checked={isAutoConfirm}
-                  onChange={(e) => setIsAutoConfirm(e.target.checked)}
-                  className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-emerald-500"
-                />
-                <label htmlFor="modalAutoConfirm" className="text-xs text-slate-300">
-                  Instant booking for this shift (anyone who picks it up is confirmed)
-                </label>
-              </div>
-
-              <div className="pt-3 border-t border-slate-800 flex justify-end space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-semibold text-slate-300 hover:bg-slate-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition shadow-md shadow-emerald-500/20"
-                >
-                  Publish Shift(s)
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+      {eventForm && venueDetails && (
+        <ShiftEventFormModal
+          mode={eventForm.mode}
+          eventId={eventForm.eventId}
+          venue={venueDetails}
+          onClose={() => setEventForm(null)}
+          onSaved={() => {
+            setEventForm(null);
+            fetchVenueData(currentVenueId);
+            setNotification({
+              type: 'success',
+              message: eventForm.mode === 'edit' ? 'Event updated.' : 'Event and shifts published.',
+            });
+          }}
+        />
       )}
 
       {/* Discussion Board Modal */}

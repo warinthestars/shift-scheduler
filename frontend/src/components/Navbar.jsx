@@ -64,19 +64,19 @@ export default function Navbar() {
   const links = [
     (isWorker || isPlatformAdmin) && {
       to: '/worker',
-      label: isPlatformAdmin ? 'Worker View' : 'My Shifts',
+      label: 'Worker',
       icon: Briefcase,
       active: 'bg-slate-800 text-emerald-400',
     },
     (isManagerRole || isPlatformAdmin) && {
       to: '/venue',
-      label: isPlatformAdmin ? 'Venue Manager View' : 'My Venue',
+      label: 'Venue Manager',
       icon: Building2,
       active: 'bg-slate-800 text-teal-400',
     },
     isPlatformAdmin && {
       to: '/admin',
-      label: 'Platform Admin',
+      label: 'Admin',
       icon: Shield,
       active: 'bg-indigo-950 text-indigo-300 border border-indigo-700/50',
     },

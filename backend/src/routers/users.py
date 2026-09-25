@@ -5,9 +5,10 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import User, ShiftRequest, Shift, Venue, Rating
-from src.schemas import UserResponse, UserUpdateMe, UserBrief
+from src.schemas import UserResponse, UserUpdateMe, UserBrief, ShiftRequestResponse
 from src.auth import get_current_user, require_manager_or_admin
 from src.serializers import build_user_response
+from src.services.shift_views import to_shift_responses
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
 
@@ -61,12 +62,12 @@ async def get_my_profile_and_experience(
     user_data["past_venues"] = list(past_venues_set)
     return user_data
 
-@router.get("/me/shifts")
+@router.get("/me/shifts", response_model=List[ShiftRequestResponse])
 async def get_my_shifts_alias(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Retrieve my submitted shift requests and schedule"""
+    """My requests + schedule. Hidden pay is shown only on positions I'm booked on."""
     result = await db.execute(
         select(ShiftRequest)
         .options(
@@ -76,7 +77,18 @@ async def get_my_shifts_alias(
         .where(ShiftRequest.worker_id == current_user.id)
         .order_by(ShiftRequest.created_at.desc())
     )
-    return result.scalars().all()
+    reqs = result.scalars().all()
+    booked = ("approved", "confirmed", "checked_in", "completed")
+    shifts = [r.shift for r in reqs if r.shift is not None]
+    reveal = {r.shift_id for r in reqs if (r.status or "").lower() in booked}
+    shown = {s.id: s for s in await to_shift_responses(db, shifts, current_user, reveal_shift_ids=reveal)}
+    out = []
+    for r in reqs:
+        item = ShiftRequestResponse.model_validate(r)
+        if r.shift_id in shown:
+            item.shift = shown[r.shift_id]
+        out.append(item)
+    return out
 
 @router.put("/me", response_model=UserResponse)
 async def update_my_profile(

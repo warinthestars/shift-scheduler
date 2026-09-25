@@ -10,6 +10,7 @@ import {
 import TransferModal from '../components/TransferModal';
 import ShiftBoard from '../components/ShiftBoard';
 import TipBadge from '../components/TipBadge';
+import PayLabel from '../components/PayLabel';
 import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';
 
 export default function WorkerDashboard() {
@@ -385,12 +386,7 @@ export default function WorkerDashboard() {
                             {shift.role_type || shift.role_required}
                           </span>
                           <div className="text-right flex flex-col items-end">
-                            <div className="flex items-center space-x-1">
-                              <span className="text-lg font-black text-emerald-400">
-                                ${Number(shift.hourly_rate).toFixed(2)}
-                              </span>
-                              <span className="text-xs text-slate-400">/hr</span>
-                            </div>
+                            <PayLabel rate={shift.hourly_rate} rateMax={shift.hourly_rate_max} className="text-lg font-black text-emerald-400" />
                             <TipBadge shift={shift} />
                           </div>
                         </div>
@@ -409,6 +405,12 @@ export default function WorkerDashboard() {
                           <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                           <span className="truncate">{shift.venue?.address}</span>
                         </p>
+                        {(shift.event_notes || shift.description) && (
+                          <div className="text-[11px] text-slate-400 bg-slate-950/60 border border-slate-800 rounded-lg p-2 mb-3 space-y-1">
+                            {shift.event_notes && <p className="line-clamp-2"><span className="text-slate-500">Event: </span>{shift.event_notes}</p>}
+                            {shift.description && <p className="line-clamp-2"><span className="text-slate-500">{shift.role_type}: </span>{shift.description}</p>}
+                          </div>
+                        )}
 
                         <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/60 space-y-1.5 text-xs text-slate-300 mb-4">
                           <div className="flex items-center space-x-2">
@@ -521,12 +523,22 @@ export default function WorkerDashboard() {
                         <span>•</span>
                         <span>{shift?.role_type || shift?.role_required}</span>
                         <span>•</span>
-                        <span>${shift?.hourly_rate}/hr</span>
+                        <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} />
                         <TipBadge shift={shift} />
                       </p>
                       <p className="text-xs text-slate-500">
                         {fmtDateTime(shift?.start_time, shift?.venue?.timezone)}
                       </p>
+                      {(shift?.venue?.default_shift_notes || shift?.event_notes || shift?.description) && (
+                        <details className="mt-2 text-[11px] text-slate-400">
+                          <summary className="cursor-pointer select-none text-emerald-400">Shift notes</summary>
+                          <div className="mt-1.5 space-y-1.5 bg-slate-950/60 border border-slate-800 rounded-lg p-2">
+                            {shift?.venue?.default_shift_notes && <p className="whitespace-pre-line"><span className="text-slate-500">Venue: </span>{shift.venue.default_shift_notes}</p>}
+                            {shift?.event_notes && <p className="whitespace-pre-line"><span className="text-slate-500">Event: </span>{shift.event_notes}</p>}
+                            {shift?.description && <p className="whitespace-pre-line"><span className="text-slate-500">{shift.role_type}: </span>{shift.description}</p>}
+                          </div>
+                        </details>
+                      )}
                     </div>
 
                     {/* Action buttons */}
@@ -685,7 +697,7 @@ export default function WorkerDashboard() {
                         <span>•</span>
                         <span>{shift?.role_type}</span>
                         <span>•</span>
-                        <span className="text-emerald-400 font-semibold">${shift?.hourly_rate}/hr</span>
+                        <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} className="text-emerald-400 font-semibold" />
                         <TipBadge shift={shift} />
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
@@ -778,7 +790,7 @@ export default function WorkerDashboard() {
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
                   <p className="font-bold text-white">{shiftToDrop.shift.title}</p>
                   <p className="text-slate-400">
-                    {shiftToDrop.shift.venue?.name} • {shiftToDrop.shift.role_type} • ${shiftToDrop.shift.hourly_rate}/hr
+                    {shiftToDrop.shift.venue?.name} • {shiftToDrop.shift.role_type} • <PayLabel rate={shiftToDrop.shift.hourly_rate} rateMax={shiftToDrop.shift.hourly_rate_max} />
                   </p>
                   <p className="text-slate-500 text-[11px]">
                     {fmtDateTime(shiftToDrop.shift.start_time, shiftToDrop.shift.venue?.timezone)}

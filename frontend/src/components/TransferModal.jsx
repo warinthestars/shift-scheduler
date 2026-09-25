@@ -4,6 +4,7 @@ import {
   ArrowRightLeft, X, AlertCircle, Check, Users, Calendar, Clock
 } from 'lucide-react';
 import { fmtShortDate, fmtDateTime } from '../utils/venueTime';
+import PayLabel from './PayLabel';
 
 export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [], preselectedShiftId = null, onTransferSuccess }) {
   const [selectedShiftId, setSelectedShiftId] = useState(preselectedShiftId || '');
@@ -139,7 +140,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
           {currentShiftObj && (
             <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1 text-slate-300">
               <p className="font-bold text-white">{currentShiftObj.title}</p>
-              <p className="text-slate-400">{currentShiftObj.venue?.name} • ${currentShiftObj.hourly_rate}/hr</p>
+              <p className="text-slate-400">{currentShiftObj.venue?.name} • <PayLabel rate={currentShiftObj.hourly_rate} rateMax={currentShiftObj.hourly_rate_max} /></p>
               <p className="text-slate-500 text-[11px]">
                 {fmtDateTime(currentShiftObj.start_time, currentShiftObj.venue?.timezone)}
               </p>

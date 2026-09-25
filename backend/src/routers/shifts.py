@@ -8,15 +8,18 @@ from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
     Shift, ShiftRequest, Venue, VenueWhitelist, VenueManager,
-    User, RequestStatus, TimeEntry, ShiftBoardMessage
+    User, RequestStatus, TimeEntry, ShiftBoardMessage, ShiftEvent
 )
 from src.schemas import (
     ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
     CheckInRequest, CheckOutRequest, TimeEntryResponse,
-    ShiftBoardMessageCreate, ShiftBoardMessageResponse
+    ShiftBoardMessageCreate, ShiftBoardMessageResponse,
+    EventCreate, EventPositionInput
 )
 from src.auth import get_current_user, require_manager_or_admin, require_worker, normalize_role
 from src.services.auto_confirm import evaluate_shift_request, check_double_booking
+from src.services.shift_events import create_event_with_positions
+from src.services.shift_views import to_shift_responses
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
 
@@ -53,74 +56,55 @@ async def create_shift(
             )
 
     try:
-        if shift_in.role_requirements and len(shift_in.role_requirements) > 0:
-            first_shift = None
-            for req in shift_in.role_requirements:
-                rate = req.hourly_rate if req.hourly_rate is not None else (shift_in.hourly_rate or 25.0)
-                if rate <= 0:
-                    raise HTTPException(status_code=400, detail=f"Hourly rate for '{req.role}' must be greater than 0.")
-                s = Shift(
-                    venue_id=shift_in.venue_id,
-                    created_by_user_id=current_user.id,
-                    title=shift_in.title,
-                    role_type=req.role,
-                    start_time=shift_in.start_time,
-                    end_time=shift_in.end_time,
-                    capacity=max(1, req.quantity),
-                    spots_filled=0,
-                    is_shift_auto_confirm=shift_in.is_shift_auto_confirm or False,
-                    hourly_rate=rate,
-                    tips_eligible=bool(req.tips_eligible),
-                    tip_pool=bool(req.tips_eligible and req.tip_pool),
-                    description=shift_in.description or venue.default_shift_notes,
-                    status="OPEN"
+        if shift_in.role_requirements:
+            positions = [
+                EventPositionInput(
+                    role_type=r.role,
+                    capacity=max(1, r.quantity),
+                    hourly_rate=r.hourly_rate if r.hourly_rate is not None else (shift_in.hourly_rate or 25.0),
+                    hourly_rate_max=r.hourly_rate_max,
+                    hide_rate=bool(r.hide_rate),
+                    tips_eligible=bool(r.tips_eligible),
+                    tip_pool=bool(r.tips_eligible and r.tip_pool),
+                    role_notes=r.role_notes,
+                    approval_mode=r.approval_mode or ("auto" if shift_in.is_shift_auto_confirm else "venue_default"),
                 )
-                db.add(s)
-                if first_shift is None:
-                    first_shift = s
-            await db.commit()
-            await db.refresh(first_shift)
-            shift = first_shift
+                for r in shift_in.role_requirements
+            ]
         else:
-            rate = shift_in.hourly_rate or 25.0
-            if rate <= 0:
-                raise HTTPException(status_code=400, detail="Hourly rate must be greater than 0.")
-            shift = Shift(
-                venue_id=shift_in.venue_id,
-                created_by_user_id=current_user.id,
-                title=shift_in.title,
+            positions = [EventPositionInput(
                 role_type=shift_in.role_type or "Worker",
-                start_time=shift_in.start_time,
-                end_time=shift_in.end_time,
                 capacity=shift_in.capacity or 1,
-                spots_filled=0,
-                is_shift_auto_confirm=shift_in.is_shift_auto_confirm or False,
-                hourly_rate=rate,
+                hourly_rate=shift_in.hourly_rate or 25.0,
                 tips_eligible=bool(shift_in.tips_eligible),
                 tip_pool=bool(shift_in.tips_eligible and shift_in.tip_pool),
-                description=shift_in.description or venue.default_shift_notes,
-                status="OPEN"
-            )
-            db.add(shift)
-            await db.commit()
-            await db.refresh(shift)
+                approval_mode="auto" if shift_in.is_shift_auto_confirm else "venue_default",
+            )]
+        event = await create_event_with_positions(db, venue, current_user, EventCreate(
+            venue_id=shift_in.venue_id,
+            title=shift_in.title,
+            start_time=shift_in.start_time,
+            end_time=shift_in.end_time,
+            notes=shift_in.description,
+            positions=positions,
+        ))
     except HTTPException:
-        await db.rollback()
         raise
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create shift: {str(e)}")
 
-    # Reload with venue relation
-    result = await db.execute(
-        select(Shift).options(selectinload(Shift.venue)).where(Shift.id == shift.id)
+    first_id = await db.scalar(
+        select(Shift.id).where(Shift.event_id == event.id).order_by(Shift.created_at.asc()).limit(1)
     )
+    result = await db.execute(select(Shift).options(selectinload(Shift.venue)).where(Shift.id == first_id))
     return result.scalar_one()
 
 @router.get("/open", response_model=List[ShiftResponse])
 async def get_open_shifts(
     role: Optional[str] = Query(None, description="Filter by role"),
     venue_id: Optional[UUID] = Query(None, description="Filter by Venue ID"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Fetch all open shifts on the call-board"""
@@ -131,7 +115,7 @@ async def get_open_shifts(
         query = query.where(Shift.role_type.ilike(f"%{role}%"))
     query = query.order_by(Shift.start_time.asc())
     result = await db.execute(query)
-    return result.scalars().all()
+    return await to_shift_responses(db, result.scalars().all(), current_user)
 
 @router.get("", response_model=List[ShiftResponse])
 async def get_shifts(
@@ -139,6 +123,7 @@ async def get_shifts(
     date_filter: Optional[date] = Query(None, alias="date", description="Filter by shift date (YYYY-MM-DD)"),
     venue_id: Optional[UUID] = Query(None, description="Filter by Venue ID"),
     status_filter: Optional[str] = Query("OPEN", alias="status", description="Filter by shift status"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -158,7 +143,7 @@ async def get_shifts(
 
     query = query.order_by(Shift.start_time.asc())
     result = await db.execute(query)
-    return result.scalars().all()
+    return await to_shift_responses(db, result.scalars().all(), current_user)
 
 @router.post("/{shift_id}/request", response_model=ShiftRequestResponse, status_code=status.HTTP_201_CREATED)
 async def request_shift(
@@ -251,7 +236,15 @@ async def request_shift(
         )
         .where(ShiftRequest.id == req.id)
     )
-    return res.scalar_one()
+    req_obj = res.scalar_one()
+    resp = ShiftRequestResponse.model_validate(req_obj)
+    if req_obj.shift is not None:
+        shown = await to_shift_responses(
+            db, [req_obj.shift], current_user,
+            reveal_shift_ids={req_obj.shift_id} if status_val == "approved" else set(),
+        )
+        resp.shift = shown[0]
+    return resp
 
 # ------------------------------------------------------------------------------
 # Request Management Functions

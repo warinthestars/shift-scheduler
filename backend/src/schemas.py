@@ -242,6 +242,10 @@ class RoleRequirement(BaseModel):
     hourly_rate: Optional[float] = None
     tips_eligible: bool = False
     tip_pool: bool = False
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    role_notes: Optional[str] = None
+    approval_mode: Optional[str] = None
 
 class ShiftCreate(BaseModel):
     venue_id: UUID
@@ -269,9 +273,14 @@ class ShiftResponse(BaseModel):
     spots_filled: Optional[int] = 0
     available_spots: Optional[int] = None
     is_shift_auto_confirm: Optional[bool] = False
-    hourly_rate: Optional[float] = 25.00
+    hourly_rate: Optional[float] = None
     tips_eligible: Optional[bool] = False
     tip_pool: Optional[bool] = False
+    hourly_rate_max: Optional[float] = None
+    hide_rate: Optional[bool] = False
+    approval_mode: Optional[str] = "venue_default"
+    event_id: Optional[UUID] = None
+    event_notes: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = "OPEN"
     created_at: Optional[datetime] = None
@@ -433,6 +442,10 @@ class EventPosition(BaseModel):
     hourly_rate: float
     tips_eligible: bool = False
     tip_pool: bool = False
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    role_notes: Optional[str] = None
+    approval_mode: str = "venue_default"
     capacity: int
     spots_filled: int
     status: str
@@ -442,6 +455,7 @@ class EventPosition(BaseModel):
 
 class VenueEventResponse(BaseModel):
     event_key: str
+    event_id: Optional[UUID] = None
     title: str
     start_time: datetime
     end_time: datetime
@@ -457,6 +471,8 @@ class VenueEventResponse(BaseModel):
 class VenuePositionCreate(BaseModel):
     name: str
     default_rate: float
+    default_rate_max: Optional[float] = None
+    hide_rate: bool = False
     tips_eligible: bool = False
     tip_pool: bool = False
 
@@ -464,6 +480,8 @@ class VenuePositionCreate(BaseModel):
 class VenuePositionUpdate(BaseModel):
     name: Optional[str] = None
     default_rate: Optional[float] = None
+    default_rate_max: Optional[float] = None
+    hide_rate: Optional[bool] = None
     tips_eligible: Optional[bool] = None
     tip_pool: Optional[bool] = None
     is_active: Optional[bool] = None
@@ -475,6 +493,8 @@ class VenuePositionResponse(BaseModel):
     venue_id: UUID
     name: str
     default_rate: float
+    default_rate_max: Optional[float] = None
+    hide_rate: bool = False
     tips_eligible: bool
     tip_pool: bool
     sort_order: int
@@ -508,6 +528,7 @@ class VenueDirectoryItem(BaseModel):
 class PublicPosition(BaseModel):
     name: str
     default_rate: Optional[float] = None
+    default_rate_max: Optional[float] = None
     tips_eligible: bool = False
     tip_pool: bool = False
 
@@ -536,7 +557,10 @@ class VenueProfileResponse(BaseModel):
 class PublicEventPosition(BaseModel):
     shift_id: UUID
     role_type: str
-    hourly_rate: float
+    hourly_rate: Optional[float] = None
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    role_notes: Optional[str] = None
     tips_eligible: bool = False
     tip_pool: bool = False
     capacity: int
@@ -555,4 +579,64 @@ class PublicVenueEvent(BaseModel):
     total_capacity: int
     total_filled: int
     positions: List[PublicEventPosition]
+
+
+# ------------------------------------------------------------------------------
+# Phase 25.2: Events (create / edit / detail)
+# ------------------------------------------------------------------------------
+class EventPositionInput(BaseModel):
+    shift_id: Optional[UUID] = None          # present = update existing position, absent = new
+    role_type: str
+    capacity: int = 1
+    hourly_rate: float
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    role_notes: Optional[str] = None
+    approval_mode: str = "venue_default"     # venue_default | auto | manual
+
+
+class EventCreate(BaseModel):
+    venue_id: UUID
+    title: str
+    start_time: datetime
+    end_time: datetime
+    notes: Optional[str] = None
+    positions: List[EventPositionInput]
+
+
+class EventUpdate(BaseModel):
+    title: str
+    start_time: datetime
+    end_time: datetime
+    notes: Optional[str] = None
+    positions: List[EventPositionInput]
+
+
+class EventDetailPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    capacity: int
+    spots_filled: int
+    assigned_count: int
+    pending_count: int
+    hourly_rate: float
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    role_notes: Optional[str] = None
+    approval_mode: str = "venue_default"
+    status: str
+
+
+class EventDetail(BaseModel):
+    id: UUID
+    venue_id: UUID
+    title: str
+    start_time: datetime
+    end_time: datetime
+    notes: Optional[str] = None
+    positions: List[EventDetailPosition]
 

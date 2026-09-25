@@ -9,6 +9,7 @@ from src.models import (
     UserRole, RequestStatus
 )
 from src.services.venue_positions import ensure_default_positions
+from src.services.shift_events import backfill_missing_events
 
 logger = logging.getLogger("shiftboard.seed")
 
@@ -413,5 +414,13 @@ async def seed_initial_data(db: AsyncSession):
         await db.rollback()
         print(f"Error seeding additional venue: {e}")
         logger.warning(f"Error seeding additional venue: {e}")
+
+    try:
+        linked = await backfill_missing_events(db)
+        if linked:
+            logger.info(f"Linked {linked} shift(s) to events.")
+    except Exception as e:
+        await db.rollback()
+        logger.warning(f"Event backfill skipped: {e}")
 
     logger.info("ShiftBoard database initialization complete.")
