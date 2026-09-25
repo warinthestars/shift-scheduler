@@ -157,7 +157,7 @@ class VenueBase(BaseModel):
     lat: float
     lng: float
     geofence_radius_meters: int = 100
-    auto_approve_rating_threshold: Optional[float] = 4.5
+    auto_approve_rating_threshold: Optional[float] = None
     description: Optional[str] = None
     logo_url: Optional[str] = None
 
@@ -167,7 +167,7 @@ class VenueCreate(BaseModel):
     lat: Optional[float] = 40.7128
     lng: Optional[float] = -74.0060
     geofence_radius_meters: Optional[int] = 100
-    auto_approve_rating_threshold: Optional[float] = 4.5
+    auto_approve_rating_threshold: Optional[float] = None
     description: Optional[str] = None
     logo_url: Optional[str] = None
     manager_email: Optional[EmailStr] = None

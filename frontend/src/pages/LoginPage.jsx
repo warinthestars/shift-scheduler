@@ -90,6 +90,7 @@ export default function LoginPage() {
     config: null,
     providers: [],
     self_registration: false,
+    show_demo_logins: false,
   });
 
   const { login, loginWithGoogleMock, loginWithFirebaseToken, register } = useAuth();
@@ -296,7 +297,7 @@ export default function LoginPage() {
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
         <div className="bg-slate-900 py-8 px-6 shadow-2xl rounded-2xl border border-slate-800 sm:px-10">
-          {mode === 'signin' && (
+          {mode === 'signin' && fbStatus.show_demo_logins && (
             <div className="mb-6 p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 text-xs">
               <div className="font-semibold text-slate-300 mb-2">⚡ Quick Demo Credentials:</div>
               <div className="grid grid-cols-3 gap-2">

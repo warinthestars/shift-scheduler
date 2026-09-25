@@ -20,6 +20,7 @@ from src.services.firebase import (
     verify_firebase_id_token,
     get_enabled_providers
 )
+from src.serializers import build_user_response
 
 _ORIGINAL_LOAD_CONFIG = load_firebase_web_config
 _ORIGINAL_VERIFY = verify_firebase_id_token
@@ -197,6 +198,7 @@ async def firebase_config(request: Request):
         "providers": providers,
         "providers_source": source,
         "self_registration": bool(settings.ALLOW_SELF_REGISTRATION),
+        "show_demo_logins": bool(settings.SHOW_DEMO_LOGINS),
     }
 
 
@@ -339,6 +341,9 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
     )
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_profile(user: User = Depends(get_current_user)):
-    """Retrieve profile of authenticated user"""
-    return user
+async def get_current_user_profile(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve profile of authenticated user (Phase 24: MissingGreenlet-safe)."""
+    return await build_user_response(db, user)

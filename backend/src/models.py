@@ -110,7 +110,7 @@ class Venue(Base):
     lat = Column(DOUBLE_PRECISION, nullable=False)
     lng = Column(DOUBLE_PRECISION, nullable=False)
     geofence_radius_meters = Column(Integer, nullable=False, default=100)
-    auto_approve_rating_threshold = Column(Float, nullable=True, default=4.5)
+    auto_approve_rating_threshold = Column(Float, nullable=True, default=None)
     logo_url = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

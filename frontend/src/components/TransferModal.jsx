@@ -34,16 +34,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
         )?.shift;
         const venueId = currentShift?.venue_id || currentShift?.venue?.id;
 
-        let res;
-        if (venueId) {
-          try {
-            res = await api.get(`/venues/${venueId}/workers`);
-          } catch (venueErr) {
-            res = await api.get(`/transfers/eligible-workers/${selectedShiftId}`);
-          }
-        } else {
-          res = await api.get(`/transfers/eligible-workers/${selectedShiftId}`);
-        }
+        const res = await api.get(`/transfers/eligible-workers/${selectedShiftId}`);
 
         setEligibleWorkers(res.data || []);
         if (res.data && res.data.length > 0) {
@@ -163,7 +154,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
               <div className="text-xs text-slate-500 py-2">Loading eligible venue workers...</div>
             ) : eligibleWorkers.length === 0 ? (
               <div className="text-xs text-slate-400 bg-slate-950 p-3 rounded-xl border border-slate-800">
-                No other workers found available for transfer.
+                No one on this venue's team is free for this shift. Ask your manager to add teammates, or release the shift instead.
               </div>
             ) : (
               <select

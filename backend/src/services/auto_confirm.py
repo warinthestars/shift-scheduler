@@ -63,7 +63,7 @@ async def evaluate_shift_request(
        -> Result: APPROVED, source: "shift_auto_confirm"
     2. Condition 2: Venue Whitelist: Is worker active in VenueWhitelist?
        -> Result: APPROVED, source: "venue_whitelist"
-    3. Condition 3: Rating Threshold: Does worker.aggregate_rating >= venue.auto_approve_rating_threshold?
+    3. Condition 3: Rating Threshold: worker has >= 1 rating AND aggregate_rating >= venue threshold.
        -> Result: APPROVED, source: "rating_threshold"
     4. Condition 4: Fallback: None of the above matched.
        -> Result: PENDING, source: None
@@ -100,23 +100,23 @@ async def evaluate_shift_request(
         return RequestStatus.APPROVED, "venue_whitelist"
 
     # --------------------------------------------------------------------------
-    # Condition 3: Rating Threshold
+    # Condition 3: Rating Threshold (only for workers who have real ratings)
     # --------------------------------------------------------------------------
     if venue.auto_approve_rating_threshold is not None:
+        rating_count = int(worker.rating_count or 0)
         worker_rating = float(worker.aggregate_rating or 0.0)
         threshold = float(venue.auto_approve_rating_threshold)
-        if worker_rating >= threshold:
+        if rating_count > 0 and worker_rating >= threshold:
             logger.info(
-                f"[Auto-Confirm Engine] Condition 3 MET: Worker rating {worker_rating:.2f} >= "
-                f"Venue threshold {threshold:.2f}."
+                f"[Auto-Confirm Engine] Condition 3 MET: Worker rating {worker_rating:.2f} "
+                f"({rating_count} ratings) >= Venue threshold {threshold:.2f}."
             )
             await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
             return RequestStatus.APPROVED, "rating_threshold"
-        else:
-            logger.info(
-                f"[Auto-Confirm Engine] Condition 3 NOT MET: Worker rating {worker_rating:.2f} < "
-                f"Venue threshold {threshold:.2f}."
-            )
+        logger.info(
+            f"[Auto-Confirm Engine] Condition 3 NOT MET: rating {worker_rating:.2f}, "
+            f"{rating_count} ratings, threshold {threshold:.2f}."
+        )
 
     # --------------------------------------------------------------------------
     # Condition 4: Fallback -> Pending Manager Review

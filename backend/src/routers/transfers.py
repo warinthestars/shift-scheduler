@@ -13,6 +13,7 @@ from src.schemas import (
 )
 from src.auth import get_current_user, require_manager_or_admin, normalize_role, verify_venue_access
 from src.services.auto_confirm import check_double_booking
+from src.services.team import get_transfer_candidates
 
 router = APIRouter(prefix="/api/transfers", tags=["Shift Transfers"])
 
@@ -85,6 +86,14 @@ async def propose_shift_transfer(
         end_time=shift.end_time,
         exclude_shift_id=shift.id
     )
+
+    # 6. Phase 24: target must be on this venue's team and free
+    candidates = await get_transfer_candidates(db, shift, exclude_user_id=current_user.id)
+    if to_worker.id not in {c.id for c in candidates}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can only hand this shift to someone on this venue's team who is free at that time."
+        )
 
     # Create transfer record
     transfer = ShiftTransfer(
@@ -407,14 +416,8 @@ async def get_eligible_transfer_workers(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get active workers eligible to receive a shift transfer"""
-    res = await db.execute(
-        select(User)
-        .where(
-            User.id != current_user.id,
-            User.role == "worker",
-            User.is_active == True
-        )
-        .order_by(User.first_name.asc())
-    )
-    return res.scalars().all()
+    """Phase 24: Venue team members who are free for this shift."""
+    shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found.")
+    return await get_transfer_candidates(db, shift, exclude_user_id=current_user.id)

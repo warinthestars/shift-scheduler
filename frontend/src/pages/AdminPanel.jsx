@@ -37,7 +37,7 @@ export default function AdminPanel() {
   const [address, setAddress] = useState('');
   const [managerEmail, setManagerEmail] = useState('');
   const [geofenceRadius, setGeofenceRadius] = useState('150');
-  const [autoApproveRating, setAutoApproveRating] = useState('4.5');
+  const [autoApproveRating, setAutoApproveRating] = useState('');
 
   // Form state for Create New User Modal
   const [userEmail, setUserEmail] = useState('');
@@ -451,7 +451,7 @@ export default function AdminPanel() {
                         </td>
                         <td className="py-3.5 px-5">
                           <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-semibold">
-                            ≥ {venue.auto_approve_rating_threshold || venue.global_auto_approve_min_rating || '4.5'}★
+                            {venue.auto_approve_rating_threshold ? `≥ ${venue.auto_approve_rating_threshold}★ (rated workers)` : 'Manual review'}
                           </span>
                         </td>
                         <td className="py-3.5 px-5 text-slate-500">
@@ -720,9 +720,7 @@ export default function AdminPanel() {
                   placeholder="manager@venue.com"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  If user does not exist, an account with venue_manager role will be provisioned.
-                </p>
+                <p className="text-[10px] text-slate-500 mt-1">Must be an existing account. Leave blank and assign a manager later from Users → Edit.</p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -737,7 +735,7 @@ export default function AdminPanel() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Auto-Approve Min Rating (★)</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Auto-approve workers rated at least (★)</label>
                   <input
                     type="number"
                     step="0.1"
@@ -745,8 +743,10 @@ export default function AdminPanel() {
                     max="5.0"
                     value={autoApproveRating}
                     onChange={(e) => setAutoApproveRating(e.target.value)}
+                    placeholder="Blank = review every request"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">Only applies to workers who have been rated. Leave blank to approve requests yourself.</p>
                 </div>
               </div>
 

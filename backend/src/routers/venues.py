@@ -23,6 +23,7 @@ from src.schemas import (
 )
 from src.auth import get_current_user, require_manager_or_admin, require_super_admin, normalize_role
 from src.services.reliability import compute_reliability
+from src.services.team import get_venue_team
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -82,48 +83,50 @@ async def create_venue(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Task 3: Create a new Venue profile.
-    Accessible by Super Admin or Venue Managers.
-    Automatically assigns the creator as manager in VenueManagers relation.
+    Phase 24: Create a venue.
+    - If a manager email is given, that user MUST already exist (no auto-created accounts).
+      A 'worker' is promoted to 'venue_manager'; admins/managers keep their role.
+    - If no email is given and the creator is a venue_manager, the creator manages it.
+      Platform admins are omnipresent and are NOT added as managers.
     """
-    venue_dict = venue_in.model_dump(exclude={"manager_email", "initial_manager_email"})
-    venue = Venue(**venue_dict)
-    db.add(venue)
-    await db.commit()
-    await db.refresh(venue)
-
-    # Check if a manager email was provided
-    mgr_email = venue_in.manager_email or venue_in.initial_manager_email
+    mgr_email = (venue_in.manager_email or venue_in.initial_manager_email or "").lower().strip()
     mgr_user = None
     if mgr_email:
-        m_res = await db.execute(select(User).where(User.email == mgr_email.lower()))
-        mgr_user = m_res.scalar_one_or_none()
+        mgr_user = await db.scalar(select(User).where(func.lower(User.email) == mgr_email))
         if not mgr_user:
-            from src.auth import get_password_hash
-            mgr_user = User(
-                email=mgr_email.lower(),
-                hashed_password=get_password_hash("Manager123!"),
-                role="venue_manager",
-                first_name="Venue",
-                last_name="Manager",
-                is_active=True
+            raise HTTPException(
+                status_code=400,
+                detail=f"No account exists for {mgr_email}. Create the user first (Admin Panel → Users) "
+                       f"or have them sign up, then assign them as manager."
             )
-            db.add(mgr_user)
-            await db.commit()
-            await db.refresh(mgr_user)
-        else:
-            mgr_user.role = "venue_manager"
-            await db.commit()
+        if not mgr_user.is_active:
+            raise HTTPException(status_code=400, detail=f"{mgr_email} is deactivated. Reactivate them first.")
 
-    manager_user_id = mgr_user.id if mgr_user else current_user.id
-    manager_entry = VenueManager(
-        venue_id=venue.id,
-        user_id=manager_user_id,
-        is_primary=True
-    )
-    db.add(manager_entry)
-    await db.commit()
-    await db.refresh(venue)
+    try:
+        venue_dict = venue_in.model_dump(exclude={"manager_email", "initial_manager_email"})
+        venue = Venue(**venue_dict)
+        db.add(venue)
+        await db.flush()
+
+        manager_id = None
+        if mgr_user:
+            if normalize_role(mgr_user.role) == "worker":
+                mgr_user.role = "venue_manager"
+            manager_id = mgr_user.id
+        elif normalize_role(current_user.role) == "venue_manager":
+            manager_id = current_user.id
+
+        if manager_id:
+            db.add(VenueManager(venue_id=venue.id, user_id=manager_id, is_primary=True))
+
+        await db.commit()
+        await db.refresh(venue)
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create venue: {str(e)}")
 
     return venue
 
@@ -243,6 +246,7 @@ async def add_worker_to_whitelist(
         existing.notes = wl_in.notes or existing.notes
         await db.commit()
         await db.refresh(existing)
+        existing.worker = worker
         return existing
 
     new_entry = VenueWhitelist(
@@ -253,6 +257,7 @@ async def add_worker_to_whitelist(
     db.add(new_entry)
     await db.commit()
     await db.refresh(new_entry)
+    new_entry.worker = worker
     return new_entry
 
 @router.get("/{venue_id}/whitelist", response_model=List[WhitelistResponse])
@@ -395,23 +400,12 @@ async def get_venue_workers(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Phase 19: Retrieve active workers eligible for shift assignments and transfers at this venue.
-    """
+    """Phase 24: Active workers on this venue's team (whitelisted or worked here before)."""
     v = await db.scalar(select(Venue).where(Venue.id == venue_id))
     if not v:
         raise HTTPException(status_code=404, detail="Venue not found")
 
-    result = await db.execute(
-        select(User)
-        .where(
-            User.role == "worker",
-            User.is_active == True,
-            User.id != current_user.id
-        )
-        .order_by(User.first_name.asc(), User.last_name.asc())
-    )
-    return result.scalars().all()
+    return await get_venue_team(db, venue_id, exclude_user_id=current_user.id)
 
 @router.get("/{venue_id}/roster", response_model=List[ShiftRosterResponse])
 async def get_venue_roster(

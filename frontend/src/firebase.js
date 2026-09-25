@@ -23,6 +23,7 @@ const EMPTY_STATUS = {
   providers: [],
   providers_source: 'none',
   self_registration: false,
+  show_demo_logins: false,
 };
 
 /** Display metadata for OAuth providers. 'password' is handled by the email form. */

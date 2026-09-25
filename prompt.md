@@ -1,1091 +1,709 @@
-# Phase 23: Role & Venue Management, Multi-Venue Managers, and the Posted Shifts Roster
+# Phase 24: Hardening — Approval Bypass, Profile Endpoint, Venue Creation, Mobile Nav, Demo Logins, Swap Targets
 
-Three goals, building on the CURRENT code (Phases 20–22.1 are implemented):
+Seven fixes found in the post-Phase-23 code review. **No database schema change and no `down -v`** (one column DEFAULT changes in `init.sql`, which only affects future fresh databases).
 
-1. **Admin role management.** Admins can open any user in the Admin Panel, change their role (Worker / Venue Manager / Platform Admin), and assign venues. Promoting to Venue Manager REQUIRES at least one venue. Guardrails: an admin cannot change their own role or deactivate themselves, and the last active platform admin cannot be demoted or deactivated.
-2. **Multi-venue managers.** A manager assigned to several venues gets a venue switcher on their dashboard; a manager with no venues sees a clear "not assigned" message instead of someone else's venue.
-3. **Posted Shifts board.** The venue dashboard's "Scheduled Shifts" section is replaced with an event-grouped board: each posted event (one "Create Shift" submission = one event) lists every position (role, rate, tips, filled/capacity), **who is assigned**, and **who has requested each position**, with Approve/Deny right there. Upcoming / Past / All filter, list and calendar views.
+| # | Fix | Files |
+|---|---|---|
+| F1 | Every worker is silently auto-approved (default rating 5.0 ≥ default threshold 4.5, and no ratings exist). The rating rule must only apply to workers who have real ratings. | `services/auto_confirm.py`, `models.py`, `schemas.py`, `init.sql`, `AdminPanel.jsx` |
+| F2 | `GET/PUT /api/users/me` and `GET /api/auth/me` crash with `MissingGreenlet` (they serialize the ORM `User`, whose `venue_id` property lazy-loads). | new `serializers.py`, `routers/users.py`, `routers/auth.py` |
+| F3 | Creating a venue with an unknown manager email silently creates an account with password `Manager123!`, and demotes admins. | `routers/venues.py` |
+| F4 | No navigation on phones (links are `hidden md:flex`, no mobile menu). | `Navbar.jsx` (full replacement) |
+| F5 | Demo credentials (including the admin password) are shown on the login page to everyone. | `config.py`, `routers/auth.py`, `firebase.js`, `LoginPage.jsx` |
+| F6 | `GET /api/users?role=` never matches (compares to `role.upper()`), and any logged-in user can list every user's email. | `routers/users.py` |
+| F7 | A shift can be "transferred" to any worker on the platform. Limit it to the venue's team (whitelisted, or has worked there before) who are free at that time, and enforce it server-side. | new `services/team.py`, `routers/transfers.py`, `routers/venues.py`, `TransferModal.jsx` |
 
-**Registration is already done (Phase 22.1)** — every self-registered or JIT-provisioned user is created as `worker`, and `POST /api/admin/users` defaults to `worker`. This phase does not change registration; it only verifies it (§8).
-
-**No schema changes. No `down -v`.**
+> `.secrets/.secrets.env.template` has ALREADY been updated by the architect with `SHOW_DEMO_LOGINS=false`. Do not touch anything in `.secrets/` or `.gitignore`.
 
 ---
 
 ## 0. Guardrails (read before editing)
-* DO NOT modify: `.gitignore`, anything in `.secrets/`, `docker-compose.yml`, `database/init.sql`, `backend/src/models.py`, `backend/src/auth.py`, `backend/src/main.py`, `backend/src/routers/auth.py`, `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/src/pages/LoginPage.jsx`, `frontend/src/firebase.js`.
-* NEVER call `UserResponse.model_validate(<User ORM>)` and never read ORM relationship attributes (`user.managed_venues`, `shift.venue`, etc.) unless loaded with `selectinload` in the same query. Use explicit `select(...)` queries.
+* DO NOT modify: `.gitignore`, anything in `.secrets/`, `docker-compose.yml`, `backend/src/auth.py`, `backend/src/main.py`, `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/src/components/ProtectedRoute.jsx`, `frontend/src/App.jsx`.
+* In `backend/src/routers/auth.py`: change ONLY `get_current_user_profile` and ONE line in `firebase_config` (§5B). Nothing else.
+* NEVER call `UserResponse.model_validate(<User ORM>)` or return a `User` ORM object from an endpoint whose `response_model` is `UserResponse`. Use `build_user_response()` from §2.
+* NEVER call `await db.delete(<ORM obj>)` or read relationship attributes that weren't loaded with `selectinload` in the same query.
 * All datetime comparisons use `datetime.now(timezone.utc)`.
-* Route ORDER matters in `venues.py`: the new `GET /managed` route MUST be declared ABOVE `@router.get("/{venue_id}")`.
-* New frontend files are created with the EXACT content given. Do not "improve" them.
-* In `VenueManagerDashboard.jsx`, make ONLY the edits listed in §6. Do not delete other state, handlers, or sections.
+* New files are created with the EXACT content given. `Navbar.jsx` is replaced IN FULL with the exact content given.
 
 ---
 
-## 1. Schemas (`backend/src/schemas.py`)
-Append at the END of the file:
+## 1. F1 — Stop the silent auto-approval
+
+### A. `backend/src/services/auto_confirm.py`
+In `evaluate_shift_request`, replace the ENTIRE "Condition 3: Rating Threshold" block (from the `# Condition 3` comment banner through the end of its `else:` logging branch) with:
 ```python
-# ------------------------------------------------------------------------------
-# Phase 23: Posted Shifts board (event-grouped roster)
-# ------------------------------------------------------------------------------
-class RosterPerson(BaseModel):
-    request_id: UUID
-    worker_id: UUID
-    first_name: str = ""
-    last_name: str = ""
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    aggregate_rating: float = 5.0
-    status: str
-    requested_at: Optional[datetime] = None
-    clocked_in: bool = False
-    clocked_out: bool = False
-
-
-class EventPosition(BaseModel):
-    shift_id: UUID
-    role_type: str
-    hourly_rate: float
-    tips_eligible: bool = False
-    tip_pool: bool = False
-    capacity: int
-    spots_filled: int
-    status: str
-    assigned: List[RosterPerson] = []
-    requested: List[RosterPerson] = []
-
-
-class VenueEventResponse(BaseModel):
-    event_key: str
-    title: str
-    start_time: datetime
-    end_time: datetime
-    description: Optional[str] = None
-    total_capacity: int
-    total_assigned: int
-    total_requested: int
-    positions: List[EventPosition]
-```
-
----
-
-## 2. Admin User Update (`backend/src/routers/admin.py`)
-
-### A. Add a module-level constant directly below `router = APIRouter(...)`:
-```python
-VALID_ROLES = ("worker", "venue_manager", "platform_admin")
-```
-
-### B. Replace ONLY the `try: ... except ...` block at the top of `update_admin_user` (everything from `try:` through the `raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")` line). Keep the function signature and everything AFTER that block (the `await db.refresh(user)`, affiliation queries, and `return _build_user_response(...)`) exactly as is.
-
-Also update the docstring to `"""Phase 23: Update role, active status, profile fields, and venue assignments."""`
-
-Replacement block:
-```python
-    try:
-        user = await db.scalar(select(User).where(User.id == user_id))
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found.")
-
-        old_role = normalize_role(user.role)
-        new_role = normalize_role(user_update.role) if user_update.role is not None else old_role
-        if new_role not in VALID_ROLES:
-            raise HTTPException(status_code=400, detail=f"Invalid role '{user_update.role}'.")
-        role_changed = new_role != old_role
-        is_self = user.id == current_user.id
-
-        if is_self and role_changed:
-            raise HTTPException(status_code=400, detail="You cannot change your own role.")
-        if is_self and user_update.is_active is False:
-            raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
-
-        losing_admin = old_role == "platform_admin" and (role_changed or user_update.is_active is False)
-        if losing_admin:
-            admin_count = await db.scalar(
-                select(func.count(User.id)).where(
-                    func.lower(User.role).in_(["platform_admin", "super_admin"]),
-                    User.is_active == True
-                )
+    # --------------------------------------------------------------------------
+    # Condition 3: Rating Threshold (only for workers who have real ratings)
+    # --------------------------------------------------------------------------
+    if venue.auto_approve_rating_threshold is not None:
+        rating_count = int(worker.rating_count or 0)
+        worker_rating = float(worker.aggregate_rating or 0.0)
+        threshold = float(venue.auto_approve_rating_threshold)
+        if rating_count > 0 and worker_rating >= threshold:
+            logger.info(
+                f"[Auto-Confirm Engine] Condition 3 MET: Worker rating {worker_rating:.2f} "
+                f"({rating_count} ratings) >= Venue threshold {threshold:.2f}."
             )
-            if (admin_count or 0) <= 1:
-                raise HTTPException(status_code=400, detail="Cannot remove the last active platform admin.")
+            await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
+            return RequestStatus.APPROVED, "rating_threshold"
+        logger.info(
+            f"[Auto-Confirm Engine] Condition 3 NOT MET: rating {worker_rating:.2f}, "
+            f"{rating_count} ratings, threshold {threshold:.2f}."
+        )
+```
+Also update the docstring line for Condition 3 to: `3. Condition 3: Rating Threshold: worker has >= 1 rating AND aggregate_rating >= venue threshold.`
 
-        # Venue assignments are rebuilt whenever the role changes or venue_ids is sent.
-        rebuild_venues = role_changed or user_update.venue_ids is not None
-        target_ids = []
-        if rebuild_venues and new_role != "platform_admin":
-            seen = set()
-            for vid in (user_update.venue_ids or []):
-                if vid not in seen:
-                    seen.add(vid)
-                    target_ids.append(vid)
-            if target_ids:
-                found = (await db.execute(select(Venue.id).where(Venue.id.in_(target_ids)))).scalars().all()
-                missing = [str(v) for v in target_ids if v not in set(found)]
-                if missing:
-                    raise HTTPException(status_code=400, detail=f"Unknown venue id(s): {', '.join(missing)}")
-            if new_role == "venue_manager" and not target_ids:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Assign at least one venue when making someone a Venue Manager."
-                )
+### B. Default threshold for NEW venues = none (manual review)
+* `backend/src/models.py`, `class Venue`: change
+  `auto_approve_rating_threshold = Column(Float, nullable=True, default=4.5)` → `auto_approve_rating_threshold = Column(Float, nullable=True, default=None)`
+* `database/init.sql`, `CREATE TABLE venues`: change
+  `auto_approve_rating_threshold DOUBLE PRECISION DEFAULT 4.5,` → `auto_approve_rating_threshold DOUBLE PRECISION,`
+* `backend/src/schemas.py`: in BOTH `class VenueBase` and `class VenueCreate`, change `auto_approve_rating_threshold: Optional[float] = 4.5` → `auto_approve_rating_threshold: Optional[float] = None`
+* Do NOT change `seed.py`.
 
-        user.role = new_role
-        if user_update.is_active is not None:
-            user.is_active = user_update.is_active
-        if user_update.first_name is not None:
-            user.first_name = user_update.first_name.strip()
-        if user_update.last_name is not None:
-            user.last_name = user_update.last_name.strip()
-        if user_update.phone is not None:
-            user.phone = user_update.phone.strip()
+### C. `frontend/src/pages/AdminPanel.jsx`
+1. Change `const [autoApproveRating, setAutoApproveRating] = useState('4.5');` → `useState('')`.
+2. In the Create Venue modal, change the label text `Auto-Approve Min Rating (★)` → `Auto-approve workers rated at least (★)`, add `placeholder="Blank = review every request"` to that `<input>`, and directly after the `<input ... />` add:
+```jsx
+                  <p className="text-[10px] text-slate-500 mt-1">Only applies to workers who have been rated. Leave blank to approve requests yourself.</p>
+```
+3. In the venues table, replace the expression
+`≥ {venue.auto_approve_rating_threshold || venue.global_auto_approve_min_rating || '4.5'}★`
+with:
+```jsx
+{venue.auto_approve_rating_threshold ? `≥ ${venue.auto_approve_rating_threshold}★ (rated workers)` : 'Manual review'}
+```
+(keep the surrounding element and classes unchanged).
 
-        if rebuild_venues:
-            await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id))
-            await db.execute(delete(VenueWhitelist).where(VenueWhitelist.worker_id == user.id))
-            for idx, vid in enumerate(target_ids):
-                if new_role == "venue_manager":
-                    db.add(VenueManager(venue_id=vid, user_id=user.id, is_primary=(idx == 0)))
-                elif new_role == "worker":
-                    db.add(VenueWhitelist(venue_id=vid, worker_id=user.id, is_active=True))
+---
+
+## 2. F2 — Safe user serializer
+
+### A. NEW FILE `backend/src/serializers.py`
+```python
+"""
+Phase 24: Single safe way to turn a User ORM object into a UserResponse.
+Uses explicit queries only - never touches lazy relationships (MissingGreenlet-safe).
+"""
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models import User, Venue, VenueManager, VenueWhitelist
+from src.schemas import UserResponse
+from src.auth import normalize_role
+
+
+async def get_user_affiliations(db: AsyncSession, user: User):
+    """Returns (venue_ids, venue_names) for managers (managed venues) or workers (team/whitelist)."""
+    role = normalize_role(user.role)
+    if role == "venue_manager":
+        rows = (await db.execute(
+            select(VenueManager.venue_id, Venue.name)
+            .join(Venue, VenueManager.venue_id == Venue.id)
+            .where(VenueManager.user_id == user.id)
+            .order_by(VenueManager.is_primary.desc(), Venue.name.asc())
+        )).all()
+    elif role == "worker":
+        rows = (await db.execute(
+            select(VenueWhitelist.venue_id, Venue.name)
+            .join(Venue, VenueWhitelist.venue_id == Venue.id)
+            .where(VenueWhitelist.worker_id == user.id, VenueWhitelist.is_active == True)
+            .order_by(Venue.name.asc())
+        )).all()
+    else:
+        rows = []
+    return [r[0] for r in rows], [r[1] for r in rows]
+
+
+async def build_user_response(db: AsyncSession, user: User) -> UserResponse:
+    role = normalize_role(user.role)
+    venue_ids, venue_names = await get_user_affiliations(db, user)
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        first_name=user.first_name or "",
+        last_name=user.last_name or "",
+        role=role,
+        phone=user.phone,
+        avatar_url=user.avatar_url,
+        bio=user.bio,
+        skills=user.skills or [],
+        venue_id=str(venue_ids[0]) if (role == "venue_manager" and venue_ids) else None,
+        venue_ids=venue_ids,
+        venue_names=venue_names,
+        aggregate_rating=float(user.aggregate_rating or 0.0),
+        rating_count=int(user.rating_count or 0),
+        total_shifts=int(user.total_shifts or 0),
+        is_active=bool(user.is_active),
+        created_at=user.created_at,
+    )
+```
+
+### B. `backend/src/routers/users.py`
+1. Imports: change `from sqlalchemy import select` → `from sqlalchemy import select, func`; change `from src.auth import get_current_user` → `from src.auth import get_current_user, require_manager_or_admin`; add `from src.serializers import build_user_response`.
+2. In `get_my_profile_and_experience`, replace
+   `user_data = UserResponse.model_validate(current_user).model_dump()`
+   with
+   `user_data = (await build_user_response(db, current_user)).model_dump(mode="json")`
+3. Replace the ENTIRE `update_my_profile` function with:
+```python
+@router.put("/me", response_model=UserResponse)
+async def update_my_profile(
+    profile_update: UserUpdateMe,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 24: Update own basic profile fields. Role/email/active status are NOT editable here."""
+    update_data = profile_update.model_dump(exclude_unset=True)
+    try:
+        for field, value in update_data.items():
+            if field in ("role", "email", "is_active", "hashed_password", "firebase_uid"):
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+            setattr(current_user, field, value)
+        await db.commit()
+        await db.refresh(current_user)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
+    return await build_user_response(db, current_user)
+```
+4. Replace the two alias endpoints with:
+```python
+@router.get("/profile", response_model=UserResponse)
+async def get_profile_alias(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    return await build_user_response(db, current_user)
+
+@router.put("/profile", response_model=UserResponse)
+async def update_profile_alias(
+    profile_update: UserUpdateMe,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    return await update_my_profile(profile_update, current_user, db)
+```
+
+### C. `backend/src/routers/auth.py` — `/me` only
+1. Add import: `from src.serializers import build_user_response`
+2. Replace the ENTIRE `get_current_user_profile` function with:
+```python
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_profile(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve profile of authenticated user (Phase 24: MissingGreenlet-safe)."""
+    return await build_user_response(db, user)
+```
+
+---
+
+## 3. F3 — Venue creation without default passwords (`backend/src/routers/venues.py`)
+Replace the ENTIRE `create_venue` function with:
+```python
+@router.post("", response_model=VenueResponse, status_code=status.HTTP_201_CREATED)
+async def create_venue(
+    venue_in: VenueCreate,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 24: Create a venue.
+    - If a manager email is given, that user MUST already exist (no auto-created accounts).
+      A 'worker' is promoted to 'venue_manager'; admins/managers keep their role.
+    - If no email is given and the creator is a venue_manager, the creator manages it.
+      Platform admins are omnipresent and are NOT added as managers.
+    """
+    mgr_email = (venue_in.manager_email or venue_in.initial_manager_email or "").lower().strip()
+    mgr_user = None
+    if mgr_email:
+        mgr_user = await db.scalar(select(User).where(func.lower(User.email) == mgr_email))
+        if not mgr_user:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No account exists for {mgr_email}. Create the user first (Admin Panel → Users) "
+                       f"or have them sign up, then assign them as manager."
+            )
+        if not mgr_user.is_active:
+            raise HTTPException(status_code=400, detail=f"{mgr_email} is deactivated. Reactivate them first.")
+
+    try:
+        venue_dict = venue_in.model_dump(exclude={"manager_email", "initial_manager_email"})
+        venue = Venue(**venue_dict)
+        db.add(venue)
+        await db.flush()
+
+        manager_id = None
+        if mgr_user:
+            if normalize_role(mgr_user.role) == "worker":
+                mgr_user.role = "venue_manager"
+            manager_id = mgr_user.id
+        elif normalize_role(current_user.role) == "venue_manager":
+            manager_id = current_user.id
+
+        if manager_id:
+            db.add(VenueManager(venue_id=venue.id, user_id=manager_id, is_primary=True))
 
         await db.commit()
+        await db.refresh(venue)
     except HTTPException:
         await db.rollback()
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create venue: {str(e)}")
+
+    return venue
 ```
+(`func`, `normalize_role`, `VenueManager` are already imported in this file — confirm; add to the existing import lines if any is missing.)
 
----
-
-## 3. Venue Endpoints (`backend/src/routers/venues.py`)
-
-### A. Imports
-* Change `from fastapi import APIRouter, Depends, HTTPException, status` → `from fastapi import APIRouter, Depends, HTTPException, status, Query`
-* Add `VenueEventResponse, EventPosition, RosterPerson` to the existing `from src.schemas import (...)` block.
-
-### B. New route `GET /api/venues/managed` — place it DIRECTLY AFTER `list_venues` and BEFORE `@router.get("/{venue_id}", ...)`:
-```python
-@router.get("/managed", response_model=List[VenueResponse])
-async def list_managed_venues(
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Phase 23: Venues the current user can manage (platform admins: all venues)."""
-    if normalize_role(current_user.role) in ("platform_admin", "super_admin"):
-        result = await db.execute(select(Venue).order_by(Venue.name))
-    else:
-        result = await db.execute(
-            select(Venue)
-            .join(VenueManager, VenueManager.venue_id == Venue.id)
-            .where(VenueManager.user_id == current_user.id)
-            .order_by(Venue.name)
-        )
-    return result.scalars().all()
-```
-
-### C. New route `GET /api/venues/{venue_id}/events` — place it directly AFTER `get_venue_roster` (end of file is fine):
-```python
-ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
-REQUESTED_STATUSES = ("pending", "pending_manager_approval")
-
-
-@router.get("/{venue_id}/events", response_model=List[VenueEventResponse])
-async def get_venue_events(
-    venue_id: UUID,
-    scope: str = Query("upcoming", pattern="^(upcoming|past|all)$"),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
-    Shift row per role; rows sharing (title, start_time, end_time) are one event.
-    Each position lists assigned workers and pending requests.
-    """
-    await verify_venue_manager_access(venue_id, current_user, db)
-    now_utc = datetime.now(timezone.utc)
-
-    q = select(Shift).where(Shift.venue_id == venue_id)
-    if scope == "upcoming":
-        q = q.where(Shift.end_time >= now_utc).order_by(Shift.start_time.asc(), Shift.role_type.asc())
-    elif scope == "past":
-        q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
-    else:
-        q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
-    shifts = (await db.execute(q)).scalars().all()
-    if not shifts:
-        return []
-
-    shift_ids = [s.id for s in shifts]
-
-    req_rows = (await db.execute(
-        select(ShiftRequest, User)
-        .join(User, ShiftRequest.worker_id == User.id)
-        .where(
-            ShiftRequest.shift_id.in_(shift_ids),
-            func.lower(ShiftRequest.status).in_(ASSIGNED_STATUSES + REQUESTED_STATUSES)
-        )
-        .order_by(ShiftRequest.created_at.asc())
-    )).all()
-
-    te_rows = (await db.execute(
-        select(
-            TimeEntry.shift_id,
-            TimeEntry.worker_id,
-            func.count(TimeEntry.id),
-            func.count(TimeEntry.clock_out_time),
-        )
-        .where(TimeEntry.shift_id.in_(shift_ids))
-        .group_by(TimeEntry.shift_id, TimeEntry.worker_id)
-    )).all()
-    clock_state = {(sid, wid): (n > 0, n_out > 0 and n_out >= n) for sid, wid, n, n_out in te_rows}
-
-    assigned_by_shift = defaultdict(list)
-    requested_by_shift = defaultdict(list)
-    for req, worker in req_rows:
-        clocked_in, clocked_out = clock_state.get((req.shift_id, req.worker_id), (False, False))
-        person = RosterPerson(
-            request_id=req.id,
-            worker_id=worker.id,
-            first_name=worker.first_name or "",
-            last_name=worker.last_name or "",
-            email=worker.email,
-            phone=worker.phone,
-            aggregate_rating=float(worker.aggregate_rating) if worker.aggregate_rating is not None else 5.0,
-            status=(req.status or "").lower(),
-            requested_at=req.created_at,
-            clocked_in=clocked_in or req.check_in_time is not None,
-            clocked_out=clocked_out or req.check_out_time is not None,
-        )
-        if person.status in ASSIGNED_STATUSES:
-            assigned_by_shift[req.shift_id].append(person)
-        else:
-            requested_by_shift[req.shift_id].append(person)
-
-    events = {}
-    order = []
-    for s in shifts:
-        key = f"{s.title}|{s.start_time.isoformat()}|{s.end_time.isoformat()}"
-        if key not in events:
-            events[key] = {
-                "event_key": key,
-                "title": s.title or "Shift",
-                "start_time": s.start_time,
-                "end_time": s.end_time,
-                "description": s.description,
-                "positions": [],
-            }
-            order.append(key)
-        events[key]["positions"].append(EventPosition(
-            shift_id=s.id,
-            role_type=s.role_type or "Worker",
-            hourly_rate=float(s.hourly_rate) if s.hourly_rate is not None else 0.0,
-            tips_eligible=bool(s.tips_eligible),
-            tip_pool=bool(s.tip_pool),
-            capacity=s.capacity if s.capacity is not None else 1,
-            spots_filled=s.spots_filled if s.spots_filled is not None else 0,
-            status=s.status or "OPEN",
-            assigned=assigned_by_shift[s.id],
-            requested=requested_by_shift[s.id],
-        ))
-
-    result = []
-    for key in order:
-        ev = events[key]
-        positions = ev["positions"]
-        result.append(VenueEventResponse(
-            **ev,
-            total_capacity=sum(p.capacity for p in positions),
-            total_assigned=sum(len(p.assigned) for p in positions),
-            total_requested=sum(len(p.requested) for p in positions),
-        ))
-    return result
-```
-
----
-
-## 4. New Component: `frontend/src/components/EventRosterModal.jsx` (NEW FILE)
+In `frontend/src/pages/AdminPanel.jsx` Create Venue modal, find the manager email `<input>` bound to `managerEmail` and directly after it add:
 ```jsx
-import React from 'react';
-import { X, Users, Clock, Check, MessageSquare, Phone, Mail, UserPlus } from 'lucide-react';
-import TipBadge from './TipBadge';
-import ReliabilityBadge from './ReliabilityBadge';
-
-const STATUS_LABEL = {
-  approved: 'Confirmed',
-  confirmed: 'Confirmed',
-  checked_in: 'Clocked in',
-  completed: 'Completed',
-};
-
-function assignedChip(person) {
-  if (person.clocked_out || person.status === 'completed') {
-    return { label: 'Completed', cls: 'bg-slate-700/40 text-slate-300 border-slate-600/40' };
-  }
-  if (person.clocked_in || person.status === 'checked_in') {
-    return { label: 'Clocked in', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/30' };
-  }
-  return { label: STATUS_LABEL[person.status] || 'Confirmed', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
-}
-
-export default function EventRosterModal({
-  event,
-  onClose,
-  reliabilityMap = {},
-  onApprove,
-  onDeny,
-  onOpenBoard,
-  actionLoading,
-}) {
-  if (!event) return null;
-
-  const start = new Date(event.start_time);
-  const end = new Date(event.end_time);
-  const dateStr = start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-  const timeStr = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl max-h-[90vh] flex flex-col">
-        <div className="flex justify-between items-start pb-4 border-b border-slate-800">
-          <div>
-            <div className="flex items-center space-x-2 mb-1">
-              <Users className="w-5 h-5 text-emerald-400" />
-              <h3 className="text-lg font-bold text-white">{event.title}</h3>
-            </div>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
-              <span className="flex items-center space-x-1">
-                <Clock className="w-3.5 h-3.5 text-slate-500" />
-                <span>{dateStr} • {timeStr}</span>
-              </span>
-              <span>
-                Staffed: <strong className="text-white">{event.total_assigned} / {event.total_capacity}</strong>
-              </span>
-              {event.total_requested > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">
-                  {event.total_requested} awaiting review
-                </span>
-              )}
-            </div>
-          </div>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="overflow-y-auto flex-1 pt-4 space-y-5 pr-1">
-          {event.positions.map((pos) => {
-            const isFull = pos.assigned.length >= pos.capacity;
-            return (
-              <div key={pos.shift_id} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 bg-slate-800/40 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{pos.role_type}</span>
-                    <span className="text-xs text-emerald-400 font-semibold">${Number(pos.hourly_rate).toFixed(2)}/hr</span>
-                    <TipBadge shift={pos} />
-                    <span className={`text-xs font-semibold ${isFull ? 'text-emerald-400' : 'text-slate-300'}`}>
-                      {pos.assigned.length} / {pos.capacity} filled
-                    </span>
-                  </div>
-                  {onOpenBoard && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenBoard({ id: pos.shift_id, title: event.title, role_type: pos.role_type })}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white text-xs border border-slate-700 transition inline-flex items-center space-x-1"
-                    >
-                      <MessageSquare className="w-3 h-3" />
-                      <span>Board</span>
-                    </button>
-                  )}
-                </div>
-
-                <div className="p-4 space-y-4">
-                  <div>
-                    <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                      Assigned ({pos.assigned.length})
-                    </div>
-                    {pos.assigned.length === 0 ? (
-                      <p className="text-xs text-slate-500 italic">No one assigned yet.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {pos.assigned.map((p) => {
-                          const chip = assignedChip(p);
-                          return (
-                            <div key={p.request_id} className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                              <div>
-                                <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
-                                <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
-                                  {p.phone && (
-                                    <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400">
-                                      <Phone className="w-3 h-3" />{p.phone}
-                                    </a>
-                                  )}
-                                  {p.email && (
-                                    <a href={`mailto:${p.email}`} className="inline-flex items-center gap-1 hover:text-emerald-400">
-                                      <Mail className="w-3 h-3" />{p.email}
-                                    </a>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-amber-400 text-xs font-bold">★ {Number(p.aggregate_rating).toFixed(1)}</span>
-                                <ReliabilityBadge data={reliabilityMap[p.worker_id]} />
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${chip.cls}`}>{chip.label}</span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <UserPlus className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Requested ({pos.requested.length})</span>
-                    </div>
-                    {pos.requested.length === 0 ? (
-                      <p className="text-xs text-slate-500 italic">No pending requests for this position.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {pos.requested.map((p) => {
-                          const approving = actionLoading === `approve-${p.request_id}`;
-                          const denying = actionLoading === `deny-${p.request_id}`;
-                          return (
-                            <div key={p.request_id} className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-amber-500/5 rounded-lg border border-amber-500/20">
-                              <div>
-                                <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
-                                <div className="text-[11px] text-slate-400 mt-0.5">
-                                  Requested {p.requested_at ? new Date(p.requested_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-amber-400 text-xs font-bold">★ {Number(p.aggregate_rating).toFixed(1)}</span>
-                                <ReliabilityBadge data={reliabilityMap[p.worker_id]} />
-                                <button
-                                  type="button"
-                                  onClick={() => onApprove && onApprove(p.request_id)}
-                                  disabled={isFull || approving || denying}
-                                  title={isFull ? 'Position is full' : 'Approve'}
-                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition inline-flex items-center gap-1 disabled:opacity-40"
-                                >
-                                  <Check className="w-3 h-3" />
-                                  <span>{approving ? '…' : 'Approve'}</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => onDeny && onDeny(p.request_id)}
-                                  disabled={approving || denying}
-                                  className="px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold border border-rose-600/30 transition inline-flex items-center gap-1 disabled:opacity-40"
-                                >
-                                  <X className="w-3 h-3" />
-                                  <span>{denying ? '…' : 'Deny'}</span>
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
+                  <p className="text-[10px] text-slate-500 mt-1">Must be an existing account. Leave blank and assign a manager later from Users → Edit.</p>
 ```
 
 ---
 
-## 5. New Component: `frontend/src/components/PostedShiftsBoard.jsx` (NEW FILE)
+## 4. F4 — Mobile navigation: REPLACE FILE `frontend/src/components/Navbar.jsx`
 ```jsx
-import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
-import { format, parse, startOfWeek, getDay } from 'date-fns';
-import { enUS } from 'date-fns/locale';
-import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
-import TipBadge from './TipBadge';
-import EventRosterModal from './EventRosterModal';
+import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X } from 'lucide-react';
 
-const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales: { 'en-US': enUS } });
+export default function Navbar() {
+  const { user, logout, isAdmin, isWorker } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
-const SCOPES = [
-  { id: 'upcoming', label: 'Upcoming' },
-  { id: 'past', label: 'Past' },
-  { id: 'all', label: 'All' },
-];
+  const [adminVenues, setAdminVenues] = useState([]);
+  const [selectedVenueId, setSelectedVenueId] = useState(
+    localStorage.getItem('shiftboard_admin_venue_id') || ''
+  );
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-export default function PostedShiftsBoard({
-  venueId,
-  refreshKey,
-  reliabilityMap = {},
-  onApprove,
-  onDeny,
-  onOpenBoard,
-  actionLoading,
-}) {
-  const [scope, setScope] = useState('upcoming');
-  const [viewMode, setViewMode] = useState('list'); // 'list' | 'calendar'
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [selectedKey, setSelectedKey] = useState(null);
+  const userRole = (user?.role || '').toLowerCase();
+  const isPlatformAdmin = userRole === 'platform_admin' || isAdmin;
+  const isManagerRole = userRole === 'venue_manager';
 
+  const handleLogout = () => {
+    setMobileOpen(false);
+    logout();
+    navigate('/login');
+  };
+
+  // Close the mobile menu whenever the route changes
   useEffect(() => {
-    if (!venueId) {
-      setEvents([]);
-      return;
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  // Super Admin venue switcher data
+  useEffect(() => {
+    if (isPlatformAdmin) {
+      api
+        .get('/admin/venues')
+        .then((res) => {
+          const list = res.data || [];
+          setAdminVenues(list);
+          const saved = localStorage.getItem('shiftboard_admin_venue_id');
+          if (saved && list.some((v) => v.id === saved)) {
+            setSelectedVenueId(saved);
+          } else if (list.length > 0) {
+            setSelectedVenueId(list[0].id);
+            localStorage.setItem('shiftboard_admin_venue_id', list[0].id);
+          }
+        })
+        .catch((err) => console.error('Failed to load admin venues for switcher:', err));
     }
-    let active = true;
-    setLoading(true);
-    setError('');
-    api
-      .get(`/venues/${venueId}/events`, { params: { scope } })
-      .then((res) => {
-        if (active) setEvents(res.data || []);
-      })
-      .catch((err) => {
-        if (active) setError(err.response?.data?.detail || 'Could not load posted shifts.');
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [venueId, scope, refreshKey]);
+  }, [isPlatformAdmin]);
 
-  const selectedEvent = useMemo(
-    () => events.find((e) => e.event_key === selectedKey) || null,
-    [events, selectedKey]
-  );
+  const handleVenueChange = (e) => {
+    const newId = e.target.value;
+    setSelectedVenueId(newId);
+    localStorage.setItem('shiftboard_admin_venue_id', newId);
+    window.dispatchEvent(new CustomEvent('admin_venue_changed', { detail: newId }));
+    setMobileOpen(false);
+    if (location.pathname !== '/venue') {
+      navigate('/venue');
+    }
+  };
 
-  const calendarEvents = useMemo(
-    () =>
-      events.map((ev) => ({
-        id: ev.event_key,
-        title: `${ev.title} (${ev.total_assigned}/${ev.total_capacity})`,
-        start: new Date(ev.start_time),
-        end: new Date(ev.end_time),
-        resource: ev,
-      })),
-    [events]
-  );
+  const links = [
+    (isWorker || isPlatformAdmin) && {
+      to: '/worker',
+      label: isPlatformAdmin ? 'Worker View' : 'My Shifts',
+      icon: Briefcase,
+      active: 'bg-slate-800 text-emerald-400',
+    },
+    (isManagerRole || isPlatformAdmin) && {
+      to: '/venue',
+      label: isPlatformAdmin ? 'Venue Manager View' : 'My Venue',
+      icon: Building2,
+      active: 'bg-slate-800 text-teal-400',
+    },
+    isPlatformAdmin && {
+      to: '/admin',
+      label: 'Platform Admin',
+      icon: Shield,
+      active: 'bg-indigo-950 text-indigo-300 border border-indigo-700/50',
+    },
+  ].filter(Boolean);
 
-  const eventsByDate = useMemo(() => {
-    const groups = [];
-    const index = {};
-    events.forEach((ev) => {
-      const dateKey = new Date(ev.start_time).toLocaleDateString([], {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-      });
-      if (!(dateKey in index)) {
-        index[dateKey] = groups.length;
-        groups.push({ dateKey, items: [] });
-      }
-      groups[index[dateKey]].items.push(ev);
-    });
-    return groups;
-  }, [events]);
+  const venueSwitcher = (idSuffix) =>
+    isPlatformAdmin && adminVenues.length > 0 ? (
+      <div className="flex items-center space-x-2 bg-slate-950/70 border border-indigo-500/30 px-3 py-1.5 rounded-xl shadow-inner">
+        <Building2 className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+        <label htmlFor={`admin-venue-switcher-${idSuffix}`} className="text-xs text-indigo-300 font-semibold whitespace-nowrap">
+          Viewing Venue:
+        </label>
+        <select
+          id={`admin-venue-switcher-${idSuffix}`}
+          value={selectedVenueId}
+          onChange={handleVenueChange}
+          className="flex-1 min-w-0 bg-slate-900 border border-slate-700 text-white text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
+        >
+          <option value="" disabled>Select Venue</option>
+          {adminVenues.map((v) => (
+            <option key={v.id} value={v.id} className="bg-slate-900 text-white">
+              {v.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    ) : null;
 
-  const toggleBtn = (active) =>
-    `flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-      active ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
-    }`;
+  const roleDot =
+    userRole === 'platform_admin' ? 'bg-indigo-400' : userRole === 'venue_manager' ? 'bg-teal-400' : 'bg-emerald-400';
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
-        <div className="flex items-center space-x-2">
-          <CalendarIcon className="w-5 h-5 text-emerald-400" />
-          <div>
-            <h2 className="text-base font-bold text-white">Posted Shifts ({events.length})</h2>
-            <p className="text-xs text-slate-400">Every posted event with its positions, assigned staff and pending requests</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1">
-            {SCOPES.map((s) => (
-              <button key={s.id} type="button" onClick={() => setScope(s.id)} className={toggleBtn(scope === s.id)}>
-                <span>{s.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1">
-            <button type="button" onClick={() => setViewMode('list')} className={toggleBtn(viewMode === 'list')}>
-              <ListIcon className="w-3.5 h-3.5" />
-              <span>List</span>
-            </button>
-            <button type="button" onClick={() => setViewMode('calendar')} className={toggleBtn(viewMode === 'calendar')}>
-              <CalendarIcon className="w-3.5 h-3.5" />
-              <span>Calendar</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {error && (
-        <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>
-      )}
-
-      {loading && events.length === 0 ? (
-        <div className="text-center py-12 text-xs text-slate-400">Loading posted shifts…</div>
-      ) : viewMode === 'calendar' ? (
-        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-h-[620px]">
-          <Calendar
-            localizer={localizer}
-            events={calendarEvents}
-            startAccessor="start"
-            endAccessor="end"
-            style={{ height: 600 }}
-            onSelectEvent={(e) => setSelectedKey(e.resource.event_key)}
-            views={['month', 'week', 'day', 'agenda']}
-            defaultView="month"
-            popup
-            eventPropGetter={(e) => ({
-              style: {
-                backgroundColor: e.resource.total_requested > 0 ? '#b45309' : '#059669',
-                borderColor: e.resource.total_requested > 0 ? '#f59e0b' : '#10b981',
-                color: '#ffffff',
-                borderRadius: '6px',
-                padding: '2px 6px',
-                fontSize: '12px',
-                fontWeight: '600',
-                cursor: 'pointer',
-              },
-            })}
-          />
-        </div>
-      ) : events.length === 0 ? (
-        <div className="text-center py-12 bg-slate-950/50 rounded-xl border border-slate-800">
-          <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-          <p className="text-xs text-slate-400">
-            {scope === 'upcoming' ? 'No upcoming shifts posted for this venue.' : 'No shifts found.'}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {eventsByDate.map(({ dateKey, items }) => (
-            <div key={dateKey}>
-              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 flex items-center space-x-2">
-                <CalendarIcon className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{dateKey}</span>
-              </h3>
-              <div className="space-y-3">
-                {items.map((ev) => {
-                  const start = new Date(ev.start_time);
-                  const end = new Date(ev.end_time);
-                  const timeStr = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-                  return (
-                    <div key={ev.event_key} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-                      <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
-                        <div>
-                          <div className="text-sm font-bold text-white">{ev.title}</div>
-                          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
-                            <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{timeStr}</span>
-                            <span>Staffed <strong className="text-white">{ev.total_assigned}/{ev.total_capacity}</strong></span>
-                            {ev.total_requested > 0 && (
-                              <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">
-                                {ev.total_requested} request{ev.total_requested === 1 ? '' : 's'} to review
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedKey(ev.event_key)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-semibold text-xs border border-emerald-600/30 transition inline-flex items-center space-x-1.5 self-start md:self-auto"
-                        >
-                          <Users className="w-3.5 h-3.5" />
-                          <span>View Roster</span>
-                        </button>
-                      </div>
-                      <div className="divide-y divide-slate-800/60">
-                        {ev.positions.map((pos) => {
-                          const pct = pos.capacity > 0 ? Math.min(100, Math.round((pos.assigned.length / pos.capacity) * 100)) : 0;
-                          return (
-                            <div key={pos.shift_id} className="px-4 py-2.5 grid grid-cols-1 md:grid-cols-12 gap-2 items-center text-xs">
-                              <div className="md:col-span-3 flex items-center gap-2">
-                                <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{pos.role_type}</span>
-                              </div>
-                              <div className="md:col-span-3 flex items-center gap-1.5 text-emerald-400 font-semibold">
-                                <span>${Number(pos.hourly_rate).toFixed(2)}/hr</span>
-                                <TipBadge shift={pos} />
-                              </div>
-                              <div className="md:col-span-3">
-                                <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
-                                  <span>{pos.assigned.length}/{pos.capacity} filled</span>
-                                </div>
-                                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                  <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
-                                </div>
-                              </div>
-                              <div className="md:col-span-3 text-slate-300 truncate">
-                                {pos.assigned.length > 0
-                                  ? pos.assigned.map((p) => `${p.first_name} ${p.last_name?.[0] ? p.last_name[0] + '.' : ''}`.trim()).join(', ')
-                                  : <span className="text-slate-500 italic">Unassigned</span>}
-                                {pos.requested.length > 0 && (
-                                  <span className="ml-2 inline-flex items-center gap-1 text-amber-400 font-semibold">
-                                    <UserPlus className="w-3 h-3" />{pos.requested.length}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
+    <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between h-16 items-center">
+          {/* Brand + desktop links */}
+          <div className="flex items-center space-x-3">
+            <Link to="/" className="flex items-center space-x-2">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                <Calendar className="w-5 h-5 text-slate-950 font-bold" />
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+              <span className="text-xl font-bold tracking-tight text-white">
+                Shift<span className="text-emerald-400">Board</span>
+              </span>
+            </Link>
 
-      {selectedEvent && (
-        <EventRosterModal
-          event={selectedEvent}
-          onClose={() => setSelectedKey(null)}
-          reliabilityMap={reliabilityMap}
-          onApprove={onApprove}
-          onDeny={onDeny}
-          onOpenBoard={onOpenBoard}
-          actionLoading={actionLoading}
-        />
-      )}
-    </div>
-  );
-}
-```
-
----
-
-## 6. Venue Manager Dashboard (`frontend/src/pages/VenueManagerDashboard.jsx`) — targeted edits only
-
-### A. Import
-Add: `import PostedShiftsBoard from '../components/PostedShiftsBoard';`
-
-### B. New state (add directly below `const [reliabilityMap, setReliabilityMap] = useState({});`)
-```jsx
-  const [managedVenues, setManagedVenues] = useState([]);
-  const [boardRefreshKey, setBoardRefreshKey] = useState(0);
-```
-
-### C. `fetchVenueData` — replace this exact block:
-```jsx
-      if (!activeId) {
-        const vRes = await api.get('/admin/venues').catch(() => api.get('/venues'));
-        if (vRes.data && vRes.data.length > 0) {
-          activeId = vRes.data[0].id;
-          setCurrentVenueId(activeId);
-        }
-      }
-```
-with:
-```jsx
-      const mvRes = await api.get('/venues/managed').catch(() => ({ data: [] }));
-      const mine = mvRes.data || [];
-      setManagedVenues(mine);
-      if (!isPlatformAdmin && activeId && !mine.some((v) => String(v.id) === String(activeId))) {
-        activeId = null;
-      }
-      if (!activeId && mine.length > 0) {
-        activeId = mine[0].id;
-      }
-      setCurrentVenueId(activeId || null);
-```
-And directly after the existing `setReliabilityMap(reliabilityRes.data || {});` line inside the same function, add:
-```jsx
-      setBoardRefreshKey((k) => k + 1);
-```
-
-### D. `handleDeny` — inside its `try` block, directly after the `setNotification({ type: 'info', ... })` call, add:
-```jsx
-      fetchVenueData(currentVenueId);
-```
-
-### E. Manager venue switcher handler (add directly above the component's main `return (`):
-```jsx
-  const handleManagerVenueChange = (e) => {
-    const newId = e.target.value;
-    setCurrentVenueId(newId);
-    fetchVenueData(newId);
-  };
-```
-
-### F. "No venue assigned" early return (add directly above the component's main `return (`, AFTER the handler from §6E):
-```jsx
-  if (!loading && !currentVenueId) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-md text-center bg-slate-900 border border-slate-800 rounded-2xl p-8">
-          <Building2 className="w-10 h-10 text-amber-400 mx-auto mb-3" />
-          <h1 className="text-lg font-bold text-white mb-1">No venue assigned yet</h1>
-          <p className="text-sm text-slate-400">
-            Your account is a Venue Manager but isn't linked to a venue. Ask a platform admin to assign you one in the Admin Panel.
-          </p>
-        </div>
-      </div>
-    );
-  }
-```
-
-### G. Header switcher
-In the header banner, find the `<p className="text-xs text-slate-400 mt-1">` that renders `venueDetails?.address`. Directly AFTER that `</p>`, add:
-```jsx
-              {!isPlatformAdmin && managedVenues.length > 1 && (
-                <select
-                  value={currentVenueId || ''}
-                  onChange={handleManagerVenueChange}
-                  className="mt-2 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-amber-500"
+            <nav className="hidden lg:flex ml-6 space-x-2">
+              {links.map(({ to, label, icon: Icon, active }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
+                    location.pathname === to ? active : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
                 >
-                  {managedVenues.map((v) => (
-                    <option key={v.id} value={v.id}>{v.name}</option>
-                  ))}
-                </select>
-              )}
-```
+                  <Icon className="w-4 h-4" />
+                  <span>{label}</span>
+                </Link>
+              ))}
+            </nav>
+          </div>
 
-### H. Replace Section 3
-Delete the ENTIRE block that starts with the comment `{/* Section 3: Scheduled Venue Shifts & Roster Overview */}` and ends with that section's closing `</div>` (the last element before `</main>`). Replace it with:
-```jsx
-        {/* Section 3 (Phase 23): Posted Shifts board */}
-        <PostedShiftsBoard
-          venueId={currentVenueId}
-          refreshKey={boardRefreshKey}
-          reliabilityMap={reliabilityMap}
-          onApprove={handleApprove}
-          onDeny={handleDeny}
-          onOpenBoard={setActiveDiscussionShift}
-          actionLoading={actionLoading}
-        />
-```
+          {/* Desktop venue switcher */}
+          <div className="hidden lg:block">{venueSwitcher('desktop')}</div>
 
-### I. Remove the old roster modal render
-Delete this block near the bottom of the file:
-```jsx
-      {/* Drill-Down Modal: Shift Staff Roster Details */}
-      {selectedShift && (
-        <ShiftRosterModal
-          ...
-        />
-      )}
-```
-Leave all other state, imports, memos and effects in place (unused ones are harmless; cleanup is a later phase). Do NOT delete `ShiftRosterModal.jsx`.
-
----
-
-## 7. Admin Panel — Edit User modal (`frontend/src/pages/AdminPanel.jsx`)
-
-### A. Imports
-Add `Pencil` to the existing `lucide-react` import list.
-
-### B. State (add directly below `const [deletingUser, setDeletingUser] = useState(false);`)
-```jsx
-  const [editingUser, setEditingUser] = useState(null);
-  const [editRole, setEditRole] = useState('worker');
-  const [editVenueIds, setEditVenueIds] = useState([]);
-  const [savingEdit, setSavingEdit] = useState(false);
-```
-
-### C. Handlers (add directly after `handleDeleteUser`)
-```jsx
-  const normalizeRole = (r) => {
-    const v = (r || '').toLowerCase();
-    return v === 'super_admin' ? 'platform_admin' : v || 'worker';
-  };
-
-  const openEditUser = (u) => {
-    setEditingUser(u);
-    setEditRole(normalizeRole(u.role));
-    setEditVenueIds((u.venue_ids || []).map(String));
-  };
-
-  const toggleEditVenue = (venueId) => {
-    const id = String(venueId);
-    setEditVenueIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  };
-
-  const handleSaveUserEdit = async () => {
-    if (!editingUser) return;
-    if (editRole === 'venue_manager' && editVenueIds.length === 0) {
-      setNotification({ type: 'error', message: 'Pick at least one venue for a Venue Manager.' });
-      return;
-    }
-    setSavingEdit(true);
-    try {
-      const payload = {
-        role: editRole,
-        venue_ids: editRole === 'platform_admin' ? [] : editVenueIds,
-      };
-      const res = await api.patch(`/admin/users/${editingUser.id}`, payload);
-      setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? res.data : u)));
-      const roleLabel = editRole === 'platform_admin' ? 'Platform Admin' : editRole === 'venue_manager' ? 'Venue Manager' : 'Worker';
-      setNotification({
-        type: 'success',
-        message: `${res.data.first_name} ${res.data.last_name} is now a ${roleLabel}. They'll see the change the next time they refresh or sign in.`,
-      });
-      setEditingUser(null);
-      fetchAdminData();
-    } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to update user.' });
-    } finally {
-      setSavingEdit(false);
-    }
-  };
-```
-
-### D. Actions column
-In the users table, replace the ENTIRE contents of the Actions `<td className="py-3.5 px-5 text-right">` (currently only the delete button wrapped in `currentUser?.id !== u.id &&`) with:
-```jsx
-                            <div className="inline-flex items-center space-x-1">
-                              <button
-                                type="button"
-                                onClick={() => openEditUser(u)}
-                                className="p-2 text-slate-500 hover:text-amber-400 rounded-lg hover:bg-amber-500/10 transition"
-                                title="Edit role & venues"
-                              >
-                                <Pencil className="w-4 h-4" />
-                              </button>
-                              {currentUser?.id !== u.id && (
-                                <button
-                                  type="button"
-                                  onClick={() => setUserToDelete(u)}
-                                  className="p-2 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition"
-                                  title="Delete user"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
-                            </div>
-```
-
-### E. Edit modal — render directly BEFORE the existing `{userToDelete && (` delete-confirmation modal:
-```jsx
-      {editingUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="text-lg font-bold text-white">Edit {editingUser.first_name} {editingUser.last_name}</h3>
-                <p className="text-xs text-slate-400 font-mono">{editingUser.email}</p>
-              </div>
-              <button type="button" onClick={() => setEditingUser(null)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">Role</label>
-              {currentUser?.id === editingUser.id && (
-                <p className="text-[11px] text-amber-300 mb-2">You can't change your own role.</p>
-              )}
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { id: 'worker', label: 'Worker', cls: 'emerald' },
-                  { id: 'venue_manager', label: 'Venue Manager', cls: 'amber' },
-                  { id: 'platform_admin', label: 'Platform Admin', cls: 'indigo' },
-                ].map((opt) => {
-                  const selected = editRole === opt.id;
-                  const disabled = currentUser?.id === editingUser.id;
-                  const tone = {
-                    emerald: 'border-emerald-500 bg-emerald-500/15 text-emerald-300',
-                    amber: 'border-amber-500 bg-amber-500/15 text-amber-300',
-                    indigo: 'border-indigo-500 bg-indigo-500/15 text-indigo-300',
-                  }[opt.cls];
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => setEditRole(opt.id)}
-                      className={`px-3 py-2 rounded-xl border text-xs font-semibold transition disabled:opacity-50 ${
-                        selected ? tone : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-500'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {editRole === 'platform_admin' ? (
-              <p className="text-xs text-slate-400 bg-slate-800/60 border border-slate-700 rounded-xl p-3">
-                Platform admins can access every venue. Existing venue assignments will be cleared.
-              </p>
-            ) : (
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  {editRole === 'venue_manager' ? 'Managed venues (required)' : 'Pre-approved venues (optional)'}
-                </label>
-                <p className="text-[11px] text-slate-500 mb-2">
-                  {editRole === 'venue_manager'
-                    ? 'This person will manage shifts, rosters and approvals for the selected venues.'
-                    : "Workers on a venue's whitelist are pre-approved to pick up its shifts."}
-                </p>
-                {venues.length === 0 ? (
-                  <p className="text-xs text-slate-500 italic">No venues exist yet. Create one first.</p>
-                ) : (
-                  <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                    {venues.map((v) => {
-                      const checked = editVenueIds.includes(String(v.id));
-                      return (
-                        <label
-                          key={v.id}
-                          className={`flex items-center space-x-2.5 p-2 rounded-lg border cursor-pointer transition ${
-                            checked ? 'border-amber-500/50 bg-amber-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-600'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleEditVenue(v.id)}
-                            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-amber-500"
-                          />
-                          <span className="text-sm text-white">{v.name}</span>
-                          <span className="text-[11px] text-slate-500 truncate">{v.address}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-                {editRole === 'venue_manager' && editVenueIds.length === 0 && (
-                  <p className="text-[11px] text-rose-400 mt-2">Select at least one venue.</p>
-                )}
+          {/* Right side */}
+          <div className="flex items-center space-x-2">
+            {user && userRole === 'worker' && (
+              <div className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-semibold">
+                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                <span>{Number(user.rating_average || user.aggregate_rating || 5.0).toFixed(1)}</span>
+                <span className="text-amber-500/70">({user.rating_count || 0})</span>
               </div>
             )}
 
-            <div className="flex justify-end space-x-3 pt-2 border-t border-slate-800">
+            {user && (
+              <div className="text-right hidden lg:block">
+                <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
+                <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
+                  <span>{userRole.replace('_', ' ')}</span>
+                </div>
+              </div>
+            )}
+
+            {user && (
+              <button
+                onClick={handleLogout}
+                title="Log out"
+                className="hidden lg:inline-flex p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800/80 transition"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            )}
+
+            {user && (
               <button
                 type="button"
-                onClick={() => setEditingUser(null)}
-                disabled={savingEdit}
-                className="px-4 py-2 text-sm rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700"
+                onClick={() => setMobileOpen((o) => !o)}
+                aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                aria-expanded={mobileOpen}
+                className="lg:hidden p-2.5 rounded-xl text-slate-200 bg-slate-800 border border-slate-700 hover:bg-slate-700 transition"
               >
-                Cancel
+                {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </button>
-              <button
-                type="button"
-                onClick={handleSaveUserEdit}
-                disabled={savingEdit || (editRole === 'venue_manager' && editVenueIds.length === 0)}
-                className="px-4 py-2 text-sm rounded-xl bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
-              >
-                {savingEdit ? 'Saving…' : 'Save changes'}
-              </button>
-            </div>
+            )}
           </div>
         </div>
+      </div>
+
+      {/* Mobile menu panel */}
+      {user && mobileOpen && (
+        <div className="lg:hidden border-t border-slate-800 bg-slate-900 px-4 pb-4 pt-3 space-y-3 shadow-2xl">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-semibold text-white">{user.first_name} {user.last_name}</div>
+              <div className="text-xs text-slate-400 capitalize flex items-center space-x-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
+                <span>{userRole.replace('_', ' ')}</span>
+              </div>
+            </div>
+            {userRole === 'worker' && (
+              <div className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-semibold">
+                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                <span>{Number(user.rating_average || user.aggregate_rating || 5.0).toFixed(1)}</span>
+              </div>
+            )}
+          </div>
+
+          <nav className="grid gap-2">
+            {links.map(({ to, label, icon: Icon, active }) => (
+              <Link
+                key={to}
+                to={to}
+                className={`px-4 py-3 rounded-xl text-base font-semibold transition flex items-center space-x-3 ${
+                  location.pathname === to ? active : 'text-slate-200 bg-slate-800/60 hover:bg-slate-800'
+                }`}
+              >
+                <Icon className="w-5 h-5" />
+                <span>{label}</span>
+              </Link>
+            ))}
+          </nav>
+
+          {venueSwitcher('mobile')}
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full px-4 py-3 rounded-xl text-base font-semibold text-rose-300 bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 transition flex items-center justify-center space-x-2"
+          >
+            <LogOut className="w-5 h-5" />
+            <span>Log out</span>
+          </button>
+        </div>
       )}
+    </header>
+  );
+}
+```
+
+---
+
+## 5. F5 — Hide demo credentials unless enabled
+
+### A. `backend/src/config.py`
+Directly below the `ALLOW_SELF_REGISTRATION` line, add:
+```python
+    SHOW_DEMO_LOGINS: bool = os.getenv("SHOW_DEMO_LOGINS", "false").lower() in ("true", "1", "yes")
+```
+
+### B. `backend/src/routers/auth.py` — `firebase_config` only
+In the returned dict, add this key directly after `"self_registration": ...,`:
+```python
+        "show_demo_logins": bool(settings.SHOW_DEMO_LOGINS),
+```
+
+### C. `frontend/src/firebase.js`
+In `EMPTY_STATUS`, add `show_demo_logins: false,` after `self_registration: false,`.
+
+### D. `frontend/src/pages/LoginPage.jsx`
+1. In the `fbStatus` initial `useState({...})`, add `show_demo_logins: false,` after `self_registration: false,`.
+2. Find the Quick Demo Credentials block, which opens with:
+```jsx
+          {mode === 'signin' && (
+            <div className="mb-6 p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 text-xs">
+```
+and change ONLY its opening condition to:
+```jsx
+          {mode === 'signin' && fbStatus.show_demo_logins && (
+```
+Change nothing else in this file.
+
+---
+
+## 6. F6 — User listing (`backend/src/routers/users.py`)
+Replace the ENTIRE `list_users` function with:
+```python
+@router.get("", response_model=List[UserBrief])
+async def list_users(
+    role: Optional[str] = Query(None, description="Filter users by role"),
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 24: Managers/admins only. Role filter is case-insensitive."""
+    query = select(User).where(User.is_active == True)
+    if role:
+        query = query.where(func.lower(User.role) == role.lower().strip())
+    query = query.order_by(User.first_name, User.last_name)
+    result = await db.execute(query)
+    return result.scalars().all()
+```
+
+---
+
+## 7. F7 — Swap targets limited to the venue team
+
+### A. NEW FILE `backend/src/services/team.py`
+```python
+"""
+Phase 24: Who counts as a venue's "team", and who can take over a given shift.
+Team = active workers who are on the venue whitelist OR have worked/been booked there before.
+All subqueries use an aliased Shift table so correlation is unambiguous.
+"""
+from typing import List
+from uuid import UUID
+
+from sqlalchemy import select, func, or_, exists
+from sqlalchemy.orm import aliased
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models import User, Shift, ShiftRequest, VenueWhitelist
+
+WORKED_STATUSES = ("approved", "confirmed", "checked_in", "completed", "transferred")
+ACTIVE_BOOKING_STATUSES = ("approved", "confirmed", "checked_in")
+ACTIVE_REQUEST_STATUSES = ("pending", "pending_manager_approval", "approved", "confirmed", "checked_in")
+
+
+def _team_filter(venue_id: UUID):
+    S = aliased(Shift)
+    on_whitelist = (
+        select(VenueWhitelist.id)
+        .where(
+            VenueWhitelist.venue_id == venue_id,
+            VenueWhitelist.worker_id == User.id,
+            VenueWhitelist.is_active == True,
+        )
+        .exists()
+    )
+    worked_there = (
+        select(ShiftRequest.id)
+        .join(S, ShiftRequest.shift_id == S.id)
+        .where(
+            ShiftRequest.worker_id == User.id,
+            S.venue_id == venue_id,
+            func.lower(ShiftRequest.status).in_(WORKED_STATUSES),
+        )
+        .exists()
+    )
+    return or_(on_whitelist, worked_there)
+
+
+async def get_venue_team(db: AsyncSession, venue_id: UUID, exclude_user_id: UUID = None) -> List[User]:
+    q = select(User).where(
+        func.lower(User.role) == "worker",
+        User.is_active == True,
+        _team_filter(venue_id),
+    )
+    if exclude_user_id:
+        q = q.where(User.id != exclude_user_id)
+    q = q.order_by(User.first_name.asc(), User.last_name.asc())
+    return list((await db.execute(q)).scalars().all())
+
+
+async def get_transfer_candidates(db: AsyncSession, shift: Shift, exclude_user_id: UUID) -> List[User]:
+    """Venue team members who are free during the shift and not already on/requesting it."""
+    S2 = aliased(Shift)
+    overlapping_booking = (
+        select(ShiftRequest.id)
+        .join(S2, ShiftRequest.shift_id == S2.id)
+        .where(
+            ShiftRequest.worker_id == User.id,
+            func.lower(ShiftRequest.status).in_(ACTIVE_BOOKING_STATUSES),
+            S2.start_time < shift.end_time,
+            S2.end_time > shift.start_time,
+        )
+        .exists()
+    )
+    already_on_this_shift = (
+        select(ShiftRequest.id)
+        .where(
+            ShiftRequest.worker_id == User.id,
+            ShiftRequest.shift_id == shift.id,
+            func.lower(ShiftRequest.status).in_(ACTIVE_REQUEST_STATUSES),
+        )
+        .exists()
+    )
+    q = (
+        select(User)
+        .where(
+            func.lower(User.role) == "worker",
+            User.is_active == True,
+            User.id != exclude_user_id,
+            _team_filter(shift.venue_id),
+            ~overlapping_booking,
+            ~already_on_this_shift,
+        )
+        .order_by(User.first_name.asc(), User.last_name.asc())
+    )
+    return list((await db.execute(q)).scalars().all())
+```
+
+### B. `backend/src/routers/transfers.py`
+1. Add import: `from src.services.team import get_transfer_candidates`
+2. Replace the ENTIRE `get_eligible_transfer_workers` function with:
+```python
+@router.get("/eligible-workers/{shift_id}", response_model=List[UserBrief])
+async def get_eligible_transfer_workers(
+    shift_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Phase 24: Venue team members who are free for this shift."""
+    shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
+    if not shift:
+        raise HTTPException(status_code=404, detail="Shift not found.")
+    return await get_transfer_candidates(db, shift, exclude_user_id=current_user.id)
+```
+3. In `propose_shift_transfer`, directly AFTER step `# 5. Check if target worker is already booked for this slot` (the `await check_double_booking(...)` call) and BEFORE `# Create transfer record`, add:
+```python
+    # 6. Phase 24: target must be on this venue's team and free
+    candidates = await get_transfer_candidates(db, shift, exclude_user_id=current_user.id)
+    if to_worker.id not in {c.id for c in candidates}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can only hand this shift to someone on this venue's team who is free at that time."
+        )
+```
+
+### C. `backend/src/routers/venues.py` — `get_venue_workers`
+1. Add import: `from src.services.team import get_venue_team`
+2. Replace the body's `result = await db.execute(select(User)...)` query and `return result.scalars().all()` with:
+```python
+    return await get_venue_team(db, venue_id, exclude_user_id=current_user.id)
+```
+(keep the venue-exists 404 check above it). Update the docstring to `"""Phase 24: Active workers on this venue's team (whitelisted or worked here before)."""`
+
+### D. `frontend/src/components/TransferModal.jsx`
+1. Inside `fetchWorkers`, replace the entire block from `let res;` through the closing `}` of the `if (venueId) { ... } else { ... }` statement with:
+```jsx
+        const res = await api.get(`/transfers/eligible-workers/${selectedShiftId}`);
+```
+(Remove the now-unused `currentShift` / `venueId` lines above it only if your linter complains; leaving them is fine.)
+2. Replace the empty-state text `No other workers found available for transfer.` with:
+```
+No one on this venue's team is free for this shift. Ask your manager to add teammates, or release the shift instead.
 ```
 
 ---
@@ -1098,15 +716,12 @@ docker compose up -d --build backend frontend
 ```
 
 Verify:
-1. **Registration defaults to worker:** sign up a new account from the login page ("New here? Create a worker account") → Admin Panel → Users shows them with a green **Worker** badge.
-2. **Promote to manager:** Admin Panel → Users → pencil icon on that user → **Venue Manager** → the Save button stays disabled until a venue is checked → check one venue → Save → badge turns amber, "Affiliated Venues" shows the venue.
-3. That user refreshes the browser (or signs out/in) → lands on / can open **Venue Manager View** showing the assigned venue.
-4. Promote them to a second venue (edit → check two venues) → their dashboard header shows a venue dropdown; switching reloads shifts, approvals, and the board for that venue.
-5. Demote them back to **Worker** with no venues checked → their manager rows are gone (`GET /api/venues/managed` as them returns 403, since they're a worker now), and "Venue Manager View" no longer opens.
-6. Edit your OWN user → role buttons are disabled with "You can't change your own role."; `PATCH /api/admin/users/{your_id}` with `{"role":"worker"}` → 400.
-7. With only one platform admin, try to demote or deactivate them from another admin session → 400 "Cannot remove the last active platform admin."
-8. A venue manager with zero venues (e.g. created via API) → dashboard shows "No venue assigned yet" (NOT another venue's data).
-9. **Posted Shifts board:** create "Friday Gala" with Bartender ×2 and AV Tech ×1 → the board shows ONE event card with two position rows, each with rate, tips badge, and 0/2, 0/1 filled.
-10. As a worker, request the Bartender position → board shows an amber "1 request to review" on the event and a request count on the Bartender row → **View Roster** → the worker appears under Bartender → **Requested** with Approve/Deny → Approve → they move to **Assigned** (Confirmed), counts update without a page reload.
-11. Upcoming / Past / All toggle changes the list; Calendar view shows one entry per event, amber when requests are pending; clicking an entry opens the same roster modal.
-12. The existing Approval Queue and Pending Transfers sections still work unchanged.
+1. **F1:** As a brand-new worker (0 ratings), request a normal (non-auto-confirm) shift at a venue where you are NOT on the team → it shows **Pending** and appears in the manager's Approval Queue. Backend log shows `Condition 3 NOT MET ... 0 ratings`.
+2. **F1:** Admin → Create Venue → the auto-approve field is blank by default; venues table shows **Manual review** for venues without a threshold.
+3. **F2:** `curl -H "Authorization: Bearer <token>" https://dev-scheduler.jaccollective.com/api/users/me` → 200 with `role`, `venue_ids`, `experience_history`. Same for `/api/auth/me`. Promote a user to Venue Manager in Admin → that user refreshes their browser → the navbar shows **My Venue** and `/venue` loads their venue (no re-login).
+4. **F3:** Admin → Create Venue with manager email `nobody@example.com` → error "No account exists for nobody@example.com…", and NO venue is created. With an existing worker's email → venue created, that user is now a Venue Manager. With your own admin email → venue created, you stay Platform Admin.
+5. **F4:** On a phone (or browser dev tools at 375px width): hamburger button top-right → menu shows name/role, view links, (admin) venue switcher, and Log out; tapping a link navigates and closes the menu. Desktop (≥1024px) looks the same as before.
+6. **F5:** Login page shows NO "Quick Demo Credentials" box. Add `SHOW_DEMO_LOGINS=true` to `.secrets/.secrets.env`, run `docker compose up -d backend`, hard-refresh → box appears.
+7. **F6:** As a worker, `GET /api/users` → 403. As a manager, `GET /api/users?role=worker` → list of active workers.
+8. **F7:** As a worker holding a confirmed shift, open **Transfer** → only workers who are on that venue's team (whitelisted or have worked there) AND free at that time are listed. `POST /api/transfers/propose` targeting a random worker from another venue → 400 "You can only hand this shift to someone on this venue's team…".
+9. Approval Queue, Posted Shifts board, clock in/out, drop, and existing transfers still work.

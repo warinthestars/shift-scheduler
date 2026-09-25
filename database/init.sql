@@ -50,7 +50,7 @@ CREATE TABLE venues (
     lat DOUBLE PRECISION NOT NULL,
     lng DOUBLE PRECISION NOT NULL,
     geofence_radius_meters INT NOT NULL DEFAULT 100,
-    auto_approve_rating_threshold DOUBLE PRECISION DEFAULT 4.5,
+    auto_approve_rating_threshold DOUBLE PRECISION,
     logo_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
