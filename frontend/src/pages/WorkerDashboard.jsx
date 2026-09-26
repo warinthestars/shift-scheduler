@@ -14,10 +14,11 @@ import EventListingCard from '../components/EventListingCard';
 import EventListingModal from '../components/EventListingModal';
 import WorkerCalendar from '../components/WorkerCalendar';
 import ShiftDetailsModal from '../components/ShiftDetailsModal';
-import { fmtDateTime } from '../utils/venueTime';
+import { fmtDateTime, fmtTime } from '../utils/venueTime';
 import {
-  STATUS_LABELS, PENDING_STATUSES, dayGroupLabel, isOnDay, downloadIcs, mapsUrl,
+  STATUS_LABELS, PENDING_STATUSES, dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
 } from '../utils/listingFormat';
+import { getCurrentPosition } from '../utils/geo';
 
 const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in'];
 
@@ -105,40 +106,48 @@ export default function WorkerDashboard() {
   };
 
   // Hour tracking Clock In / Clock Out
-  const handleClockIn = async (shiftId) => {
+  // Phase 27: `item` is the calendar item for this booking (geofence + clock-in window info).
+  const handleClockIn = async (shiftId, item) => {
     try {
       setClockActionLoading(shiftId);
-      await api.post(`/shifts/${shiftId}/clock-in`);
+      let body = {};
+      if (item?.geofence_on) {
+        setNotification({ type: 'info', message: 'Checking your location…' });
+        body = await getCurrentPosition(); // throws a friendly Error if blocked / unavailable
+      }
+      const res = await api.post(`/shifts/${shiftId}/clock-in`, body);
       setActiveClockIns((prev) => new Set([...prev, shiftId]));
       setNotification({
-        type: 'success',
-        message: '⏱️ Clocked in! Time tracking has commenced for this shift.',
+        type: res.data?.geo_status === 'outside_geofence' ? 'info' : 'success',
+        message: `⏱️ ${res.data?.message || 'Clocked in.'}`,
       });
-      fetchWorkerData();
+      fetchWorkerData(false);
     } catch (err) {
       setNotification({
         type: 'error',
-        message: err.response?.data?.detail || 'Failed to clock in.',
+        message: err.response?.data?.detail || err.message || 'Failed to clock in.',
       });
     } finally {
       setClockActionLoading(null);
     }
   };
 
-  const handleClockOut = async (shiftId) => {
+  const handleClockOut = async (shiftId, item) => {
     try {
       setClockActionLoading(shiftId);
-      await api.post(`/shifts/${shiftId}/clock-out`);
+      // Clock-out is never blocked by location; we only record it when the check is on.
+      const body = item?.geofence_on ? await getCurrentPosition({ timeoutMs: 8000 }).catch(() => ({})) : {};
+      const res = await api.post(`/shifts/${shiftId}/clock-out`, body);
       setActiveClockIns((prev) => {
         const updated = new Set(prev);
         updated.delete(shiftId);
         return updated;
       });
       setNotification({
-        type: 'success',
-        message: '🏁 Clocked out! Shift hours recorded successfully.',
+        type: res.data?.status === 'undone' ? 'info' : 'success',
+        message: `🏁 ${res.data?.message || 'Clocked out.'}`,
       });
-      fetchWorkerData();
+      fetchWorkerData(false);
     } catch (err) {
       setNotification({
         type: 'error',
@@ -267,7 +276,7 @@ export default function WorkerDashboard() {
     return listings.filter((l) => {
       const tz = l.venue?.timezone;
       if (q) {
-        const hay = [l.title, l.venue?.name, l.venue?.address, ...l.positions.map((p) => p.role_type)]
+        const hay = [l.title, l.venue?.name, l.venue?.address, l.location?.name, l.location?.address, ...l.positions.map((p) => p.role_type)]
           .join(' ')
           .toLowerCase();
         if (!hay.includes(q)) return false;
@@ -329,7 +338,7 @@ export default function WorkerDashboard() {
       title: `${shift.title} — ${shift.role_type || 'Shift'} (${shift.venue?.name || ''})`,
       start: shift.start_time,
       end: shift.end_time,
-      location: shift.venue?.address,
+      location: calendarByRequest.get(req.id) ? whereOf(calendarByRequest.get(req.id)).address : shift.venue?.address,
       description: [shift.event_notes, shift.description, shift.venue?.arrival_instructions].filter(Boolean).join('\n\n'),
     });
   };
@@ -343,6 +352,12 @@ export default function WorkerDashboard() {
     const isCompleted = statusLower === 'completed';
     const isPending = PENDING_STATUSES.includes(statusLower);
     const isClockLoading = clockActionLoading === shiftId;
+    // Phase 27: clock-in window + where to go, from the calendar item
+    const calItem = calendarByRequest.get(req.id);
+    const opensAt = calItem?.clock_in_opens_at ? new Date(calItem.clock_in_opens_at) : null;
+    const tooEarly = !!opensAt && Date.now() < opensAt.getTime();
+    const shiftEnded = shift?.end_time ? Date.now() >= new Date(shift.end_time).getTime() : false;
+    const place = calItem ? whereOf(calItem) : shift?.venue;
 
     return (
       <div
@@ -418,9 +433,9 @@ export default function WorkerDashboard() {
             </button>
           )}
 
-          {(isApproved || isCheckedIn) && shift?.venue && (
+          {(isApproved || isCheckedIn) && place && (
             <a
-              href={mapsUrl(shift.venue)}
+              href={mapsUrl(place)}
               target="_blank"
               rel="noreferrer"
               className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition flex items-center space-x-1"
@@ -503,22 +518,32 @@ export default function WorkerDashboard() {
             isCheckedIn ? (
               <button
                 type="button"
-                onClick={() => handleClockOut(shiftId)}
+                onClick={() => handleClockOut(shiftId, calItem)}
                 disabled={isClockLoading}
                 className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-rose-600/20 disabled:opacity-50"
               >
                 <Timer className="w-3.5 h-3.5" />
                 <span>{isClockLoading ? 'Saving...' : 'Clock Out'}</span>
               </button>
+            ) : shiftEnded ? (
+              <span className="text-[11px] text-slate-500 italic">Shift ended. Ask your manager to add your hours.</span>
+            ) : tooEarly ? (
+              <span
+                title="Clock-in opens shortly before your shift starts"
+                className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-slate-400 border border-slate-700 text-xs font-semibold flex items-center space-x-1.5"
+              >
+                <Timer className="w-3.5 h-3.5" />
+                <span>Clock in opens {fmtTime(opensAt, shift?.venue?.timezone)}</span>
+              </span>
             ) : (
               <button
                 type="button"
-                onClick={() => handleClockIn(shiftId)}
+                onClick={() => handleClockIn(shiftId, calItem)}
                 disabled={isClockLoading}
                 className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-emerald-600/20 disabled:opacity-50"
               >
                 <Timer className="w-3.5 h-3.5" />
-                <span>{isClockLoading ? 'Saving...' : 'Clock In'}</span>
+                <span>{isClockLoading ? 'Saving...' : calItem?.geofence_on ? 'Clock In (uses location)' : 'Clock In'}</span>
               </button>
             )
           )}

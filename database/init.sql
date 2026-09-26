@@ -59,6 +59,10 @@ CREATE TABLE venues (
     default_shift_notes TEXT,
     approval_policy VARCHAR(20) NOT NULL DEFAULT 'team_auto',
     show_rates_publicly BOOLEAN NOT NULL DEFAULT TRUE,
+    geofence_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    geofence_buffer_meters INT NOT NULL DEFAULT 150,
+    clock_in_early_minutes INT NOT NULL DEFAULT 30,
+    auto_clock_out_hours INT NOT NULL DEFAULT 2,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -119,6 +123,23 @@ CREATE TABLE venue_positions (
 
 CREATE INDEX idx_venue_positions_venue ON venue_positions(venue_id);
 
+-- Phase 27: saved service locations (caterers, off-site events)
+CREATE TABLE venue_locations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    address TEXT NOT NULL,
+    lat DOUBLE PRECISION,
+    lng DOUBLE PRECISION,
+    radius_meters INT,
+    notes TEXT,
+    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_venue_location_name UNIQUE (venue_id, name)
+);
+CREATE INDEX idx_venue_locations_venue ON venue_locations(venue_id);
+
 -- ------------------------------------------------------------------------------
 -- 4c. Shift Events (Phase 25.2): one posting = one event with 1+ positions
 -- ------------------------------------------------------------------------------
@@ -133,6 +154,9 @@ CREATE TABLE shift_events (
     staff_notes TEXT,
     info_updated_at TIMESTAMPTZ,
     info_change TEXT,
+    location_id UUID REFERENCES venue_locations(id) ON DELETE SET NULL,
+    geofence_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
+    location_staff_notes TEXT,
     cancelled_at TIMESTAMPTZ,
     cancel_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -272,6 +296,7 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_venues_updated_at BEFORE UPDATE ON venues FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_venue_positions_updated_at BEFORE UPDATE ON venue_positions FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
+CREATE TRIGGER trg_venue_locations_updated_at BEFORE UPDATE ON venue_locations FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shift_events_updated_at BEFORE UPDATE ON shift_events FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shifts_updated_at BEFORE UPDATE ON shifts FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 CREATE TRIGGER trg_shift_requests_updated_at BEFORE UPDATE ON shift_requests FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
@@ -284,7 +309,16 @@ CREATE TABLE time_entries (
     worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
     clock_in_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    clock_out_time TIMESTAMPTZ
+    clock_out_time TIMESTAMPTZ,
+    clock_in_lat DOUBLE PRECISION,
+    clock_in_lng DOUBLE PRECISION,
+    clock_in_distance_m INT,
+    clock_in_geo_status VARCHAR(20) NOT NULL DEFAULT 'not_checked',
+    clock_out_lat DOUBLE PRECISION,
+    clock_out_lng DOUBLE PRECISION,
+    clock_out_distance_m INT,
+    clock_out_geo_status VARCHAR(20),
+    auto_closed BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_time_entries_worker ON time_entries(worker_id);

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle } from 'lucide-react';
+import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle, MapPin } from 'lucide-react';
 import ModalShell from './ModalShell';
 import TipBadge from './TipBadge';
 import ReliabilityBadge from './ReliabilityBadge';
@@ -22,6 +22,9 @@ export default function EventRosterModal({
   const subtitle = (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <span>{fmtDate(event.start_time, timeZone)} • {fmtTimeRange(event.start_time, event.end_time, timeZone)}</span>
+      {event.location_name && (
+        <span className="inline-flex items-center gap-1 text-emerald-300"><MapPin className="w-3 h-3" />{event.location_name}</span>
+      )}
       <span>Staffed <strong className="text-white">{event.total_assigned}/{event.total_capacity}</strong></span>
       {event.total_requested > 0 && (
         <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">

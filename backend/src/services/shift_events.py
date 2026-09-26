@@ -10,9 +10,13 @@ from fastapi import HTTPException
 from sqlalchemy import select, func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import ShiftEvent, Shift, ShiftRequest, Venue, User
+from src.models import ShiftEvent, Shift, ShiftRequest, Venue, User, VenueLocation
 from src.schemas import (
     EventCreate, EventUpdate, EventPositionInput, EventDetail, EventDetailPosition,
+)
+from src.services.locations import (
+    resolve_event_location, validate_geofence_mode, check_geofence_possible, geofence_on,
+    usage_counts, to_response as location_response,
 )
 
 VALID_APPROVAL_MODES = ("venue_default", "auto", "manual")
@@ -133,11 +137,20 @@ async def _request_counts(db: AsyncSession, shift_ids) -> Dict:
     return out
 
 
-async def create_event_with_positions(db: AsyncSession, venue: Venue, user: User, data: EventCreate) -> ShiftEvent:
+async def create_event_with_positions(
+    db: AsyncSession, venue: Venue, user: User, data: EventCreate, allow_archived_location: bool = False,
+) -> ShiftEvent:
     _validate_basics(data)
     for p in data.positions:
         _validate_position(p)
+    mode = validate_geofence_mode(data.geofence_mode)
     try:
+        # Phase 27: where is it? (a typed-in new location is saved to the venue's list here)
+        location = await resolve_event_location(
+            db, venue, data.location_id, data.new_location,
+            current_location_id=data.location_id if allow_archived_location else None,
+        )
+        check_geofence_possible(mode, venue, location)
         event = ShiftEvent(
             venue_id=venue.id,
             created_by_user_id=user.id,
@@ -146,6 +159,9 @@ async def create_event_with_positions(db: AsyncSession, venue: Venue, user: User
             end_time=_as_utc(data.end_time),
             notes=_clean(data.notes),
             staff_notes=_clean(data.staff_notes),
+            location_id=location.id if location is not None else None,
+            geofence_mode=mode,
+            location_staff_notes=_clean(data.location_staff_notes),
         )
         db.add(event)
         await db.flush()
@@ -202,7 +218,8 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
 
     try:
         # Phase 26.2: work out what changed so booked workers are told
-        tz_name = await db.scalar(select(Venue.timezone).where(Venue.id == event.venue_id)) or "America/New_York"
+        venue = await db.scalar(select(Venue).where(Venue.id == event.venue_id))
+        tz_name = venue.timezone or "America/New_York"
         new_title = data.title.strip()[:255]
         new_start, new_end = _as_utc(data.start_time), _as_utc(data.end_time)
         changes = []
@@ -216,6 +233,29 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
             changes.append("Event notes updated")
         if _clean(event.staff_notes) != _clean(data.staff_notes):
             changes.append("Staff-only notes updated")
+
+        # Phase 27: location, location notes for staff, and the clock-in location check
+        mode = validate_geofence_mode(data.geofence_mode)
+        old_location = await db.scalar(select(VenueLocation).where(VenueLocation.id == event.location_id)) if event.location_id else None
+        new_location = await resolve_event_location(
+            db, venue, data.location_id, data.new_location, current_location_id=event.location_id,
+        )
+        check_geofence_possible(mode, venue, new_location)
+        old_loc_id = old_location.id if old_location is not None else None
+        new_loc_id = new_location.id if new_location is not None else None
+        if old_loc_id != new_loc_id:
+            old_name = old_location.name if old_location is not None else "venue address"
+            new_name = new_location.name if new_location is not None else "venue address"
+            changes.append(f"Location changed: {old_name} → {new_name}")
+        if _clean(event.location_staff_notes) != _clean(data.location_staff_notes):
+            changes.append("Location notes for staff updated")
+        was_on = geofence_on(event, venue)
+        event.geofence_mode = mode
+        now_on = geofence_on(event, venue)
+        if was_on != now_on:
+            changes.append("Clock-in location check turned " + ("on" if now_on else "off"))
+        event.location_id = new_loc_id
+        event.location_staff_notes = _clean(data.location_staff_notes)
 
         event.title = new_title
         event.start_time = new_start
@@ -260,6 +300,9 @@ async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail
         .order_by(Shift.created_at.asc(), Shift.role_type.asc())
     )).scalars().all()
     counts = await _request_counts(db, [s.id for s in shifts])
+    venue = await db.scalar(select(Venue).where(Venue.id == event.venue_id))
+    location = await db.scalar(select(VenueLocation).where(VenueLocation.id == event.location_id)) if event.location_id else None
+    loc_counts = await usage_counts(db, [location.id]) if location is not None else {}
     return EventDetail(
         id=event.id,
         venue_id=event.venue_id,
@@ -268,6 +311,10 @@ async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail
         end_time=event.end_time,
         notes=event.notes,
         staff_notes=event.staff_notes,
+        location=location_response(location, loc_counts) if location is not None else None,
+        geofence_mode=event.geofence_mode or "venue_default",
+        geofence_on=geofence_on(event, venue) if venue is not None else False,
+        location_staff_notes=event.location_staff_notes,
         cancelled=event.cancelled_at is not None,
         cancel_reason=event.cancel_reason,
         positions=[
@@ -435,7 +482,10 @@ async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, use
             end_time=new_start + duration,
             notes=event.notes,
             staff_notes=event.staff_notes,
+            location_id=event.location_id,
+            geofence_mode=event.geofence_mode or "venue_default",
+            location_staff_notes=event.location_staff_notes,
             positions=positions,
-        ))
+        ), allow_archived_location=True)
         created.append(ev)
     return created

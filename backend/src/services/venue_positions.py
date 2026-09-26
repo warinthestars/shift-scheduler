@@ -17,7 +17,10 @@ DEFAULT_POSITIONS = [
 ]
 
 VALID_APPROVAL_POLICIES = ("manual", "team_auto", "everyone_auto")
-NOT_NULL_VENUE_FIELDS = ("name", "address", "lat", "lng", "geofence_radius_meters", "timezone", "approval_policy")
+NOT_NULL_VENUE_FIELDS = (
+    "name", "address", "lat", "lng", "geofence_radius_meters", "timezone", "approval_policy",
+    "geofence_enabled", "geofence_buffer_meters", "clock_in_early_minutes", "auto_clock_out_hours",   # Phase 27
+)
 TEXT_VENUE_FIELDS = (
     "name", "address", "phone", "arrival_instructions", "dress_code",
     "default_shift_notes", "description", "logo_url", "timezone", "approval_policy",
@@ -68,6 +71,13 @@ def clean_venue_payload(data: dict) -> dict:
         raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180.")
     if "geofence_radius_meters" in data and not (25 <= int(data["geofence_radius_meters"]) <= 5000):
         raise HTTPException(status_code=400, detail="Clock-in radius must be between 25 and 5000 meters.")
+    # Phase 27: clock-in settings
+    if "geofence_buffer_meters" in data and not (0 <= int(data["geofence_buffer_meters"]) <= 2000):
+        raise HTTPException(status_code=400, detail="Geofence buffer must be between 0 and 2000 meters.")
+    if "clock_in_early_minutes" in data and not (0 <= int(data["clock_in_early_minutes"]) <= 240):
+        raise HTTPException(status_code=400, detail="Early clock-in must be between 0 and 240 minutes.")
+    if "auto_clock_out_hours" in data and not (1 <= int(data["auto_clock_out_hours"]) <= 12):
+        raise HTTPException(status_code=400, detail="Auto clock-out must be between 1 and 12 hours after the shift ends.")
     if data.get("auto_approve_rating_threshold") is not None:
         t = float(data["auto_approve_rating_threshold"])
         if not (1.0 <= t <= 5.0):

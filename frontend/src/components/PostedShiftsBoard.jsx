@@ -3,7 +3,7 @@ import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { enUS } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal } from 'lucide-react';
+import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin } from 'lucide-react';
 import api from '../api/client';
 import TipBadge from './TipBadge';
 import PayLabel from './PayLabel';
@@ -195,6 +195,9 @@ export default function PostedShiftsBoard({
                           {ev.description && <div className="text-[11px] text-slate-400 line-clamp-1">{ev.description}</div>}
                           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
                             <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{timeStr}</span>
+                            {ev.location_name && (
+                              <span className="inline-flex items-center gap-1 text-emerald-300"><MapPin className="w-3 h-3" />{ev.location_name}</span>
+                            )}
                             <span>Staffed <strong className="text-white">{ev.total_assigned}/{ev.total_capacity}</strong></span>
                             {ev.total_requested > 0 && (
                               <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">

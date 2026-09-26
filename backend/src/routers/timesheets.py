@@ -145,7 +145,11 @@ async def add_time_entry(
         raise HTTPException(status_code=400, detail="Time can only be added for people booked on this shift.")
     cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
     try:
-        entry = TimeEntry(worker_id=req.worker_id, shift_id=req.shift_id, clock_in_time=cin, clock_out_time=cout)
+        entry = TimeEntry(
+            worker_id=req.worker_id, shift_id=req.shift_id, clock_in_time=cin, clock_out_time=cout,
+            clock_in_geo_status="manager",                                   # Phase 27: manager override
+            clock_out_geo_status="manager" if cout is not None else None,
+        )
         db.add(entry)
         await db.flush()
         if cout is not None:
@@ -176,6 +180,12 @@ async def edit_time_entry(
     cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
     try:
         old = fmt_range(entry.clock_in_time, entry.clock_out_time)
+        # Phase 27: a time the manager typed in is a manager override
+        if as_utc(entry.clock_in_time) != cin:
+            entry.clock_in_geo_status = "manager"
+        if cout is not None and (entry.clock_out_time is None or as_utc(entry.clock_out_time) != cout):
+            entry.clock_out_geo_status = "manager"
+            entry.auto_closed = False
         entry.clock_in_time = cin
         entry.clock_out_time = cout
         if cout is not None and (req.status or "").lower() == "checked_in":

@@ -169,6 +169,10 @@ class VenueBase(BaseModel):
     default_shift_notes: Optional[str] = None
     approval_policy: str = "team_auto"
     show_rates_publicly: bool = True
+    geofence_enabled: bool = False          # Phase 27
+    geofence_buffer_meters: int = 150       # Phase 27
+    clock_in_early_minutes: int = 30        # Phase 27
+    auto_clock_out_hours: int = 2           # Phase 27
 
 class VenueCreate(BaseModel):
     name: str
@@ -186,6 +190,10 @@ class VenueCreate(BaseModel):
     default_shift_notes: Optional[str] = None
     approval_policy: Optional[str] = "team_auto"
     show_rates_publicly: Optional[bool] = True
+    geofence_enabled: Optional[bool] = False          # Phase 27
+    geofence_buffer_meters: Optional[int] = 150       # Phase 27
+    clock_in_early_minutes: Optional[int] = 30        # Phase 27
+    auto_clock_out_hours: Optional[int] = 2           # Phase 27
     manager_email: Optional[EmailStr] = None
     initial_manager_email: Optional[EmailStr] = None
 
@@ -206,6 +214,10 @@ class VenueUpdateSettings(BaseModel):
     default_shift_notes: Optional[str] = None
     approval_policy: Optional[str] = None
     show_rates_publicly: Optional[bool] = None
+    geofence_enabled: Optional[bool] = None           # Phase 27
+    geofence_buffer_meters: Optional[int] = None      # Phase 27
+    clock_in_early_minutes: Optional[int] = None      # Phase 27
+    auto_clock_out_hours: Optional[int] = None        # Phase 27
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -372,6 +384,11 @@ class TimeEntryResponse(BaseModel):
     shift_id: UUID
     clock_in_time: datetime
     clock_out_time: Optional[datetime] = None
+    clock_in_geo_status: Optional[str] = None       # Phase 27
+    clock_in_distance_m: Optional[int] = None       # Phase 27
+    clock_out_geo_status: Optional[str] = None      # Phase 27
+    clock_out_distance_m: Optional[int] = None      # Phase 27
+    auto_closed: bool = False                       # Phase 27
 
     class Config:
         from_attributes = True
@@ -464,6 +481,7 @@ class EventPosition(BaseModel):
 class VenueEventResponse(BaseModel):
     event_key: str
     event_id: Optional[UUID] = None
+    location_name: Optional[str] = None      # Phase 27: None = venue address
     cancelled: bool = False
     cancel_reason: Optional[str] = None
     title: str
@@ -584,6 +602,7 @@ class PublicEventPosition(BaseModel):
 class PublicVenueEvent(BaseModel):
     event_key: str
     event_id: Optional[UUID] = None     # Phase 26.1: opens the worker listing modal
+    location_name: Optional[str] = None # Phase 27
     title: str
     start_time: datetime
     end_time: datetime
@@ -596,6 +615,72 @@ class PublicVenueEvent(BaseModel):
 # ------------------------------------------------------------------------------
 # Phase 25.2: Events (create / edit / detail)
 # ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Phase 27: Saved locations, geofence, clocking
+# ------------------------------------------------------------------------------
+class VenueLocationInput(BaseModel):
+    name: str
+    address: str
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    radius_meters: Optional[int] = None      # None = use the venue's radius
+    notes: Optional[str] = None              # "Location notes": everyone viewing the event sees these
+
+
+class VenueLocationUpdate(BaseModel):
+    """Partial update: only fields that are sent change. Edits are global (every event using it)."""
+    name: Optional[str] = None
+    address: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    clear_pin: bool = False                  # true = remove lat/lng
+    radius_meters: Optional[int] = None
+    clear_radius: bool = False               # true = back to the venue radius
+    notes: Optional[str] = None
+
+
+class VenueLocationResponse(BaseModel):
+    id: UUID
+    venue_id: UUID
+    name: str
+    address: str
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    radius_meters: Optional[int] = None
+    notes: Optional[str] = None
+    is_archived: bool = False
+    event_count: int = 0                     # how many events use it (all time)
+    upcoming_count: int = 0                  # upcoming, not-cancelled events using it
+
+    class Config:
+        from_attributes = True
+
+
+class ListingLocation(BaseModel):
+    """What a worker sees for an event held somewhere other than the venue's own address."""
+    id: UUID
+    name: str
+    address: str
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class ClockBody(BaseModel):
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy_m: Optional[float] = None
+
+
+class ClockResult(BaseModel):
+    status: str                               # clocked_in | clocked_out | undone | already_clocked_in
+    message: str
+    entry: Optional[TimeEntryResponse] = None
+    geo_status: Optional[str] = None          # on_site | outside_geofence | not_checked
+    distance_m: Optional[int] = None
+    late_minutes: int = 0
+
+
 class EventPositionInput(BaseModel):
     shift_id: Optional[UUID] = None          # present = update existing position, absent = new
     role_type: str
@@ -617,6 +702,10 @@ class EventCreate(BaseModel):
     end_time: datetime
     notes: Optional[str] = None
     staff_notes: Optional[str] = None        # Phase 26.2: only shown to booked staff
+    location_id: Optional[UUID] = None       # Phase 27: saved location (None = venue address)
+    new_location: Optional[VenueLocationInput] = None   # Phase 27: create + save to the list, then use it
+    geofence_mode: str = "venue_default"     # Phase 27: venue_default | on | off
+    location_staff_notes: Optional[str] = None          # Phase 27: event-specific, confirmed staff only
     positions: List[EventPositionInput]
 
 
@@ -626,6 +715,10 @@ class EventUpdate(BaseModel):
     end_time: datetime
     notes: Optional[str] = None
     staff_notes: Optional[str] = None        # Phase 26.2
+    location_id: Optional[UUID] = None       # Phase 27
+    new_location: Optional[VenueLocationInput] = None   # Phase 27
+    geofence_mode: str = "venue_default"     # Phase 27
+    location_staff_notes: Optional[str] = None          # Phase 27
     positions: List[EventPositionInput]
 
 
@@ -655,6 +748,10 @@ class EventDetail(BaseModel):
     end_time: datetime
     notes: Optional[str] = None
     staff_notes: Optional[str] = None        # Phase 26.2
+    location: Optional[VenueLocationResponse] = None    # Phase 27 (None = venue address)
+    geofence_mode: str = "venue_default"                # Phase 27
+    geofence_on: bool = False                           # Phase 27: effective setting
+    location_staff_notes: Optional[str] = None          # Phase 27
     cancelled: bool = False
     cancel_reason: Optional[str] = None
     positions: List[EventDetailPosition]
@@ -706,6 +803,12 @@ class TimeEntryRow(BaseModel):
     clock_out_time: Optional[datetime] = None
     hours: float
     edited: bool = False
+    clock_in_geo_status: Optional[str] = None    # Phase 27
+    clock_in_distance_m: Optional[int] = None
+    clock_out_geo_status: Optional[str] = None
+    clock_out_distance_m: Optional[int] = None
+    auto_closed: bool = False
+    late_minutes: int = 0
 
 
 class TimesheetPerson(BaseModel):
@@ -787,6 +890,9 @@ class EventListing(BaseModel):
     event_id: UUID
     title: str
     notes: Optional[str] = None
+    location: Optional[ListingLocation] = None        # Phase 27: None = at the venue's address
+    location_staff_notes: Optional[str] = None        # Phase 27: booked viewers only
+    geofence_on: bool = False                         # Phase 27
     start_time: datetime
     end_time: datetime
     hours: float
@@ -839,6 +945,11 @@ class WorkerCalendarItem(BaseModel):
     end_time: datetime
     hours: float
     venue: ListingVenue
+    location: Optional[ListingLocation] = None    # Phase 27: None = at the venue's address
+    location_staff_notes: Optional[str] = None    # Phase 27: booked only
+    geofence_on: bool = False                     # Phase 27: phone location needed to clock in
+    clock_in_opens_at: Optional[datetime] = None  # Phase 27
+    time_entry_id: Optional[UUID] = None          # Phase 27: open entry, if clocked in
     hourly_rate: Optional[float] = None           # None = hidden until booked
     hourly_rate_max: Optional[float] = None
     pay_rate: Optional[float] = None              # manager-set rate for this person (booked only)

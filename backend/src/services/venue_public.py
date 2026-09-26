@@ -8,7 +8,7 @@ from typing import List
 from sqlalchemy import select, func, and_, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import Venue, Shift, ShiftRequest, VenuePosition, VenueManager, User, ShiftEvent
+from src.models import Venue, Shift, ShiftRequest, VenuePosition, VenueManager, User, ShiftEvent, VenueLocation
 from src.auth import normalize_role
 from src.schemas import (
     VenueDirectoryItem, PublicPosition, VenueProfileResponse,
@@ -201,11 +201,15 @@ async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope:
     mine = {sid: (st or "").lower() for sid, st in mine_rows}
 
     event_ids = {s.event_id for s in shifts if s.event_id}
-    event_notes = {}
+    event_notes, event_loc_names = {}, {}
     if event_ids:
-        event_notes = dict((await db.execute(
-            select(ShiftEvent.id, ShiftEvent.notes).where(ShiftEvent.id.in_(event_ids))
-        )).all())
+        for eid, enotes, loc_name in (await db.execute(
+            select(ShiftEvent.id, ShiftEvent.notes, VenueLocation.name)
+            .outerjoin(VenueLocation, VenueLocation.id == ShiftEvent.location_id)
+            .where(ShiftEvent.id.in_(event_ids))
+        )).all():
+            event_notes[eid] = enotes
+            event_loc_names[eid] = loc_name        # Phase 27
 
     events, order = {}, []
     for s in shifts:
@@ -214,6 +218,7 @@ async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope:
             events[key] = {
                 "event_key": key,
                 "event_id": s.event_id,
+                "location_name": event_loc_names.get(s.event_id) if s.event_id else None,
                 "title": s.title or "Shift",
                 "start_time": s.start_time,
                 "end_time": s.end_time,

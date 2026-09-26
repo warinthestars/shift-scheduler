@@ -3,7 +3,7 @@ import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, St
 import PayLabel from './PayLabel';
 import { fmtTimeRange } from '../utils/venueTime';
 import {
-  hoursText, listingPayText, estPayText, STATUS_LABELS, PENDING_STATUSES, BOOKED_STATUSES,
+  hoursText, listingPayText, estPayText, STATUS_LABELS, PENDING_STATUSES, BOOKED_STATUSES, whereOf,
 } from '../utils/listingFormat';
 
 const MAX_ROWS = 4;
@@ -85,12 +85,16 @@ export default function EventListingCard({ listing, onOpen }) {
               </span>
             )}
           </p>
-          {listing.venue?.address && (
-            <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
-              <MapPin className="w-3 h-3 flex-shrink-0" />
-              <span className="truncate">{listing.venue.address}</span>
-            </p>
-          )}
+          {(() => {
+            const where = whereOf(listing);   // Phase 27: event location if set, else the venue
+            if (!where.address) return null;
+            return (
+              <p className={`text-[11px] flex items-center gap-1 mt-0.5 ${where.isOffsite ? 'text-emerald-300' : 'text-slate-500'}`}>
+                <MapPin className="w-3 h-3 flex-shrink-0" />
+                <span className="truncate">{where.isOffsite ? `At ${where.name} · ${where.address}` : where.address}</span>
+              </p>
+            );
+          })()}
         </div>
       </div>
 

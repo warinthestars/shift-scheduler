@@ -36,7 +36,7 @@ function AgendaRow({ entry, onSelectItem, onSelectListing }) {
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Open shift</div>
           <div className="text-sm font-bold text-slate-200 truncate">{l.title}</div>
           <div className="text-xs text-slate-400 truncate">
-            {l.venue?.name} · {l.total_spots_left} spot{l.total_spots_left === 1 ? '' : 's'} open
+            {l.venue?.name}{l.location ? ` · at ${l.location.name}` : ''} · {l.total_spots_left} spot{l.total_spots_left === 1 ? '' : 's'} open
           </div>
         </div>
         <ArrowRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
@@ -79,7 +79,7 @@ function AgendaRow({ entry, onSelectItem, onSelectListing }) {
           {it.role_type} · {it.title}
         </div>
         <div className="text-xs text-slate-400 flex items-center gap-1 truncate">
-          <MapPin className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{it.venue?.name}</span>
+          <MapPin className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{it.venue?.name}{it.location ? ` · at ${it.location.name}` : ''}</span>
         </div>
       </div>
       <ArrowRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
@@ -183,6 +183,7 @@ export default function WorkerCalendar({ items = [], openListings = [], onSelect
                 </div>
                 <div className="text-sm text-slate-300 mt-1 truncate">
                   {nextShift.role_type} · {nextShift.title} · {nextShift.venue?.name}
+                  {nextShift.location ? ` · at ${nextShift.location.name}` : ''}
                 </div>
               </div>
               <div className="flex sm:flex-col items-start sm:items-end gap-2 flex-shrink-0">

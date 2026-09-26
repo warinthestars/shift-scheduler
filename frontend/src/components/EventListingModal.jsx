@@ -10,7 +10,7 @@ import PayLabel from './PayLabel';
 import TipBadge from './TipBadge';
 import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
 import {
-  hoursText, estPayText, mapsUrl, downloadIcs, STATUS_LABELS, PENDING_STATUSES,
+  hoursText, estPayText, mapsUrl, downloadIcs, STATUS_LABELS, PENDING_STATUSES, whereOf,
 } from '../utils/listingFormat';
 
 // Statuses on a position that the server will refuse to re-open.
@@ -154,8 +154,14 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
       title: `${listing.title} — ${mine?.role_type || 'Shift'} (${listing.venue?.name || ''})`,
       start: listing.start_time,
       end: listing.end_time,
-      location: listing.venue?.address,
-      description: [listing.notes, listing.venue?.arrival_instructions, listing.venue?.dress_code && `Dress code: ${listing.venue.dress_code}`]
+      location: whereOf(listing).address,
+      description: [
+        listing.notes,
+        listing.location?.notes,
+        listing.location_staff_notes,
+        listing.venue?.arrival_instructions,
+        listing.venue?.dress_code && `Dress code: ${listing.venue.dress_code}`,
+      ]
         .filter(Boolean)
         .join('\n\n'),
     });
@@ -276,8 +282,14 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
             )}
           </p>
           {/* Phase 26.2: staff-only notes, shown once confirmed */}
-          {(listing.staff_notes || bookedPosition?.staff_notes) && (
+          {(listing.staff_notes || bookedPosition?.staff_notes || listing.location_staff_notes) && (
             <div className="mt-3 space-y-2">
+              {listing.location_staff_notes && (
+                <div className="p-2.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs whitespace-pre-line">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1 mb-0.5"><Lock className="w-3 h-3" /> At this location, for confirmed staff</div>
+                  {listing.location_staff_notes}
+                </div>
+              )}
               {listing.staff_notes && (
                 <div className="p-2.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs whitespace-pre-line">
                   <div className="font-bold text-indigo-300 flex items-center gap-1 mb-0.5"><Lock className="w-3 h-3" /> For confirmed staff</div>
@@ -306,12 +318,17 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
               {fmtTimeRange(listing.start_time, listing.end_time, tz)} · {hoursText(listing.hours)}
             </InfoBlock>
             <InfoBlock icon={MapPin} label="Where">
-              <span className="font-semibold">{listing.venue?.name}</span>
-              {listing.venue?.address ? `\n${listing.venue.address}` : ''}
+              {/* Phase 27: event location (caterer / off-site) if set, otherwise the venue */}
+              <span className="font-semibold">{whereOf(listing).name}</span>
+              {whereOf(listing).address ? `\n${whereOf(listing).address}` : ''}
+              {whereOf(listing).isOffsite ? `\nStaffed by ${listing.venue?.name}` : ''}
             </InfoBlock>
+            {listing.geofence_on && (
+              <p className="text-[11px] text-slate-400 pl-6">You'll need to be at this location (with phone location on) to clock in.</p>
+            )}
             <div className="flex flex-wrap gap-2 pl-6">
               <a
-                href={mapsUrl(listing.venue)}
+                href={mapsUrl(whereOf(listing))}
                 target="_blank"
                 rel="noreferrer"
                 className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1"
@@ -332,9 +349,10 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
             )}
           </div>
 
-          {(listing.notes || listing.venue?.default_shift_notes || listing.venue?.dress_code || listing.venue?.arrival_instructions) && (
+          {(listing.notes || listing.location?.notes || listing.venue?.default_shift_notes || listing.venue?.dress_code || listing.venue?.arrival_instructions) && (
             <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
               <InfoBlock icon={StickyNote} label="About this event">{listing.notes}</InfoBlock>
+              <InfoBlock icon={MapPin} label="About this location">{listing.location?.notes}</InfoBlock>
               <InfoBlock icon={Shirt} label="Dress code">{listing.venue?.dress_code}</InfoBlock>
               <InfoBlock icon={MapPin} label="When you arrive">{listing.venue?.arrival_instructions}</InfoBlock>
               <InfoBlock icon={Info} label="Venue notes">{listing.venue?.default_shift_notes}</InfoBlock>

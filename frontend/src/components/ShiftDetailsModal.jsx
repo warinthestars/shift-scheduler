@@ -8,9 +8,9 @@ import api from '../api/client';
 import ModalShell from './ModalShell';
 import PayLabel from './PayLabel';
 import TipBadge from './TipBadge';
-import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
+import { fmtLongDate, fmtTimeRange, fmtTime } from '../utils/venueTime';
 import {
-  hoursText, mapsUrl, downloadIcs, countdownText, calendarTone,
+  hoursText, mapsUrl, downloadIcs, countdownText, calendarTone, whereOf,
 } from '../utils/listingFormat';
 
 function NoteCard({ icon: Icon, label, text, tone = 'default', badge = null }) {
@@ -74,8 +74,10 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
       title: `${item.role_type} — ${item.title} (${item.venue?.name || ''})`,
       start: item.start_time,
       end: item.end_time,
-      location: item.venue?.address,
+      location: whereOf(item).address,
       description: [
+        item.location?.notes && `About this location: ${item.location.notes}`,
+        item.location_staff_notes && `At this location (staff): ${item.location_staff_notes}`,
         item.venue?.arrival_instructions && `When you arrive: ${item.venue.arrival_instructions}`,
         item.venue?.dress_code && `Dress code: ${item.venue.dress_code}`,
         item.event_notes,
@@ -184,12 +186,20 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
               <MapPin className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
               <div className="min-w-0">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Where</div>
-                <div className="text-sm font-semibold text-white">{item.venue?.name}</div>
-                {item.venue?.address && <div className="text-xs text-slate-300">{item.venue.address}</div>}
+                {/* Phase 27: event location (caterer / off-site) if set, otherwise the venue */}
+                <div className="text-sm font-semibold text-white">{whereOf(item).name}</div>
+                {whereOf(item).address && <div className="text-xs text-slate-300">{whereOf(item).address}</div>}
+                {whereOf(item).isOffsite && <div className="text-[11px] text-slate-500">Staffed by {item.venue?.name}</div>}
               </div>
             </div>
+            {item.booked && !off && (
+              <div className="pl-6 text-[11px] text-slate-400 space-y-0.5">
+                {item.clock_in_opens_at && <div>Clock-in opens at {fmtTime(item.clock_in_opens_at, tz)}.</div>}
+                {item.geofence_on && <div>You'll need to be at this location with phone location on to clock in.</div>}
+              </div>
+            )}
             <div className="flex flex-wrap gap-2 pl-6">
-              <a href={mapsUrl(item.venue)} target="_blank" rel="noreferrer"
+              <a href={mapsUrl(whereOf(item))} target="_blank" rel="noreferrer"
                 className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1">
                 <Navigation className="w-3 h-3 text-emerald-400" /> Directions
               </a>
@@ -228,6 +238,14 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
             <StickyNote className="w-4 h-4 text-emerald-400" /> Shift notes
           </h4>
           <NoteCard icon={MapPin} label="When you arrive" text={item.venue?.arrival_instructions} />
+          <NoteCard icon={MapPin} label="About this location" text={item.location?.notes} />
+          <NoteCard
+            icon={Lock}
+            label="At this location, for confirmed staff"
+            text={item.location_staff_notes}
+            tone="staff"
+            badge={<span className="ml-auto text-[10px] text-indigo-300">Only booked staff see this</span>}
+          />
           <NoteCard icon={Shirt} label="Dress code" text={item.venue?.dress_code} />
           <NoteCard icon={Calendar} label="About this event" text={item.event_notes} />
           <NoteCard icon={Briefcase} label={`${item.role_type} notes`} text={item.role_notes} />
@@ -257,6 +275,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
           {![
             item.venue?.arrival_instructions, item.venue?.dress_code, item.event_notes, item.role_notes,
             item.event_staff_notes, item.position_staff_notes, item.venue?.default_shift_notes,
+            item.location?.notes, item.location_staff_notes,
           ].some((t) => t && String(t).trim()) && !item.staff_notes_locked && (
             <p className="text-xs text-slate-500 italic">No notes for this shift.</p>
           )}

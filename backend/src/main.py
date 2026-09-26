@@ -15,6 +15,7 @@ from src.routers.events import router as events_router
 from src.routers.timesheets import router as timesheets_router
 from src.routers.listings import router as listings_router
 from src.routers.me import router as me_router
+from src.routers.locations import router as locations_router
 
 
 # Configure logging
@@ -104,6 +105,7 @@ app.include_router(events_router)
 app.include_router(timesheets_router)
 app.include_router(listings_router)
 app.include_router(me_router)
+app.include_router(locations_router)
 
 
 @app.get("/healthz", tags=["System"])

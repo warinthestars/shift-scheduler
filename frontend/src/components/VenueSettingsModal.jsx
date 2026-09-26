@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff } from 'lucide-react';
+import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff, Clock } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
+import VenueLocationsPanel from './VenueLocationsPanel';
 import { TIMEZONE_OPTIONS } from '../utils/venueTime';
 
 const POLICIES = [
@@ -24,6 +25,10 @@ function emptyForm(venue) {
     lat: venue?.lat != null ? String(venue.lat) : '',
     lng: venue?.lng != null ? String(venue.lng) : '',
     geofence_radius_meters: String(venue?.geofence_radius_meters ?? 150),
+    geofence_enabled: !!venue?.geofence_enabled,                                  // Phase 27
+    geofence_buffer_meters: String(venue?.geofence_buffer_meters ?? 150),         // Phase 27
+    clock_in_early_minutes: String(venue?.clock_in_early_minutes ?? 30),          // Phase 27
+    auto_clock_out_hours: String(venue?.auto_clock_out_hours ?? 2),               // Phase 27
     approval_policy: venue?.approval_policy || 'team_auto',
     show_rates_publicly: venue?.show_rates_publicly ?? true,
     auto_approve_rating_threshold:
@@ -214,6 +219,10 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
       phone: form.phone.trim(),
       timezone: form.timezone,
       geofence_radius_meters: parseInt(form.geofence_radius_meters, 10) || 150,
+      geofence_enabled: !!form.geofence_enabled,
+      geofence_buffer_meters: Number.isNaN(parseInt(form.geofence_buffer_meters, 10)) ? 150 : parseInt(form.geofence_buffer_meters, 10),
+      clock_in_early_minutes: Number.isNaN(parseInt(form.clock_in_early_minutes, 10)) ? 30 : parseInt(form.clock_in_early_minutes, 10),
+      auto_clock_out_hours: parseInt(form.auto_clock_out_hours, 10) || 2,
       approval_policy: form.approval_policy,
       show_rates_publicly: !!form.show_rates_publicly,
       auto_approve_rating_threshold: form.auto_approve_rating_threshold === '' ? null : parseFloat(form.auto_approve_rating_threshold),
@@ -265,7 +274,7 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
 
   const tabs = isEdit ? (
     <div className="flex gap-2">
-      {[{ id: 'details', label: 'Details' }, { id: 'positions', label: 'Positions & pay' }].map((t) => (
+      {[{ id: 'details', label: 'Details' }, { id: 'positions', label: 'Positions & pay' }, { id: 'locations', label: 'Locations' }].map((t) => (
         <button key={t.id} type="button" onClick={() => setTab(t.id)}
           className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
           {t.label}
@@ -277,7 +286,7 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
   const footer = (
     <>
       <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-        {tab === 'positions' ? 'Done' : 'Cancel'}
+        {tab === 'details' ? 'Cancel' : 'Done'}
       </button>
       {tab === 'details' && (
         <button type="button" onClick={handleSave} disabled={saving}
@@ -354,6 +363,50 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
                   Check this spot on Google Maps <ExternalLink className="w-3 h-3" />
                 </a>
               )}
+
+              {/* Phase 27: opt-in location check */}
+              <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-slate-800">
+                <input type="checkbox" checked={!!form.geofence_enabled}
+                  onChange={(e) => setForm({ ...form, geofence_enabled: e.target.checked })}
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-white">Check location when workers clock in</span>
+                  <span className="block text-xs text-slate-400">
+                    Default for every shift. Each shift can turn it on or off (e.g. off for an off-site event).
+                  </span>
+                </span>
+              </label>
+              {form.geofence_enabled && (
+                <div>
+                  <label className={labelCls}>Buffer outside the radius (m)</label>
+                  <input type="number" min="0" max="2000" value={form.geofence_buffer_meters} onChange={set('geofence_buffer_meters')} className={`${inputCls} w-32`} />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Inside the radius: clocked in. Within the buffer: clocked in but flagged “Outside geofence” for you.
+                    Farther out: clock-in is blocked.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Phase 27: clock-in window + auto clock-out */}
+            <div className={cardCls}>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <Clock className="w-4 h-4 text-emerald-400" /> Clock-in rules
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Clock-in opens (minutes before start)</label>
+                  <input type="number" min="0" max="240" value={form.clock_in_early_minutes} onChange={set('clock_in_early_minutes')} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Auto clock-out (hours after end)</label>
+                  <input type="number" min="1" max="12" value={form.auto_clock_out_hours} onChange={set('auto_clock_out_hours')} className={inputCls} />
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Workers can clock in from this many minutes before start until the shift ends. Anyone still clocked in
+                this many hours after the end is clocked out at the scheduled end and flagged “Auto-closed” on the time sheet.
+              </p>
             </div>
 
             <div className={cardCls}>
@@ -435,6 +488,8 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
             </div>
           </div>
         </div>
+      ) : tab === 'locations' ? (
+        <VenueLocationsPanel venue={venue} onError={setError} />
       ) : (
         <div className="space-y-4">
           <p className="text-xs text-slate-400">
