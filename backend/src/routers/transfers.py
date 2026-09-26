@@ -15,6 +15,7 @@ from src.auth import get_current_user, require_manager_or_admin, normalize_role,
 from src.services.auto_confirm import check_double_booking
 from src.services.booking import withdraw_other_pending_in_event
 from src.services import notify_events
+from src.services import activity
 from src.services.team import get_transfer_candidates
 
 router = APIRouter(prefix="/api/transfers", tags=["Shift Transfers"])
@@ -267,6 +268,8 @@ async def manager_review_shift_transfer(
 
     # Uses verify_venue_access dependency logic
     await verify_venue_access(transfer.shift.venue_id, current_user, db)
+    hand_names = (f"{transfer.from_worker.first_name if transfer.from_worker else 'Someone'} → "
+                  f"{transfer.to_worker.first_name if transfer.to_worker else 'someone'}")   # Phase 29.1 (read before commit)
 
     action = body.action.lower().strip()
     if action == "approve":
@@ -329,6 +332,11 @@ async def manager_review_shift_transfer(
     await db.commit()
     await db.refresh(transfer)
     await notify_events.transfer_changed(transfer.id)   # Phase 28 (after commit; never raises)
+    # Phase 29.1: activity log
+    await activity.for_shift(
+        "transfer_approved" if transfer.status == "approved" else "transfer_denied", transfer.shift_id, current_user.id,
+        ("Approved hand-off " if transfer.status == "approved" else "Denied hand-off ") + hand_names + " for {what}",
+    )
     return transfer
 
 @router.post("/{id}/approve", response_model=ShiftTransferResponse)

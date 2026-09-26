@@ -31,6 +31,7 @@ CREATE TABLE users (
     total_shifts INT NOT NULL DEFAULT 0,
     firebase_uid VARCHAR(128) UNIQUE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    discoverable VARCHAR(20) NOT NULL DEFAULT 'private',   -- Phase 29.1: private | venues | everyone
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -472,3 +473,20 @@ CREATE TABLE shift_offers (
 );
 CREATE INDEX idx_shift_offers_worker ON shift_offers(worker_id, status);
 CREATE INDEX idx_shift_offers_shift ON shift_offers(shift_id, status);
+
+-- ==============================================================================
+-- Phase 29.1: Venue activity log (what happened at the venue, and who did it)
+-- ==============================================================================
+CREATE TABLE venue_activity (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    kind VARCHAR(40) NOT NULL,
+    category VARCHAR(20) NOT NULL,                        -- bookings | staffing | team | changes | alerts
+    summary VARCHAR(400) NOT NULL,
+    event_id UUID REFERENCES shift_events(id) ON DELETE SET NULL,
+    request_id UUID REFERENCES shift_requests(id) ON DELETE SET NULL,
+    worker_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_venue_activity_venue_created ON venue_activity(venue_id, created_at DESC);

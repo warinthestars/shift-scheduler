@@ -29,6 +29,7 @@ from src.services.notify_events import (
 )
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 from src.services.clock import auto_close_open_entries
+from src.services.activity import record_in
 
 logger = logging.getLogger("shiftboard.notification_worker")
 
@@ -116,13 +117,18 @@ async def scan_late(db: AsyncSession, now: datetime) -> int:
             continue
         worker = await db.scalar(select(User).where(User.id == r.worker_id))
         name = ev.title if ev else s.title
-        sent += await notify_in(
+        first_alert = await notify_in(
             db, [r.worker_id], "not_clocked_in",
             f"You haven't clocked in: {s.role_type} · {name}",
             f"Your shift started at {when_text(s.start_time, venue)}. Clock in now, or message your manager if you're running late.",
             worker_shift_link(r.id), venue_id=s.venue_id, event_id=s.event_id, request_id=r.id,
             urgent=True, dedupe_key=f"late-w:{r.id}",
         )
+        sent += first_alert
+        if first_alert:   # Phase 29.1: once per booking, in the venue's activity log
+            await record_in(db, s.venue_id, "not_clocked_in",
+                            f"{person(worker)} hadn't clocked in 10 min after the start: {s.role_type} · {name}",
+                            event_id=s.event_id, request_id=r.id, worker_id=r.worker_id)
         sent += await notify_in(
             db, await manager_ids(db, s.venue_id), "late_worker",
             f"{person(worker)} hasn't clocked in",

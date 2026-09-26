@@ -20,6 +20,7 @@ from src.routers.notifications import router as notifications_router
 from src.routers.team import router as team_router
 from src.routers.invites import router as invites_router
 from src.routers.staffing import router as staffing_router
+from src.routers.activity import router as activity_router
 from src.services.notification_worker import notification_worker_loop
 
 
@@ -128,6 +129,7 @@ app.include_router(notifications_router)
 app.include_router(team_router)
 app.include_router(invites_router)
 app.include_router(staffing_router)
+app.include_router(activity_router)
 
 
 @app.get("/healthz", tags=["System"])

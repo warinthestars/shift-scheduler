@@ -14,6 +14,7 @@ from src.schemas import EventListing, PositionRequestBody, PositionRequestResult
 from src.auth import get_current_user, require_worker
 from src.services.listings import build_listings
 from src.services.booking import request_position, withdraw_request
+from src.services import activity
 
 router = APIRouter(prefix="/api/listings", tags=["Listings"])
 
@@ -78,6 +79,7 @@ async def withdraw_my_request(
 ):
     """Worker withdraws their own request that is still waiting for approval."""
     event_id = await withdraw_request(db, current_user, request_id)
+    await activity.for_request("request_withdrawn", request_id, current_user.id)   # Phase 29.1
     await db.refresh(current_user)
     rows = await build_listings(db, current_user, event_id=event_id) if event_id else []
     return PositionRequestResult(

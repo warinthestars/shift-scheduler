@@ -37,8 +37,31 @@ def new_token() -> str:
     return secrets.token_urlsafe(18)          # 24 URL-safe characters
 
 
-def invite_url(token: str) -> str:
+def invite_url(token: str, base: Optional[str] = None) -> str:
+    """Phase 29.1: `base` = the site the manager is using (see public_base), else APP_BASE_URL."""
+    if base:
+        return f"{base.rstrip('/')}/join/{token}"
     return absolute_link(f"/join/{token}")
+
+
+def public_base(request) -> Optional[str]:
+    """
+    Phase 29.1: the public address for invite links.
+    APP_BASE_URL wins when it's set to a real address. If it's unset or still points at localhost,
+    use the address the manager's browser is on (Origin / Referer header), so links and QR codes
+    work before APP_BASE_URL is configured.
+    """
+    cfg = (settings.APP_BASE_URL or "").rstrip("/")
+    if cfg and "localhost" not in cfg and "127.0.0.1" not in cfg:
+        return cfg
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if not origin:
+        ref = request.headers.get("referer") or ""
+        m = re.match(r"^(https?://[^/]+)", ref)
+        origin = m.group(1) if m else ""
+    if origin.startswith("http://") or origin.startswith("https://"):
+        return origin
+    return cfg or None
 
 
 def qr_svg(url: str) -> str:
@@ -102,9 +125,9 @@ async def regenerate_link(db: AsyncSession, venue_id, created_by) -> VenueInvite
     return await get_or_create_link(db, venue_id, created_by)
 
 
-async def send_invite(inv: VenueInvite, venue: Venue, inviter_name: str) -> Tuple[bool, bool]:
+async def send_invite(inv: VenueInvite, venue: Venue, inviter_name: str, base: Optional[str] = None) -> Tuple[bool, bool]:
     """Emails / texts one personal invite. Never raises. Returns (emailed, texted)."""
-    url = invite_url(inv.token)
+    url = invite_url(inv.token, base)
     first = (inv.first_name or "").strip()
     hello = f"Hi {first}, " if first else ""
     title = f"Join {venue.name} on ShiftBoard"

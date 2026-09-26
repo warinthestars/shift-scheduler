@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, func, or_, update
+from sqlalchemy import select, func, or_, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import (
@@ -377,12 +377,23 @@ async def list_candidates(
         people = {k: v for k, v in people.items() if k in set(worker_ids)}
     elif q and q.strip():
         term = f"%{q.strip().lower()}%"
+        # Phase 29.1: outside the team, only people who let venues find them (or an exact email)
+        related = (
+            select(VenueWhitelist.worker_id).where(VenueWhitelist.venue_id == venue_id)
+            .union(select(ShiftRequest.worker_id).join(Shift, Shift.id == ShiftRequest.shift_id).where(Shift.venue_id == venue_id))
+        )
         for u in (await db.execute(
             select(User).where(
                 func.lower(User.role) == "worker", User.is_active == True,
                 or_(
-                    func.lower(User.first_name + " " + User.last_name).like(term),
-                    func.lower(User.email).like(term),
+                    and_(
+                        or_(
+                            func.lower(User.first_name + " " + User.last_name).like(term),
+                            func.lower(User.email).like(term),
+                        ),
+                        or_(User.id.in_(related), User.discoverable.in_(("venues", "everyone"))),
+                    ),
+                    func.lower(User.email) == q.strip().lower(),
                 ),
             ).limit(25)
         )).scalars().all():

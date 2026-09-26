@@ -33,6 +33,7 @@ from src.services.shift_views import to_shift_responses
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 from src.services.clock import auto_close_open_entries, late_minutes as clock_late_minutes
 from src.services.locations import load_locations
+from src.services import activity
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -193,9 +194,11 @@ async def get_venue_pending_requests(
             Shift.venue_id == venue_id,
             func.lower(ShiftRequest.status).in_([
                 "pending", "pending_manager_approval"
-            ])
+            ]),
+            Shift.end_time > datetime.now(timezone.utc),          # Phase 29.1: not for shifts that are over
+            func.upper(Shift.status) != "CANCELLED",
         )
-        .order_by(ShiftRequest.created_at.asc())
+        .order_by(Shift.start_time.asc(), ShiftRequest.created_at.asc())
     )
     return result.scalars().all()
 
@@ -237,6 +240,9 @@ async def update_venue_settings(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update venue: {str(e)}")
+    changed = ", ".join(k.replace("_", " ") for k in list(data.keys())[:6])
+    await activity.for_venue("venue_settings", venue_id, current_user.id,
+                             f"Updated venue settings{': ' + changed if changed else ''}")   # Phase 29.1
     return venue
 
 

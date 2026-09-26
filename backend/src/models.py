@@ -59,6 +59,7 @@ class User(Base):
     rating_count = Column(Integer, nullable=False, default=0)
     total_shifts = Column(Integer, nullable=False, default=0)
     firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
+    discoverable = Column(String(20), nullable=False, default="private")   # Phase 29.1: private | venues | everyone
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -500,6 +501,21 @@ class ShiftOffer(Base):
     message = Column(Text, nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     responded_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+class VenueActivity(Base):
+    """Phase 29.1: one line in a venue's activity log."""
+    __tablename__ = "venue_activity"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    kind = Column(String(40), nullable=False)
+    category = Column(String(20), nullable=False)
+    summary = Column(String(400), nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="SET NULL"), nullable=True)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="SET NULL"), nullable=True)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 class ShiftTransfer(Base):

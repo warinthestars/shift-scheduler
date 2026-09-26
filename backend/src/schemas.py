@@ -415,6 +415,7 @@ class ShiftTransferResponse(BaseModel):
     from_worker_id: UUID
     to_worker_id: UUID
     status: str
+    notes: Optional[str] = None              # Phase 29.1: the note with the hand-off (was never sent)
     created_at: datetime
     updated_at: datetime
     shift: Optional[ShiftResponse] = None
@@ -1035,6 +1036,7 @@ class NotificationPreferencesResponse(BaseModel):
     email_available: bool = True             # server can send email (not console-only)
     sms_available: bool = False              # server has SMS configured
     is_manager: bool = False                 # show manager-only options
+    discoverable: str = "private"            # Phase 29.1: private | venues | everyone
 
 
 class NotificationPreferencesUpdate(BaseModel):
@@ -1048,6 +1050,7 @@ class NotificationPreferencesUpdate(BaseModel):
     clear_quiet_hours: bool = False
     timezone: Optional[str] = None
     phone: Optional[str] = None              # saved to users.phone; "" clears it
+    discoverable: Optional[str] = None       # Phase 29.1: private | venues | everyone
 
 
 # ------------------------------------------------------------------------------
@@ -1060,7 +1063,7 @@ class TeamMember(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
-    status: str = "active"                   # active | removed | blocked
+    status: str = "active"                   # active | removed | blocked | none (Phase 29.1: no relationship yet)
     on_list: bool = False                    # has a team-list row (added / invited), not just "worked here"
     source: Optional[str] = None             # manager | invite | import | admin | worked
     positions: List[str] = []
@@ -1091,7 +1094,8 @@ class TeamMemberUpdateResult(BaseModel):
 
 
 class TeamAddExisting(BaseModel):
-    email: str
+    email: Optional[str] = None              # Phase 29.1: email OR worker_id (from People search)
+    worker_id: Optional[UUID] = None
     positions: List[str] = []
 
 
@@ -1294,3 +1298,61 @@ class RatingResponse(BaseModel):
     review: Optional[str] = None
     aggregate_rating: float
     rating_count: int
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.1: People search, worker profile, team summary, activity log
+# ------------------------------------------------------------------------------
+class PersonResult(BaseModel):
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: Optional[str] = None              # masked (j***@gmail.com) unless related or exact match
+    phone: Optional[str] = None              # only for people related to this venue
+    avatar_url: Optional[str] = None
+    relation: str = "none"                   # active | removed | blocked | worked | requested | none
+    positions: List[str] = []
+    aggregate_rating: float = 5.0
+    rating_count: int = 0
+    reliability_score: Optional[float] = None
+    can_add: bool = True
+
+
+class WorkerHistoryItem(BaseModel):
+    request_id: UUID
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    status: str
+    late_minutes: Optional[int] = None
+    my_rating: Optional[int] = None
+    would_book_again: Optional[bool] = None
+
+
+class WorkerProfile(BaseModel):
+    member: TeamMember
+    history: List[WorkerHistoryItem] = []    # this venue only, newest first
+    pending_here: int = 0                    # waiting requests at this venue
+    other_venues: int = 0                    # other venues they've worked at (count only)
+
+
+class TeamSummary(BaseModel):
+    active: int = 0
+    removed: int = 0
+    blocked: int = 0
+    invites_pending: int = 0
+    managers: int = 0
+
+
+class ActivityItem(BaseModel):
+    id: UUID
+    kind: str
+    category: str
+    summary: str
+    actor_name: Optional[str] = None
+    event_id: Optional[UUID] = None
+    request_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
+    created_at: datetime

@@ -472,3 +472,43 @@ async def _team_joined(db: AsyncSession, venue_id, worker_id) -> None:
 
 async def team_joined(venue_id, worker_id) -> None:
     await _run("team_joined", _team_joined, venue_id, worker_id)
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 29.1: added to a team, shift dropped
+# ---------------------------------------------------------------------------------------------
+async def _team_added(db: AsyncSession, venue_id, worker_id) -> None:
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if venue is None:
+        return
+    await notify_in(
+        db, [worker_id], "team_added",
+        f"You're on the {venue.name} team",
+        f"A manager at {venue.name} added you to their team. You'll see their shifts first and get alerts when they post new ones.",
+        "/worker", venue_id=venue_id, dedupe_key=f"team-added:{venue_id}:{worker_id}:{datetime.now(timezone.utc).date()}",
+    )
+
+
+async def team_added(venue_id, worker_id) -> None:
+    await _run("team_added", _team_added, venue_id, worker_id)
+
+
+async def _shift_dropped(db: AsyncSession, request_id) -> None:
+    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
+    if req is None:
+        return
+    shift, venue, event, _ = await _shift_bundle(db, req.shift_id)
+    worker = await db.scalar(select(User).where(User.id == req.worker_id))
+    if shift is None:
+        return
+    await notify_in(
+        db, await manager_ids(db, shift.venue_id), "shift_dropped",
+        f"{person(worker)} dropped {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event.",
+        manager_link(shift.venue_id, shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id,
+        request_id=req.id, urgent=is_soon(shift.start_time), dedupe_key=f"dropped:{req.id}",
+    )
+
+
+async def shift_dropped(request_id) -> None:
+    await _run("shift_dropped", _shift_dropped, request_id)

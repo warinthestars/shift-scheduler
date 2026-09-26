@@ -17,6 +17,7 @@ from src.services.shift_events import (
 )
 from src.services.timesheets import build_timesheet
 from src.services import notify_events
+from src.services import activity
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/events", tags=["Events"])
@@ -50,6 +51,7 @@ async def create_event(
     event = await create_event_with_positions(db, venue, current_user, data)
     detail = await build_event_detail(db, event)
     await notify_events.new_event_posted(event.id)          # Phase 28: tell the venue's team
+    await activity.for_event("event_created", event.id, current_user.id)   # Phase 29.1
     return detail
 
 
@@ -76,6 +78,8 @@ async def edit_event(
     await db.refresh(event)
     detail = await build_event_detail(db, event)
     await notify_events.event_updated(event_id, since)      # Phase 28: tell booked people what changed
+    changed_now = event.info_updated_at is not None and event.info_updated_at >= since
+    await activity.for_event("event_updated", event_id, current_user.id, (event.info_change or "") if changed_now else "")   # Phase 29.1
     return detail
 
 
@@ -91,6 +95,8 @@ async def cancel_event(
     event = await _load_managed_event(db, event_id, current_user)
     affected = await cancel_shifts(db, event, None, body.reason)
     await notify_events.shifts_cancelled(event_id, since)   # Phase 28
+    await activity.for_event("event_cancelled", event_id, current_user.id,
+                             f"{affected} {'person' if affected == 1 else 'people'} affected. Reason: {body.reason}")   # Phase 29.1
     return {"detail": "Event cancelled.", "people_affected": affected}
 
 
@@ -107,6 +113,9 @@ async def cancel_position(
     event = await _load_managed_event(db, event_id, current_user)
     affected = await cancel_shifts(db, event, [shift_id], body.reason)
     await notify_events.shifts_cancelled(event_id, since)   # Phase 28
+    await activity.for_shift("position_cancelled", shift_id, current_user.id,
+                             f"Cancelled {{what}} · {affected} {'person' if affected == 1 else 'people'} affected. "
+                             f"Reason: {(body.reason or '').replace('{', '{{').replace('}', '}}')}")   # Phase 29.1
     return {"detail": "Position cancelled.", "people_affected": affected}
 
 
@@ -123,6 +132,9 @@ async def duplicate(
     created = await duplicate_event(db, event, venue, current_user, body.dates)
     for ev in created:
         await notify_events.new_event_posted(ev.id)         # Phase 28
+    if created:
+        await activity.for_event("event_duplicated", event_id, current_user.id,
+                                 f"{len(created)} {'copy' if len(created) == 1 else 'copies'}")   # Phase 29.1
     return DuplicateEventResult(created_event_ids=[e.id for e in created], count=len(created))
 
 
