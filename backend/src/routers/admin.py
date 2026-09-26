@@ -200,7 +200,7 @@ async def create_admin_user(
                     if role_clean == "venue_manager":
                         db.add(VenueManager(venue_id=v.id, user_id=new_user.id, is_primary=False))
                     elif role_clean == "worker":
-                        db.add(VenueWhitelist(venue_id=v.id, worker_id=new_user.id, is_active=True))
+                        db.add(VenueWhitelist(venue_id=v.id, worker_id=new_user.id, is_active=True, status="active", source="admin"))
 
         await db.commit()
     except HTTPException:
@@ -286,12 +286,26 @@ async def update_admin_user(
 
         if rebuild_venues:
             await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id))
-            await db.execute(delete(VenueWhitelist).where(VenueWhitelist.worker_id == user.id))
+            # Phase 29: keep team notes / positions / blocks. Only ACTIVE team rows for venues that were
+            # unticked are deleted (as before); removed/blocked rows are kept; ticked venues are (re)activated.
+            wl_rows = {
+                r.venue_id: r for r in (await db.execute(
+                    select(VenueWhitelist).where(VenueWhitelist.worker_id == user.id)
+                )).scalars().all()
+            }
+            for vid, r in wl_rows.items():
+                if (new_role != "worker" or vid not in target_ids) and (r.status or "active") == "active":
+                    await db.delete(r)
             for idx, vid in enumerate(target_ids):
                 if new_role == "venue_manager":
                     db.add(VenueManager(venue_id=vid, user_id=user.id, is_primary=(idx == 0)))
                 elif new_role == "worker":
-                    db.add(VenueWhitelist(venue_id=vid, worker_id=user.id, is_active=True))
+                    existing_wl = wl_rows.get(vid)
+                    if existing_wl is not None:
+                        existing_wl.status = "active"
+                        existing_wl.is_active = True
+                    else:
+                        db.add(VenueWhitelist(venue_id=vid, worker_id=user.id, is_active=True, status="active", source="admin"))
 
         await db.commit()
     except HTTPException:

@@ -9,6 +9,7 @@ import VenueManagerDashboard from './pages/VenueManagerDashboard';
 import AdminPanel from './pages/AdminPanel';
 import VenuesDirectory from './pages/VenuesDirectory';
 import VenueProfile from './pages/VenueProfile';
+import JoinPage from './pages/JoinPage';
 
 function HomeRedirect() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -46,6 +47,9 @@ export default function App() {
           <Routes>
             {/* Public Login & Register */}
             <Route path="/login" element={<LoginPage />} />
+
+            {/* Phase 29: team invite link / QR code (works signed in or out) */}
+            <Route path="/join/:token" element={<JoinPage />} />
 
             {/* Smart Home Redirect */}
             <Route path="/" element={<HomeRedirect />} />

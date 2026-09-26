@@ -83,7 +83,7 @@ export default function ShiftRosterModal({ selectedShift, onClose, setSelectedSh
           ) : (
             assignedWorkers.map((worker) => {
               const fullName = `${worker.first_name || ''} ${worker.last_name || ''}`.trim() || 'Assigned Worker';
-              const rating = Number(worker.aggregate_rating || 5.0).toFixed(1);
+              const rating = worker.rating_count ? Number(worker.aggregate_rating || 0).toFixed(1) : 'New';   // Phase 29
 
               return (
                 <div

@@ -98,7 +98,7 @@ class User(Base):
     managed_venues = relationship("VenueManager", back_populates="user", cascade="all, delete-orphan")
     shift_requests = relationship("ShiftRequest", back_populates="worker", foreign_keys="ShiftRequest.worker_id")
     ratings_received = relationship("Rating", back_populates="worker", foreign_keys="Rating.worker_id")
-    whitelist_entries = relationship("VenueWhitelist", back_populates="worker", cascade="all, delete-orphan")
+    whitelist_entries = relationship("VenueWhitelist", back_populates="worker", cascade="all, delete-orphan", foreign_keys="VenueWhitelist.worker_id")
 
 class Venue(Base):
     __tablename__ = "venues"
@@ -176,15 +176,19 @@ class VenueWhitelist(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
     worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    notes = Column(Text, nullable=True)
-    is_active = Column(Boolean, nullable=False, default=True)
+    notes = Column(Text, nullable=True)                                      # Phase 29: private manager notes
+    is_active = Column(Boolean, nullable=False, default=True)                # TRUE only when status == 'active'
+    status = Column(String(20), nullable=False, default="active")            # Phase 29: active | removed | blocked
+    positions = Column(ARRAY(String), nullable=False, default=list)          # Phase 29
+    source = Column(String(20), nullable=False, default="manager")           # Phase 29: manager | invite | import | admin
+    added_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     __table_args__ = (UniqueConstraint("venue_id", "worker_id", name="uq_venue_whitelist"),)
 
     venue = relationship("Venue", back_populates="whitelists")
-    worker = relationship("User", back_populates="whitelist_entries")
+    worker = relationship("User", back_populates="whitelist_entries", foreign_keys=[worker_id])
 
 class VenuePosition(Base):
     __tablename__ = "venue_positions"
@@ -368,7 +372,9 @@ class Rating(Base):
     rated_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     rating = Column(Integer, CheckConstraint("rating >= 1 AND rating <= 5"), nullable=False)
     review = Column(Text, nullable=True)
+    would_book_again = Column(Boolean, nullable=True)                        # Phase 29
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     shift_request = relationship("ShiftRequest", back_populates="rating")
     venue = relationship("Venue")
@@ -457,6 +463,44 @@ class NotificationPreference(Base):
     quiet_end = Column(Integer, nullable=True)
     timezone = Column(String(64), nullable=False, default="America/New_York")
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+class VenueInvite(Base):
+    """Phase 29: an invite to join a venue's team. kind 'link' = the shareable link / QR code; 'personal' = one person."""
+    __tablename__ = "venue_invites"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String(64), nullable=False, unique=True)
+    kind = Column(String(20), nullable=False, default="personal")          # link | personal
+    email = Column(String(255), nullable=True)
+    phone = Column(String(30), nullable=True)
+    first_name = Column(String(100), nullable=True)
+    last_name = Column(String(100), nullable=True)
+    positions = Column(ARRAY(String), nullable=False, default=list)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    uses = Column(Integer, nullable=False, default=0)
+    accepted_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+class ShiftOffer(Base):
+    """Phase 29: a manager offers a position to 1-5 people; the first to accept is booked."""
+    __tablename__ = "shift_offers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    batch_id = Column(UUID(as_uuid=True), nullable=False)
+    offered_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(20), nullable=False, default="pending")          # pending | accepted | declined | filled | cancelled
+    message = Column(Text, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    responded_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 class ShiftTransfer(Base):
     __tablename__ = "shift_transfers"

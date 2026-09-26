@@ -625,8 +625,14 @@ export default function AdminPanel() {
                           {/* Rating & Shifts */}
                           <td className="py-3.5 px-5">
                             <div className="flex items-center space-x-1.5 text-slate-300">
-                              <span className="text-amber-400 font-bold">★ {Number(u.aggregate_rating || 5.0).toFixed(1)}</span>
-                              <span className="text-slate-500 text-[11px]">({u.rating_count || 0})</span>
+                              {u.rating_count ? (
+                                <>
+                                  <span className="text-amber-400 font-bold">★ {Number(u.aggregate_rating || 0).toFixed(1)}</span>
+                                  <span className="text-slate-500 text-[11px]">({u.rating_count})</span>
+                                </>
+                              ) : (
+                                <span className="text-sky-300 font-semibold text-[11px]">New</span>
+                              )}
                               <span className="text-slate-600">•</span>
                               <span className="text-slate-400 text-[11px]">{u.total_shifts || 0} shifts</span>
                             </div>

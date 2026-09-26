@@ -12,14 +12,15 @@ from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import (
     Venue, VenueManager, VenueWhitelist, User, UserRole,
-    Shift, ShiftRequest, RequestStatus, TimeEntry, VenuePosition, ShiftEvent, TimeEntryEdit
+    Shift, ShiftRequest, RequestStatus, TimeEntry, VenuePosition, ShiftEvent, TimeEntryEdit,
+    Rating, ShiftOffer,
 )
 from src.schemas import (
     VenueCreate, VenueUpdateSettings, VenueResponse,
     WhitelistAddRequest, WhitelistResponse,
     ShiftResponse, ShiftRequestResponse,
     WorkerContactSchema, ShiftRosterResponse, UserBrief,
-    WorkerReliability, VenueEventResponse, EventPosition, RosterPerson,
+    WorkerReliability, VenueEventResponse, EventPosition, RosterPerson, PositionOffer,
     VenuePositionCreate, VenuePositionUpdate, VenuePositionResponse,
     VenueDirectoryItem, VenueProfileResponse, PublicVenueEvent
 )
@@ -426,6 +427,7 @@ async def add_worker_to_whitelist(
     )
     if existing:
         existing.is_active = True
+        existing.status = "active"          # Phase 29
         existing.notes = wl_in.notes or existing.notes
         await db.commit()
         await db.refresh(existing)
@@ -705,7 +707,8 @@ async def get_venue_roster(
                 phone=worker.phone,
                 avatar_url=worker.avatar_url,
                 bio=worker.bio,
-                aggregate_rating=rating
+                aggregate_rating=rating,
+                rating_count=int(worker.rating_count or 0),   # Phase 29
             )
             workers_by_shift[req.shift_id].append(contact)
 
@@ -802,6 +805,28 @@ async def get_venue_events(
     )).all()
     clock_state = {(sid, wid): (n > 0, n_out > 0 and n_out >= n) for sid, wid, n, n_out in te_rows}
 
+    # Phase 29: this venue's rating for each booking, and offers per position
+    req_ids = [req.id for req, _ in req_rows]
+    ratings_by_req = {
+        r.shift_request_id: r for r in (await db.execute(
+            select(Rating).where(Rating.shift_request_id.in_(req_ids))
+        )).scalars().all()
+    } if req_ids else {}
+    offers_by_shift = defaultdict(list)
+    recent_cutoff = now_utc - timedelta(days=7)
+    for o, ou in (await db.execute(
+        select(ShiftOffer, User)
+        .join(User, User.id == ShiftOffer.worker_id)
+        .where(ShiftOffer.shift_id.in_(shift_ids))
+        .order_by(ShiftOffer.created_at.asc())
+    )).all():
+        if o.status != "pending" and (o.responded_at is None or o.responded_at < recent_cutoff):
+            continue
+        offers_by_shift[o.shift_id].append(PositionOffer(
+            offer_id=o.id, worker_id=o.worker_id, first_name=ou.first_name or "", last_name=ou.last_name or "",
+            status=o.status, created_at=o.created_at, responded_at=o.responded_at,
+        ))
+
     assigned_by_shift = defaultdict(list)
     requested_by_shift = defaultdict(list)
     ack_by_request = {}   # Phase 26.2: request_id -> (info_seen_at, booked_at)
@@ -821,6 +846,11 @@ async def get_venue_events(
             clocked_in=clocked_in or req.check_in_time is not None,
             clocked_out=clocked_out or req.check_out_time is not None,
             note=req.notes,
+            rating_count=int(worker.rating_count or 0),
+            my_rating=ratings_by_req[req.id].rating if req.id in ratings_by_req else None,
+            would_book_again=ratings_by_req[req.id].would_book_again if req.id in ratings_by_req else None,
+            rating_review=ratings_by_req[req.id].review if req.id in ratings_by_req else None,
+            approval_source=req.approval_source,
         )
         if person.status in ASSIGNED_STATUSES:
             assigned_by_shift[req.shift_id].append(person)
@@ -893,6 +923,7 @@ async def get_venue_events(
             status=s.status or "OPEN",
             assigned=assigned_by_shift[s.id],
             requested=requested_by_shift[s.id],
+            offers=offers_by_shift[s.id],
         ))
 
     result = []

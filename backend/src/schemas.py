@@ -146,6 +146,7 @@ class UserBrief(BaseModel):
     email: str
     role: str
     aggregate_rating: float
+    rating_count: int = 0                    # Phase 29: 0 = "New" (no real ratings yet)
 
     class Config:
         from_attributes = True
@@ -325,6 +326,7 @@ class WorkerContactSchema(BaseModel):
     avatar_url: Optional[str] = None
     bio: Optional[str] = None
     aggregate_rating: Optional[float] = 5.0
+    rating_count: int = 0                    # Phase 29
 
     class Config:
         from_attributes = True
@@ -444,6 +446,17 @@ TokenResponse.model_rebuild()
 # ------------------------------------------------------------------------------
 # Phase 23: Posted Shifts board (event-grouped roster)
 # ------------------------------------------------------------------------------
+class PositionOffer(BaseModel):
+    """Phase 29: an offer sent for this position (shown on the manager's roster)."""
+    offer_id: UUID
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    status: str                              # pending | accepted | declined | filled | cancelled
+    created_at: datetime
+    responded_at: Optional[datetime] = None
+
+
 class RosterPerson(BaseModel):
     request_id: UUID
     worker_id: UUID
@@ -458,6 +471,11 @@ class RosterPerson(BaseModel):
     clocked_out: bool = False
     note: Optional[str] = None          # Phase 26.1: worker's note with their request
     info_seen: Optional[bool] = None    # Phase 26.2: booked person has read the latest shift info (None = nothing to read)
+    rating_count: int = 0               # Phase 29: 0 = "New"
+    my_rating: Optional[int] = None     # Phase 29: this venue's rating for THIS shift (1-5)
+    would_book_again: Optional[bool] = None
+    rating_review: Optional[str] = None
+    approval_source: Optional[str] = None   # Phase 29: e.g. manager_assign, offer
 
 
 class EventPosition(BaseModel):
@@ -476,6 +494,7 @@ class EventPosition(BaseModel):
     status: str
     assigned: List[RosterPerson] = []
     requested: List[RosterPerson] = []
+    offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
 
 
 class VenueEventResponse(BaseModel):
@@ -1029,3 +1048,249 @@ class NotificationPreferencesUpdate(BaseModel):
     clear_quiet_hours: bool = False
     timezone: Optional[str] = None
     phone: Optional[str] = None              # saved to users.phone; "" clears it
+
+
+# ------------------------------------------------------------------------------
+# Phase 29: Team, invites, direct assign / offers, ratings
+# ------------------------------------------------------------------------------
+class TeamMember(BaseModel):
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    status: str = "active"                   # active | removed | blocked
+    on_list: bool = False                    # has a team-list row (added / invited), not just "worked here"
+    source: Optional[str] = None             # manager | invite | import | admin | worked
+    positions: List[str] = []
+    notes: Optional[str] = None              # private to this venue's managers
+    shifts_worked: int = 0                   # finished shifts at this venue
+    upcoming: int = 0                        # booked, not finished yet, at this venue
+    last_worked: Optional[datetime] = None
+    aggregate_rating: float = 5.0            # across all venues
+    rating_count: int = 0                    # 0 = "New"
+    venue_rating: Optional[float] = None     # average of THIS venue's ratings
+    venue_rating_count: int = 0
+    would_book_again_yes: int = 0
+    would_book_again_no: int = 0
+    reliability: Optional[WorkerReliability] = None
+    added_at: Optional[datetime] = None
+
+
+class TeamMemberUpdate(BaseModel):
+    status: Optional[str] = None             # active | removed | blocked
+    positions: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+
+class TeamMemberUpdateResult(BaseModel):
+    member: TeamMember
+    message: str
+    booked_upcoming: int = 0                 # blocking doesn't remove existing bookings; this says how many remain
+
+
+class TeamAddExisting(BaseModel):
+    email: str
+    positions: List[str] = []
+
+
+class TeamCreateWorker(BaseModel):
+    first_name: str
+    last_name: str = ""
+    email: str
+    phone: Optional[str] = None
+    positions: List[str] = []
+
+
+class AccountCreateResult(BaseModel):
+    user_id: UUID
+    created: bool                            # False = existing account was linked instead
+    temporary_password: Optional[str] = None # shown once
+    message: str
+
+
+class VenueManagerItem(BaseModel):
+    user_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: str
+    phone: Optional[str] = None
+    is_primary: bool = False
+    is_you: bool = False
+
+
+class ManagerCreate(BaseModel):
+    email: str
+    first_name: str = ""
+    last_name: str = ""
+    phone: Optional[str] = None
+
+
+class InviteLinkResponse(BaseModel):
+    id: UUID
+    token: str
+    url: str
+    expires_at: datetime
+    uses: int = 0
+    qr_svg: str                              # SVG markup of the QR code for `url`
+
+
+class InviteRow(BaseModel):
+    first_name: str = ""
+    last_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    positions: List[str] = []
+
+
+class InviteBatchCreate(BaseModel):
+    rows: List[InviteRow]
+    send: bool = True                        # email / text the invite now
+    source: str = "manual"                   # manual | import
+
+
+class InviteRowResult(BaseModel):
+    row: int                                 # 1-based, as uploaded
+    name: str = ""
+    email: Optional[str] = None
+    result: str                              # invited | already_member | already_invited | invalid
+    message: str = ""
+    invite_id: Optional[UUID] = None
+    url: Optional[str] = None
+
+
+class InviteBatchResult(BaseModel):
+    results: List[InviteRowResult]
+    invited: int = 0
+    skipped: int = 0
+    emailed: int = 0
+    texted: int = 0
+    email_available: bool = False
+
+
+class PersonalInvite(BaseModel):
+    id: UUID
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    positions: List[str] = []
+    status: str                              # pending | accepted | expired | revoked
+    url: str
+    created_at: datetime
+    expires_at: datetime
+    last_sent_at: Optional[datetime] = None
+    accepted_at: Optional[datetime] = None
+    accepted_by_name: Optional[str] = None
+
+
+class PublicInvite(BaseModel):
+    valid: bool
+    reason: Optional[str] = None             # why it can't be used (expired / revoked / used)
+    venue_id: Optional[UUID] = None
+    venue_name: Optional[str] = None
+    venue_address: Optional[str] = None
+    logo_url: Optional[str] = None
+    kind: Optional[str] = None
+    first_name: Optional[str] = None
+    email: Optional[str] = None
+    positions: List[str] = []
+    expires_at: Optional[datetime] = None
+
+
+class InviteAcceptResult(BaseModel):
+    venue_id: UUID
+    venue_name: str
+    already_member: bool = False
+
+
+class AssignCandidate(BaseModel):
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    aggregate_rating: float = 5.0
+    rating_count: int = 0
+    reliability_score: Optional[float] = None
+    on_team: bool = True
+    positions: List[str] = []
+    position_match: bool = False             # their team positions include this position
+    available: bool = True                   # can be assigned / offered right now
+    reason: Optional[str] = None             # why not (overlap, already booked in this event, ...)
+    requested_this: bool = False             # has a waiting request on this position (assign = approve it)
+    offered: bool = False                    # has a pending offer for this position
+    venue_shifts: int = 0
+
+
+class AssignRequest(BaseModel):
+    worker_id: UUID
+
+
+class AssignResult(BaseModel):
+    request_id: UUID
+    message: str
+
+
+class OfferCreate(BaseModel):
+    worker_ids: List[UUID]                   # 1-5 people
+    message: Optional[str] = None
+
+
+class OfferSkip(BaseModel):
+    worker_id: UUID
+    name: str = ""
+    reason: str
+
+
+class OfferCreateResult(BaseModel):
+    batch_id: Optional[UUID] = None
+    offered: int = 0
+    skipped: List[OfferSkip] = []
+    message: str = ""
+
+
+class WorkerOffer(BaseModel):
+    offer_id: UUID
+    shift_id: UUID
+    event_id: Optional[UUID] = None
+    venue_id: UUID
+    venue_name: str
+    venue_timezone: Optional[str] = None
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    hourly_rate: Optional[float] = None      # None when hidden
+    hourly_rate_max: Optional[float] = None
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    location_name: Optional[str] = None
+    address: Optional[str] = None
+    message: Optional[str] = None
+    offered_by: Optional[str] = None
+    others_offered: int = 0                  # other people offered the same spot (first to accept wins)
+    created_at: datetime
+    expires_at: datetime
+
+
+class OfferAcceptResult(BaseModel):
+    request_id: UUID
+    message: str
+
+
+class RatingInput(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    would_book_again: Optional[bool] = None
+    review: Optional[str] = None
+
+
+class RatingResponse(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    rating: Optional[int] = None             # None after delete
+    would_book_again: Optional[bool] = None
+    review: Optional[str] = None
+    aggregate_rating: float
+    rating_count: int

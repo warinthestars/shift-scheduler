@@ -8,7 +8,9 @@ Links (the frontend opens these):
   worker shift details : /worker?tab=calendar&request=<request_id>
   worker event popout  : /worker?event=<event_id>
   worker hand-offs     : /worker?tab=transfers
+  worker offers        : /worker?tab=find          (Phase 29: offers show at the top of Find Shifts)
   manager event        : /venue?venue=<venue_id>&event=<event_id>
+  manager team         : /venue?venue=<venue_id>&team=1   (Phase 29)
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -20,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import AsyncSessionLocal
 from src.models import (
-    Shift, ShiftEvent, ShiftRequest, ShiftTransfer, User, Venue, VenueManager, VenueLocation,
+    Shift, ShiftEvent, ShiftRequest, ShiftTransfer, User, Venue, VenueManager, VenueLocation, ShiftOffer,
 )
 from src.services.notify import notify_in
 from src.services.team import _team_filter
@@ -362,3 +364,111 @@ async def _new_event_posted(db: AsyncSession, event_id) -> None:
 
 async def new_event_posted(event_id) -> None:
     await _run("new_event_posted", _new_event_posted, event_id)
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 29: direct assign, offers, team joins
+# ---------------------------------------------------------------------------------------------
+async def _assigned(db: AsyncSession, request_id) -> None:
+    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
+    if req is None:
+        return
+    shift, venue, event, location = await _shift_bundle(db, req.shift_id)
+    if shift is None:
+        return
+    await notify_in(
+        db, [req.worker_id], "assigned",
+        f"You're booked: {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)} at {place_text(venue, location)}. "
+        "Your manager booked you. Open the shift for arrival info and notes; drop it early if you can't make it.",
+        worker_shift_link(req.id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id,
+        urgent=is_soon(shift.start_time), dedupe_key=f"assigned:{req.id}:{int(_as_utc(req.approved_at or req.created_at).timestamp())}",
+    )
+
+
+async def assigned(request_id) -> None:
+    await _run("assigned", _assigned, request_id)
+
+
+async def _offers_sent(db: AsyncSession, offer_ids) -> None:
+    offers = (await db.execute(select(ShiftOffer).where(ShiftOffer.id.in_(list(offer_ids))))).scalars().all()
+    if not offers:
+        return
+    shift, venue, event, location = await _shift_bundle(db, offers[0].shift_id)
+    if shift is None:
+        return
+    others = len(offers) - 1
+    for o in offers:
+        body = f"{when_text(shift.start_time, venue)} at {place_text(venue, location)}."
+        if o.message:
+            body += f"\n“{o.message}”"
+        body += ("\nOffered to a few people: the first to accept gets it." if others else "\nAccept or decline in the app.")
+        await notify_in(
+            db, [o.worker_id], "shift_offered",
+            f"Shift offered to you: {shift.role_type} · {event.title if event else shift.title}",
+            body, "/worker?tab=find", venue_id=shift.venue_id, event_id=shift.event_id,
+            urgent=is_soon(shift.start_time), dedupe_key=f"offer:{o.id}",
+        )
+
+
+async def offers_sent(offer_ids) -> None:
+    await _run("offers_sent", _offers_sent, offer_ids)
+
+
+async def _offer_accepted(db: AsyncSession, offer_id, request_id) -> None:
+    o = await db.scalar(select(ShiftOffer).where(ShiftOffer.id == offer_id))
+    if o is None:
+        return
+    shift, venue, event, _ = await _shift_bundle(db, o.shift_id)
+    worker = await db.scalar(select(User).where(User.id == o.worker_id))
+    if shift is None:
+        return
+    await notify_in(
+        db, await manager_ids(db, o.venue_id), "offer_update",
+        f"{person(worker)} accepted: {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. They're booked.",
+        manager_link(o.venue_id, shift.event_id), venue_id=o.venue_id, event_id=shift.event_id, request_id=request_id,
+        dedupe_key=f"offer-acc:{o.id}",
+    )
+
+
+async def offer_accepted(offer_id, request_id) -> None:
+    await _run("offer_accepted", _offer_accepted, offer_id, request_id)
+
+
+async def _offer_nobody(db: AsyncSession, offer_id) -> None:
+    o = await db.scalar(select(ShiftOffer).where(ShiftOffer.id == offer_id))
+    if o is None:
+        return
+    shift, venue, event, _ = await _shift_bundle(db, o.shift_id)
+    if shift is None:
+        return
+    await notify_in(
+        db, await manager_ids(db, o.venue_id), "offer_update",
+        f"No one took it: {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. Everyone you offered it to said no. Offer it to someone else or leave it open.",
+        manager_link(o.venue_id, shift.event_id), venue_id=o.venue_id, event_id=shift.event_id,
+        dedupe_key=f"offer-none:{o.batch_id}",
+    )
+
+
+async def offer_nobody(offer_id) -> None:
+    await _run("offer_nobody", _offer_nobody, offer_id)
+
+
+async def _team_joined(db: AsyncSession, venue_id, worker_id) -> None:
+    worker = await db.scalar(select(User).where(User.id == worker_id))
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if worker is None or venue is None:
+        return
+    await notify_in(
+        db, await manager_ids(db, venue_id), "team_joined",
+        f"{person(worker)} joined your team",
+        f"{person(worker)} accepted your invite to {venue.name}.",
+        f"/venue?venue={venue_id}&team=1", venue_id=venue_id,
+        dedupe_key=f"joined:{venue_id}:{worker_id}",
+    )
+
+
+async def team_joined(venue_id, worker_id) -> None:
+    await _run("team_joined", _team_joined, venue_id, worker_id)

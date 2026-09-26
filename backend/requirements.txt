@@ -22,3 +22,4 @@ python-multipart>=0.0.9
 google-auth>=2.27.0
 requests>=2.31.0
 tzdata>=2024.1
+segno>=1.6.0

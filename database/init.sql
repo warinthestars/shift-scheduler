@@ -89,8 +89,12 @@ CREATE TABLE venue_whitelists (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
     worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    notes TEXT,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    notes TEXT,                                            -- Phase 29: private manager notes
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,               -- kept in sync: TRUE only when status = 'active'
+    status VARCHAR(20) NOT NULL DEFAULT 'active',          -- Phase 29: active | removed | blocked
+    positions TEXT[] NOT NULL DEFAULT '{}',                -- Phase 29: positions this person works here
+    source VARCHAR(20) NOT NULL DEFAULT 'manager',         -- Phase 29: manager | invite | import | admin
+    added_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_venue_whitelist UNIQUE (venue_id, worker_id)
@@ -247,11 +251,14 @@ CREATE TABLE ratings (
     worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     rated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
-    review TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    review TEXT,                                           -- private to the venue's managers
+    would_book_again BOOLEAN,                              -- Phase 29
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_ratings_worker ON ratings(worker_id);
+CREATE INDEX idx_ratings_venue ON ratings(venue_id);
 
 -- ------------------------------------------------------------------------------
 -- Trigger: Recalculate Worker Rating
@@ -426,3 +433,42 @@ CREATE TABLE notification_preferences (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ==============================================================================
+-- Phase 29: Team invites (link / QR / personal) and direct shift offers
+-- ==============================================================================
+CREATE TABLE venue_invites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    token VARCHAR(64) NOT NULL UNIQUE,
+    kind VARCHAR(20) NOT NULL DEFAULT 'personal',          -- link (shareable / QR) | personal (one person)
+    email VARCHAR(255),
+    phone VARCHAR(30),
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    positions TEXT[] NOT NULL DEFAULT '{}',
+    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    uses INT NOT NULL DEFAULT 0,
+    accepted_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    accepted_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    last_sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_venue_invites_venue ON venue_invites(venue_id, kind);
+
+CREATE TABLE shift_offers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    batch_id UUID NOT NULL,                                -- offers sent together; first to accept wins
+    offered_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',         -- pending | accepted | declined | filled | cancelled
+    message TEXT,
+    expires_at TIMESTAMPTZ NOT NULL,
+    responded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_shift_offers_worker ON shift_offers(worker_id, status);
+CREATE INDEX idx_shift_offers_shift ON shift_offers(shift_id, status);
