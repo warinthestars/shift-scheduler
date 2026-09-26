@@ -15,6 +15,8 @@ from src.schemas import VenueLocationInput, VenueLocationUpdate, VenueLocationRe
 from src.auth import require_manager_or_admin
 from src.services.venue_public import can_manage_venue
 from src.services.locations import create_location, update_location, usage_counts, to_response
+from src.services import notify_events
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/venues", tags=["Locations"])
 
@@ -86,6 +88,7 @@ async def edit_location(
     db: AsyncSession = Depends(get_db),
 ):
     """Global edit: every event at this location changes. Upcoming events are flagged 'Updated'."""
+    since = datetime.now(timezone.utc)                      # Phase 28
     venue = await _venue(db, venue_id, current_user)
     loc = await _location(db, venue, location_id)
     try:
@@ -98,6 +101,7 @@ async def edit_location(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not update location: {e}")
+    await notify_events.location_updated(location_id, since)   # Phase 28: tell booked people at upcoming events
     return await _respond(db, loc)
 
 

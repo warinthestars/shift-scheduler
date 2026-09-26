@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
+import NotificationBell from './NotificationBell';
 import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin } from 'lucide-react';
 
 export default function Navbar() {
@@ -49,6 +50,15 @@ export default function Navbar() {
         .catch((err) => console.error('Failed to load admin venues for switcher:', err));
     }
   }, [isPlatformAdmin]);
+
+  // Phase 28: stay in sync when a notification link switches the venue
+  useEffect(() => {
+    const onSwitch = (e) => {
+      if (e.detail) setSelectedVenueId(e.detail);
+    };
+    window.addEventListener('admin_venue_changed', onSwitch);
+    return () => window.removeEventListener('admin_venue_changed', onSwitch);
+  }, []);
 
   const handleVenueChange = (e) => {
     const newId = e.target.value;
@@ -150,6 +160,7 @@ export default function Navbar() {
 
           {/* Right side */}
           <div className="flex items-center space-x-2">
+            {user && <NotificationBell />}
             {user && userRole === 'worker' && (
               <div className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-semibold">
                 <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />

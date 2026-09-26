@@ -14,6 +14,7 @@ from src.models import User, Shift, ShiftRequest, TimeEntry
 from src.schemas import ReasonBody, TimeEntryInput, PayRateInput
 from src.auth import require_manager_or_admin
 from src.services.venue_public import can_manage_venue
+from src.services import notify_events
 from src.services.timesheets import (
     ASSIGNED_STATUSES, as_utc, fmt_range, validate_times, require_reason, audit,
 )
@@ -76,6 +77,7 @@ async def remove_person(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to remove: {str(e)}")
+    await notify_events.removed(request_id)                  # Phase 28
     return {"detail": "Removed from shift."}
 
 

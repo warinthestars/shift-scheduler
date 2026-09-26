@@ -409,6 +409,55 @@ class TimeEntryEdit(Base):
     reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
+class Notification(Base):
+    """Phase 28: one message for one user (shown in the bell; may also go out by email / SMS)."""
+    __tablename__ = "notifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(40), nullable=False)
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=True)
+    link = Column(String(300), nullable=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=True)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="CASCADE"), nullable=True)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="CASCADE"), nullable=True)
+    urgent = Column(Boolean, nullable=False, default=False)
+    dedupe_key = Column(String(200), nullable=True, unique=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+class NotificationDelivery(Base):
+    """Phase 28: outbox row for one channel (email / sms) of one notification."""
+    __tablename__ = "notification_deliveries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    notification_id = Column(UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    channel = Column(String(10), nullable=False)                     # email | sms
+    status = Column(String(12), nullable=False, default="pending")   # pending | sent | failed | skipped
+    digest = Column(Boolean, nullable=False, default=False)
+    send_after = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+class NotificationPreference(Base):
+    """Phase 28: what a user wants sent where. No row = defaults."""
+    __tablename__ = "notification_preferences"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    email_enabled = Column(Boolean, nullable=False, default=True)
+    sms_enabled = Column(Boolean, nullable=False, default=False)
+    reminders_enabled = Column(Boolean, nullable=False, default=True)
+    new_shift_alerts = Column(String(10), nullable=False, default="daily")   # off | instant | daily
+    manager_alerts_email = Column(Boolean, nullable=False, default=True)
+    quiet_start = Column(Integer, nullable=True)                             # hour 0-23
+    quiet_end = Column(Integer, nullable=True)
+    timezone = Column(String(64), nullable=False, default="America/New_York")
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
 class ShiftTransfer(Base):
     __tablename__ = "shift_transfers"
 

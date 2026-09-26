@@ -23,6 +23,7 @@ from src.services.shift_events import create_event_with_positions
 from src.services.shift_views import to_shift_responses
 from src.services.booking import request_position, withdraw_other_pending_in_event
 from src.services.clock import clock_in, clock_out, auto_close_open_entries
+from src.services import notify_events
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
 
@@ -260,6 +261,12 @@ async def update_shift_request_status(
 
     await db.commit()
     await db.refresh(shift_req)
+
+    # Phase 28: tell the worker (after commit; never raises)
+    if target_clean == "approved" and prev_status != "approved":
+        await notify_events.request_decided(shift_req.id, True)
+    elif target_clean == "rejected" and prev_status != "rejected":
+        await notify_events.request_decided(shift_req.id, False)
 
     res = await db.execute(
         select(ShiftRequest)

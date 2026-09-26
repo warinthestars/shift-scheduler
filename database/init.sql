@@ -377,3 +377,52 @@ CREATE TABLE shift_board_messages (
 CREATE INDEX idx_shift_board_messages_shift ON shift_board_messages(shift_id);
 CREATE INDEX idx_shift_board_messages_author ON shift_board_messages(author_id);
 
+-- ==============================================================================
+-- Phase 28: Notifications (in-app bell + email/SMS outbox + per-user preferences)
+-- ==============================================================================
+CREATE TABLE notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind VARCHAR(40) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    body TEXT,
+    link VARCHAR(300),
+    venue_id UUID REFERENCES venues(id) ON DELETE CASCADE,
+    event_id UUID REFERENCES shift_events(id) ON DELETE CASCADE,
+    request_id UUID REFERENCES shift_requests(id) ON DELETE CASCADE,
+    urgent BOOLEAN NOT NULL DEFAULT FALSE,
+    dedupe_key VARCHAR(200) UNIQUE,
+    read_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_notifications_user_created ON notifications(user_id, created_at DESC);
+CREATE INDEX idx_notifications_user_unread ON notifications(user_id) WHERE read_at IS NULL;
+
+CREATE TABLE notification_deliveries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    notification_id UUID NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel VARCHAR(10) NOT NULL,                 -- email | sms
+    status VARCHAR(12) NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped
+    digest BOOLEAN NOT NULL DEFAULT FALSE,
+    send_after TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    attempts INT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_notification_deliveries_due ON notification_deliveries(status, send_after);
+
+CREATE TABLE notification_preferences (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    email_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    sms_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    reminders_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    new_shift_alerts VARCHAR(10) NOT NULL DEFAULT 'daily',   -- off | instant | daily
+    manager_alerts_email BOOLEAN NOT NULL DEFAULT TRUE,
+    quiet_start SMALLINT,                                     -- hour 0-23, NULL = no quiet hours
+    quiet_end SMALLINT,
+    timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+

@@ -76,6 +76,24 @@ class Settings(BaseSettings):
     # Geofence
     DEFAULT_GEOFENCE_RADIUS_METERS: int = int(os.getenv("DEFAULT_GEOFENCE_RADIUS_METERS", "100"))
 
+    # Phase 28: Notifications
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:5173")   # used for links in emails / texts
+    NOTIFICATIONS_WORKER_ENABLED: bool = os.getenv("NOTIFICATIONS_WORKER_ENABLED", "true").lower() in ("true", "1", "yes")
+    NOTIFICATIONS_DIGEST_HOUR: int = int(os.getenv("NOTIFICATIONS_DIGEST_HOUR") or "9")   # local hour for daily new-shift emails
+    EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "console")   # console | smtp | resend
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "ShiftBoard <no-reply@example.com>")
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT") or "587")
+    SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_STARTTLS: bool = os.getenv("SMTP_STARTTLS", "true").lower() in ("true", "1", "yes")
+    SMTP_SSL: bool = os.getenv("SMTP_SSL", "false").lower() in ("true", "1", "yes")
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+    SMS_PROVIDER: str = os.getenv("SMS_PROVIDER", "off")           # off | console | twilio
+    TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    TWILIO_FROM_NUMBER: str = os.getenv("TWILIO_FROM_NUMBER", "")
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]

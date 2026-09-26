@@ -14,6 +14,7 @@ from src.schemas import (
 from src.auth import get_current_user, require_manager_or_admin, normalize_role, verify_venue_access
 from src.services.auto_confirm import check_double_booking
 from src.services.booking import withdraw_other_pending_in_event
+from src.services import notify_events
 from src.services.team import get_transfer_candidates
 
 router = APIRouter(prefix="/api/transfers", tags=["Shift Transfers"])
@@ -107,6 +108,7 @@ async def propose_shift_transfer(
     db.add(transfer)
     await db.commit()
     await db.refresh(transfer)
+    await notify_events.transfer_changed(transfer.id)   # Phase 28: tell the person being offered the shift
 
     # Reload with relations
     res = await db.execute(
@@ -172,6 +174,7 @@ async def respond_to_shift_transfer(
 
     await db.commit()
     await db.refresh(transfer)
+    await notify_events.transfer_changed(transfer.id)   # Phase 28 (after commit; never raises)
     return transfer
 
 @router.post("/{id}/accept", response_model=ShiftTransferResponse)
@@ -235,6 +238,7 @@ async def reject_shift_transfer(
 
     await db.commit()
     await db.refresh(transfer)
+    await notify_events.transfer_changed(transfer.id)   # Phase 28 (after commit; never raises)
     return transfer
 
 @router.post("/{transfer_id}/manager-review", response_model=ShiftTransferResponse)
@@ -324,6 +328,7 @@ async def manager_review_shift_transfer(
 
     await db.commit()
     await db.refresh(transfer)
+    await notify_events.transfer_changed(transfer.id)   # Phase 28 (after commit; never raises)
     return transfer
 
 @router.post("/{id}/approve", response_model=ShiftTransferResponse)

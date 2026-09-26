@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
@@ -40,9 +40,16 @@ const localizer = dateFnsLocalizer({
 export default function VenueManagerDashboard() {
   const { user } = useAuth();
   const isPlatformAdmin = ['platform_admin', 'super_admin'].includes((user?.role || '').toLowerCase());
-  const initialVenue = isPlatformAdmin
-    ? (localStorage.getItem('shiftboard_admin_venue_id') || user?.venue_id || null)
-    : (user?.venue_id || null);
+  // Phase 28: notification links open /venue?venue=<id>&event=<id>
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlVenue = searchParams.get('venue');
+  if (urlVenue && isPlatformAdmin && localStorage.getItem('shiftboard_admin_venue_id') !== urlVenue) {
+    localStorage.setItem('shiftboard_admin_venue_id', urlVenue);
+  }
+  const initialVenue = urlVenue
+    || (isPlatformAdmin
+      ? (localStorage.getItem('shiftboard_admin_venue_id') || user?.venue_id || null)
+      : (user?.venue_id || null));
 
   const [venueShifts, setVenueShifts] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
@@ -69,6 +76,7 @@ export default function VenueManagerDashboard() {
   const [reasonDialog, setReasonDialog] = useState(null);
   const [dupEvent, setDupEvent] = useState(null);
   const [timesheetEventId, setTimesheetEventId] = useState(null);
+  const [openTarget, setOpenTarget] = useState(null); // Phase 28: { venueId, eventId } from a notification link
 
   const fetchVenueData = async (venueId) => {
     try {
@@ -136,6 +144,28 @@ export default function VenueManagerDashboard() {
     window.addEventListener('admin_venue_changed', handleAdminVenueSwitch);
     return () => window.removeEventListener('admin_venue_changed', handleAdminVenueSwitch);
   }, []);
+
+  // Phase 28: handle ?venue= / ?event= (also when already on this page)
+  useEffect(() => {
+    const venue = searchParams.get('venue');
+    const event = searchParams.get('event');
+    if (!venue && !event) return;
+    const targetVenue = venue || currentVenueId;
+    if (venue && String(venue) !== String(currentVenueId)) {
+      if (isPlatformAdmin) {
+        localStorage.setItem('shiftboard_admin_venue_id', venue);
+        window.dispatchEvent(new CustomEvent('admin_venue_changed', { detail: venue })); // listener above reloads
+      } else {
+        fetchVenueData(venue);
+      }
+    }
+    if (event) setOpenTarget({ venueId: targetVenue, eventId: event });
+    const next = new URLSearchParams(searchParams);
+    next.delete('venue');
+    next.delete('event');
+    setSearchParams(next, { replace: true }); // keeps ?notifications= for the bell
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const loadVenuePositions = async (venueId) => {
     if (!venueId) {
@@ -657,6 +687,8 @@ export default function VenueManagerDashboard() {
         {/* Section 3 (Phase 23): Posted Shifts board */}
         <PostedShiftsBoard
           venueId={currentVenueId}
+          openEventId={openTarget && String(openTarget.venueId) === String(currentVenueId) ? openTarget.eventId : null}
+          onOpenedEvent={() => setOpenTarget(null)}
           refreshKey={boardRefreshKey}
           reliabilityMap={reliabilityMap}
           onApprove={handleApprove}

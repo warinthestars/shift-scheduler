@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
@@ -252,6 +253,34 @@ export default function WorkerDashboard() {
       setOpenListing({ eventId: req.shift.event_id, initial: null });
     }
   };
+
+  // ---- Phase 28: deep links from notifications (?tab=, ?request=, ?event=) ----------------
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [pendingDeepLink, setPendingDeepLink] = useState(null);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    const request = searchParams.get('request');
+    const event = searchParams.get('event');
+    if (!tab && !request && !event) return;
+    if (tab && ['find', 'calendar', 'schedule', 'transfers'].includes(tab)) setActiveTab(tab);
+    if (event) setOpenListing({ eventId: event, initial: null });
+    if (request) {
+      setPendingDeepLink(request);
+      fetchWorkerData(false); // make sure the calendar has the newest booking
+    }
+    const next = new URLSearchParams(searchParams);
+    ['tab', 'request', 'event'].forEach((k) => next.delete(k));
+    setSearchParams(next, { replace: true }); // keeps ?notifications= for the bell
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (pendingDeepLink && calendarByRequest.has(pendingDeepLink)) {
+      setDetailRequestId(pendingDeepLink);
+      setPendingDeepLink(null);
+    }
+  }, [pendingDeepLink, calendarByRequest]);
 
   // ---- Phase 26.1: Find Shifts (one card per event) ------------------------------------
   const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;

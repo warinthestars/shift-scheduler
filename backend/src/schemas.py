@@ -982,3 +982,50 @@ class InfoAckResponse(BaseModel):
 
 
 
+
+
+# ------------------------------------------------------------------------------
+# Phase 28: Notifications
+# ------------------------------------------------------------------------------
+class NotificationResponse(BaseModel):
+    id: UUID
+    kind: str
+    title: str
+    body: Optional[str] = None
+    link: Optional[str] = None
+    urgent: bool = False
+    read: bool = False
+    created_at: datetime
+
+
+class UnreadCountResponse(BaseModel):
+    count: int
+
+
+class NotificationPreferencesResponse(BaseModel):
+    email_enabled: bool = True
+    sms_enabled: bool = False
+    reminders_enabled: bool = True
+    new_shift_alerts: str = "daily"          # off | instant | daily
+    manager_alerts_email: bool = True
+    quiet_start: Optional[int] = None        # hour 0-23
+    quiet_end: Optional[int] = None
+    timezone: str = "America/New_York"
+    email: Optional[str] = None              # the account email (read-only here)
+    phone: Optional[str] = None              # users.phone (texts go here)
+    email_available: bool = True             # server can send email (not console-only)
+    sms_available: bool = False              # server has SMS configured
+    is_manager: bool = False                 # show manager-only options
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    email_enabled: Optional[bool] = None
+    sms_enabled: Optional[bool] = None
+    reminders_enabled: Optional[bool] = None
+    new_shift_alerts: Optional[str] = None
+    manager_alerts_email: Optional[bool] = None
+    quiet_start: Optional[int] = None
+    quiet_end: Optional[int] = None
+    clear_quiet_hours: bool = False
+    timezone: Optional[str] = None
+    phone: Optional[str] = None              # saved to users.phone; "" clears it
