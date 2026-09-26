@@ -111,6 +111,7 @@ async def _prefs_response(db: AsyncSession, user: User) -> NotificationPreferenc
         email_available=email_available(),
         sms_available=sms_available(),
         is_manager=is_manager,
+        discoverable=user.discoverable or "private",     # Phase 29.1
     )
 
 
@@ -141,6 +142,9 @@ async def update_preferences(
             raise HTTPException(status_code=400, detail=f"Unknown timezone '{data['timezone']}'.")
     phone = data.pop("phone", None)
     clear_quiet = data.pop("clear_quiet_hours", False)
+    discoverable = data.pop("discoverable", None)                      # Phase 29.1
+    if discoverable is not None and discoverable not in ("private", "venues", "everyone"):
+        raise HTTPException(status_code=400, detail="Who can find you must be private, venues or everyone.")
     if phone is not None and phone.strip() and not normalize_phone(phone):
         raise HTTPException(status_code=400, detail="Enter a mobile number like (555) 555-0100 or +15555550100.")
     if data.get("sms_enabled") and not (normalize_phone(phone) if phone is not None else normalize_phone(current_user.phone)):
@@ -159,6 +163,8 @@ async def update_preferences(
             row.quiet_end = None
         if phone is not None:
             current_user.phone = phone.strip() or None
+        if discoverable is not None:
+            current_user.discoverable = discoverable
         await db.commit()
     except HTTPException:
         await db.rollback()

@@ -150,7 +150,7 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search your team, or anyone by name or email"
+            placeholder="Search your team, or people who let venues find them"
             className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
           />
         </div>

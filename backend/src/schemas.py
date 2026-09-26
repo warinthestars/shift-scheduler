@@ -101,6 +101,7 @@ class UserResponse(UserBase):
     created_at: datetime
     auth_source: Optional[str] = None     # "local" | "firebase" | "both"
     has_password: bool = False
+    temporary_password: Optional[str] = None   # Phase 29.2: only on admin create, when generated
 
     # For UI compatibility
     @property
@@ -116,7 +117,7 @@ class UserResponse(UserBase):
 
 class UserCreateAdmin(BaseModel):
     email: EmailStr
-    password: str
+    password: Optional[str] = None           # Phase 29.2: blank = generate a temporary password (returned once)
     first_name: str
     last_name: str
     phone: Optional[str] = None
@@ -126,6 +127,7 @@ class UserCreateAdmin(BaseModel):
 class UserUpdateAdmin(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    email: Optional[EmailStr] = None         # Phase 29.2
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
@@ -415,6 +417,7 @@ class ShiftTransferResponse(BaseModel):
     from_worker_id: UUID
     to_worker_id: UUID
     status: str
+    notes: Optional[str] = None              # Phase 29.1: the note with the hand-off (was never sent)
     created_at: datetime
     updated_at: datetime
     shift: Optional[ShiftResponse] = None
@@ -1035,6 +1038,7 @@ class NotificationPreferencesResponse(BaseModel):
     email_available: bool = True             # server can send email (not console-only)
     sms_available: bool = False              # server has SMS configured
     is_manager: bool = False                 # show manager-only options
+    discoverable: str = "private"            # Phase 29.1: private | venues | everyone
 
 
 class NotificationPreferencesUpdate(BaseModel):
@@ -1048,6 +1052,7 @@ class NotificationPreferencesUpdate(BaseModel):
     clear_quiet_hours: bool = False
     timezone: Optional[str] = None
     phone: Optional[str] = None              # saved to users.phone; "" clears it
+    discoverable: Optional[str] = None       # Phase 29.1: private | venues | everyone
 
 
 # ------------------------------------------------------------------------------
@@ -1060,7 +1065,7 @@ class TeamMember(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
-    status: str = "active"                   # active | removed | blocked
+    status: str = "active"                   # active | removed | blocked | none (Phase 29.1: no relationship yet)
     on_list: bool = False                    # has a team-list row (added / invited), not just "worked here"
     source: Optional[str] = None             # manager | invite | import | admin | worked
     positions: List[str] = []
@@ -1091,7 +1096,8 @@ class TeamMemberUpdateResult(BaseModel):
 
 
 class TeamAddExisting(BaseModel):
-    email: str
+    email: Optional[str] = None              # Phase 29.1: email OR worker_id (from People search)
+    worker_id: Optional[UUID] = None
     positions: List[str] = []
 
 
@@ -1294,3 +1300,253 @@ class RatingResponse(BaseModel):
     review: Optional[str] = None
     aggregate_rating: float
     rating_count: int
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.1: People search, worker profile, team summary, activity log
+# ------------------------------------------------------------------------------
+class PersonResult(BaseModel):
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: Optional[str] = None              # masked (j***@gmail.com) unless related or exact match
+    phone: Optional[str] = None              # only for people related to this venue
+    avatar_url: Optional[str] = None
+    relation: str = "none"                   # active | removed | blocked | worked | requested | none
+    positions: List[str] = []
+    aggregate_rating: float = 5.0
+    rating_count: int = 0
+    reliability_score: Optional[float] = None
+    can_add: bool = True
+
+
+class WorkerHistoryItem(BaseModel):
+    request_id: UUID
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    status: str
+    late_minutes: Optional[int] = None
+    my_rating: Optional[int] = None
+    would_book_again: Optional[bool] = None
+
+
+class WorkerProfile(BaseModel):
+    member: TeamMember
+    history: List[WorkerHistoryItem] = []    # this venue only, newest first
+    pending_here: int = 0                    # waiting requests at this venue
+    other_venues: int = 0                    # other venues they've worked at (count only)
+
+
+class TeamSummary(BaseModel):
+    active: int = 0
+    removed: int = 0
+    blocked: int = 0
+    invites_pending: int = 0
+    managers: int = 0
+
+
+class ActivityItem(BaseModel):
+    id: UUID
+    kind: str
+    category: str
+    summary: str
+    actor_name: Optional[str] = None
+    event_id: Optional[UUID] = None
+    request_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
+    created_at: datetime
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.2: Admin console
+# ------------------------------------------------------------------------------
+class AdminNameRef(BaseModel):
+    id: UUID
+    name: str
+
+
+class AdminPersonRef(BaseModel):
+    user_id: UUID
+    name: str
+    email: Optional[str] = None
+
+
+class AdminMembership(BaseModel):
+    venue_id: UUID
+    venue_name: str
+    status: str                              # active | removed | blocked | worked
+    source: Optional[str] = None
+    positions: List[str] = []
+    notes: Optional[str] = None              # the venue's private note (admins see all)
+
+
+class AdminUserRow(BaseModel):
+    id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: str
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    role: str
+    is_active: bool = True
+    auth_source: str = "local"               # local | firebase | both
+    has_password: bool = False
+    created_at: datetime
+    managed_venues: List[AdminNameRef] = []
+    memberships: List[AdminMembership] = []
+    shifts_worked: int = 0
+    upcoming: int = 0
+    aggregate_rating: float = 5.0
+    rating_count: int = 0
+    last_activity_at: Optional[datetime] = None
+    discoverable: str = "private"
+    always_admin: bool = False
+
+
+class AdminUserPage(BaseModel):
+    total: int
+    items: List[AdminUserRow]
+
+
+class AdminHistoryItem(BaseModel):
+    request_id: UUID
+    venue_id: UUID
+    venue_name: str
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    status: str
+
+
+class AdminAuditItem(BaseModel):
+    id: UUID
+    actor_name: Optional[str] = None
+    action: str
+    target_type: str
+    target_id: Optional[UUID] = None
+    summary: str
+    created_at: datetime
+
+
+class AdminUserDetail(BaseModel):
+    user: AdminUserRow
+    reliability: Optional[WorkerReliability] = None
+    email_enabled: bool = True
+    sms_enabled: bool = False
+    history: List[AdminHistoryItem] = []
+    audit: List[AdminAuditItem] = []
+
+
+class AdminVenueRow(BaseModel):
+    id: UUID
+    name: str
+    address: str
+    timezone: str = "America/New_York"
+    created_at: datetime
+    managers: List[AdminPersonRef] = []
+    team_active: int = 0
+    upcoming_events: int = 0                 # next 30 days, not cancelled
+    open_spots_7d: int = 0
+    pending_requests: int = 0
+    approval_policy: str = "team_auto"
+    geofence_enabled: bool = False
+    positions_count: int = 0
+    locations_count: int = 0
+    last_activity_at: Optional[datetime] = None
+    warnings: List[str] = []
+
+
+class AdminAttention(BaseModel):
+    level: str                               # error | warn | info
+    text: str
+    kind: str = "system"                     # venue | users | system | deliveries
+    target_id: Optional[UUID] = None
+
+
+class AdminActivityItem(BaseModel):
+    id: UUID
+    venue_id: UUID
+    venue_name: str
+    kind: str
+    category: str
+    summary: str
+    actor_name: Optional[str] = None
+    event_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class AdminOverview(BaseModel):
+    users_total: int = 0
+    workers: int = 0
+    managers: int = 0
+    admins: int = 0
+    deactivated: int = 0
+    new_users_7d: int = 0
+    venues: int = 0
+    events_next_7d: int = 0
+    spots_next_7d: int = 0
+    open_spots_next_7d: int = 0
+    fill_rate_next_7d: Optional[float] = None
+    urgent_open_spots_48h: int = 0
+    pending_requests: int = 0
+    stale_requests_24h: int = 0
+    pending_handoffs: int = 0
+    deliveries_sent_24h: int = 0
+    deliveries_failed_24h: int = 0
+    attention: List[AdminAttention] = []
+    recent_activity: List[AdminActivityItem] = []
+    recent_audit: List[AdminAuditItem] = []
+
+
+class AdminDeliveryStats(BaseModel):
+    pending: int = 0
+    sent_24h: int = 0
+    failed_24h: int = 0
+    failed_7d: int = 0
+    skipped_24h: int = 0
+
+
+class AdminSystem(BaseModel):
+    app_base_url: str = ""
+    app_base_url_ok: bool = False
+    email_provider: str = "console"
+    email_from: str = ""
+    email_ready: bool = False
+    sms_provider: str = "off"
+    sms_ready: bool = False
+    firebase: str = "off"                    # real | mock | off
+    self_registration: bool = True
+    always_admin_count: int = 0
+    worker_enabled: bool = True
+    worker_started_at: Optional[datetime] = None
+    worker_last_tick_at: Optional[datetime] = None
+    worker_last_ok: Optional[bool] = None
+    worker_last_error: Optional[str] = None
+    worker_heartbeat_at: Optional[datetime] = None   # from Redis (any backend process)
+    digest_hour: int = 9
+    deliveries: AdminDeliveryStats = AdminDeliveryStats()
+    table_counts: dict = {}
+
+
+class AdminDelivery(BaseModel):
+    id: UUID
+    channel: str
+    status: str
+    attempts: int = 0
+    last_error: Optional[str] = None
+    created_at: datetime
+    send_after: Optional[datetime] = None
+    user_id: UUID
+    user_name: str = ""
+    user_email: Optional[str] = None
+    title: str = ""
+
+
+class AdminTestEmail(BaseModel):
+    to: EmailStr

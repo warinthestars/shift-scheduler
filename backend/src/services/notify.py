@@ -57,6 +57,8 @@ KINDS = {
     "shift_offered": ("booking", True),      # Phase 29: offered to you (first to accept wins)
     "offer_update": ("manager", False),      # Phase 29: offer accepted / nobody took it
     "team_joined": ("manager", False),       # Phase 29: someone joined through an invite
+    "team_added": ("booking", False),        # Phase 29.1: a manager added you to their team
+    "shift_dropped": ("manager", True),      # Phase 29.1: a worker dropped a booked shift
     "test": ("test", True),
 }
 NEW_SHIFT_MODES = ("off", "instant", "daily")

@@ -127,17 +127,20 @@ export default function PostedShiftsBoard({
     }`;
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
-        <div className="flex items-center space-x-2">
-          <CalendarIcon className="w-5 h-5 text-emerald-400" />
-          <div>
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl">
+      {/* Phase 29.1: title row, then the controls (fits the narrower 2/3 column) */}
+      <div className="flex flex-col gap-3 mb-5">
+        <div className="flex items-start gap-2">
+          <CalendarIcon className="w-5 h-5 text-emerald-400 mt-0.5 flex-shrink-0" />
+          <div className="min-w-0">
             <h2 className="text-base font-bold text-white">Posted Shifts ({events.length})</h2>
-            <p className="text-xs text-slate-400">Every posted event with its positions, assigned staff and pending requests</p>
-            {timeZone && <p className="text-[11px] text-slate-500">Times shown in venue time ({timeZone}). Calendar view uses your device's time.</p>}
+            <p className="text-xs text-slate-400">
+              Every event with its positions, staff and requests.
+              {timeZone && <span className="text-slate-500"> Times in venue time ({timeZone}).</span>}
+            </p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1">
             {SCOPES.map((s) => (
               <button key={s.id} type="button" onClick={() => setScope(s.id)} className={toggleBtn(scope === s.id)}>

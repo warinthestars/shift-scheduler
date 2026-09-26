@@ -24,6 +24,7 @@ from src.services.shift_views import to_shift_responses
 from src.services.booking import request_position, withdraw_other_pending_in_event
 from src.services.clock import clock_in, clock_out, auto_close_open_entries
 from src.services import notify_events
+from src.services import activity
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
 
@@ -265,8 +266,10 @@ async def update_shift_request_status(
     # Phase 28: tell the worker (after commit; never raises)
     if target_clean == "approved" and prev_status != "approved":
         await notify_events.request_decided(shift_req.id, True)
+        await activity.for_request("request_approved", shift_req.id, current_user.id)     # Phase 29.1
     elif target_clean == "rejected" and prev_status != "rejected":
         await notify_events.request_decided(shift_req.id, False)
+        await activity.for_request("request_denied", shift_req.id, current_user.id)       # Phase 29.1
 
     res = await db.execute(
         select(ShiftRequest)
@@ -442,6 +445,10 @@ async def drop_shift(
         await db.rollback()
         print(f"Drop shift transaction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Phase 29.1: managers hear about drops right away (after commit; never raises)
+    await notify_events.shift_dropped(shift_req.id)
+    await activity.for_request("shift_dropped", shift_req.id, current_user.id)
 
     return {
         "detail": "Shift successfully dropped.",

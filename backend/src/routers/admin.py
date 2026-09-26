@@ -12,6 +12,7 @@ from src.schemas import VenueResponse, UserResponse, UserCreateAdmin, UserUpdate
 from src.auth import require_admin, get_password_hash, normalize_role
 from src.serializers import auth_source_for
 from src.services.always_admin import is_always_admin_email
+from src.services import admin_audit
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 VALID_ROLES = ("worker", "venue_manager", "platform_admin")
@@ -173,8 +174,15 @@ async def create_admin_user(
                 detail=f"A user with email '{email_clean}' already exists."
             )
 
-        # 2. Hash password
-        hashed = get_password_hash(user_in.password)
+        # 2. Hash password (Phase 29.2: blank = generate a temporary one, returned once)
+        generated_pw = None
+        raw_pw = (user_in.password or "").strip()
+        if not raw_pw:
+            generated_pw = _generate_temp_password()
+            raw_pw = generated_pw
+        elif len(raw_pw) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+        hashed = get_password_hash(raw_pw)
 
         # 3. Create user
         role_clean = normalize_role(user_in.role)
@@ -211,7 +219,15 @@ async def create_admin_user(
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
 
     await db.refresh(new_user)
-    return _build_user_response(new_user, venue_ids, venue_names)
+    resp = _build_user_response(new_user, venue_ids, venue_names)
+    resp.temporary_password = generated_pw
+    await admin_audit.record(
+        current_user.id, "user_created",
+        f"Created {role_clean.replace('_', ' ')} {admin_audit.person(new_user)}"
+        + (f" for {', '.join(venue_names)}" if venue_names else ""),
+        target_type="user", target_id=new_user.id,
+    )
+    return resp
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
 async def update_admin_user(
@@ -227,6 +243,8 @@ async def update_admin_user(
             raise HTTPException(status_code=404, detail="User not found.")
 
         old_role = normalize_role(user.role)
+        old_active = bool(user.is_active)
+        old_email = user.email
         new_role = normalize_role(user_update.role) if user_update.role is not None else old_role
         if new_role not in VALID_ROLES:
             raise HTTPException(status_code=400, detail=f"Invalid role '{user_update.role}'.")
@@ -282,7 +300,16 @@ async def update_admin_user(
         if user_update.last_name is not None:
             user.last_name = user_update.last_name.strip()
         if user_update.phone is not None:
-            user.phone = user_update.phone.strip()
+            user.phone = user_update.phone.strip() or None      # Phase 29.2: blank clears it
+        if user_update.email is not None:                     # Phase 29.2
+            new_email = str(user_update.email).strip().lower()
+            if new_email != (user.email or "").lower():
+                if is_always_admin_email(user.email):
+                    raise HTTPException(status_code=400, detail="This account is listed in ALWAYS_ADMIN_EMAILS; its email can't be changed here.")
+                taken = await db.scalar(select(User.id).where(func.lower(User.email) == new_email, User.id != user.id))
+                if taken:
+                    raise HTTPException(status_code=400, detail=f"Another account already uses {new_email}.")
+                user.email = new_email
 
         if rebuild_venues:
             await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id))
@@ -316,6 +343,23 @@ async def update_admin_user(
         raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
 
     await db.refresh(user)
+
+    # Phase 29.2: audit what changed
+    changes = []
+    if role_changed:
+        changes.append(f"role {old_role.replace('_', ' ')} → {new_role.replace('_', ' ')}")
+    if user_update.is_active is not None and bool(user_update.is_active) != old_active:
+        changes.append("reactivated" if user_update.is_active else "deactivated")
+    if (user.email or "") != (old_email or ""):
+        changes.append(f"email {old_email} → {user.email}")
+    if rebuild_venues and not role_changed:
+        changes.append("venues updated")
+    if any(v is not None for v in (user_update.first_name, user_update.last_name, user_update.phone)):
+        changes.append("profile edited")
+    if changes:
+        action = "user_role" if role_changed else ("user_status" if user_update.is_active is not None and bool(user_update.is_active) != old_active else "user_updated")
+        await admin_audit.record(current_user.id, action, f"{admin_audit.person(user)}: {', '.join(changes)}",
+                                 target_type="user", target_id=user.id)
 
     # Build affiliations
     u_role = normalize_role(user.role)
@@ -373,6 +417,8 @@ async def admin_reset_password(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to reset password: {str(e)}")
 
+    await admin_audit.record(current_user.id, "user_password",
+                             f"Reset the password for {admin_audit.person(user)}", target_type="user", target_id=user.id)   # Phase 29.2
     return AdminPasswordResetResponse(
         user_id=user.id,
         generated=generated,
@@ -439,11 +485,13 @@ async def delete_admin_user(
                     shift.status = "OPEN"
 
         # Core delete — do NOT use db.delete(user) (lazy-load -> MissingGreenlet)
+        who = admin_audit.person(user)                    # Phase 29.2 (read before delete)
         await db.execute(delete(User).where(User.id == user_id))
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
+    await admin_audit.record(current_user.id, "user_deleted", f"Deleted {who}", target_type="user", target_id=user_id)
     return None
 
 @router.get("/stats")

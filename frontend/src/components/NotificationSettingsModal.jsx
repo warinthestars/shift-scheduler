@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, Mail, MessageSquare, Moon, Send, Info } from 'lucide-react';
+import { Bell, Mail, MessageSquare, Moon, Send, Info, Eye } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { TIMEZONE_OPTIONS } from '../utils/venueTime';
@@ -68,6 +68,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
         manager_alerts_email: prefs.manager_alerts_email,
         timezone: prefs.timezone,
         phone,
+        discoverable: prefs.discoverable || 'private',   // Phase 29.1
       };
       if (quietOn) {
         body.quiet_start = Number(prefs.quiet_start ?? 22);
@@ -117,8 +118,8 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
 
   return (
     <ModalShell
-      title="Notification settings"
-      subtitle="Everything always shows in the bell. Choose what also reaches your email and phone."
+      title="Notifications & privacy"
+      subtitle="Everything always shows in the bell. Choose what also reaches your email and phone, and who can find you."
       icon={<Bell className="w-5 h-5 text-emerald-400" />}
       onClose={onClose}
       maxWidth="max-w-3xl"
@@ -225,6 +226,34 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
                   {TIMEZONE_OPTIONS.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
                 </select>
               </div>
+            </div>
+
+            {/* Phase 29.1: who can find me */}
+            <div className={cardCls}>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Eye className="w-4 h-4 text-emerald-400" /> Who can find me</div>
+              <p className="text-xs text-slate-400">
+                Lets venue managers find you by name or email to add you to their team. Venues you've worked for or
+                requested shifts at can always see you, and anyone can add you if they type your exact email.
+              </p>
+              {[
+                ['private', 'Only venues I work with', 'Nobody else can look you up by name.'],
+                ['venues', 'Any venue on ShiftBoard', 'Managers can find you by name or email. Your email is partly hidden until you work together.'],
+                ['everyone', 'Anyone on ShiftBoard', 'Venues, plus future features like finding coworkers.'],
+              ].map(([value, title, body]) => (
+                <label key={value} className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="discoverable"
+                    checked={(prefs.discoverable || 'private') === value}
+                    onChange={() => set('discoverable', value)}
+                    className="mt-1 w-4 h-4 bg-slate-800 border-slate-700 text-emerald-500"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-white">{title}</span>
+                    <span className="block text-xs text-slate-400">{body}</span>
+                  </span>
+                </label>
+              ))}
             </div>
           </div>
         </div>

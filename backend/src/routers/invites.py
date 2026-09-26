@@ -19,7 +19,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,8 +33,9 @@ from src.auth import require_manager_or_admin, get_current_user, normalize_role
 from src.routers.venues import verify_venue_manager_access
 from src.services.invites import (
     get_or_create_link, regenerate_link, invite_url, qr_svg, invite_status, valid_email, new_token,
-    send_invite, PERSONAL_DAYS, as_utc,
+    send_invite, PERSONAL_DAYS, as_utc, public_base,
 )
+from src.services import activity
 from src.services.messaging import email_available, normalize_phone
 from src.services.team import set_membership
 from src.services import notify_events
@@ -60,15 +61,15 @@ def _clean_positions(values) -> List[str]:
     return out
 
 
-def _link_response(inv: VenueInvite) -> InviteLinkResponse:
-    url = invite_url(inv.token)
+def _link_response(inv: VenueInvite, base=None) -> InviteLinkResponse:
+    url = invite_url(inv.token, base)
     return InviteLinkResponse(id=inv.id, token=inv.token, url=url, expires_at=inv.expires_at, uses=inv.uses or 0, qr_svg=qr_svg(url))
 
 
-def _personal_response(inv: VenueInvite, accepted_name=None) -> PersonalInvite:
+def _personal_response(inv: VenueInvite, accepted_name=None, base=None) -> PersonalInvite:
     return PersonalInvite(
         id=inv.id, first_name=inv.first_name, last_name=inv.last_name, email=inv.email, phone=inv.phone,
-        positions=list(inv.positions or []), status=invite_status(inv), url=invite_url(inv.token),
+        positions=list(inv.positions or []), status=invite_status(inv), url=invite_url(inv.token, base),
         created_at=inv.created_at, expires_at=inv.expires_at, last_sent_at=inv.last_sent_at,
         accepted_at=inv.accepted_at, accepted_by_name=accepted_name,
     )
@@ -79,6 +80,7 @@ def _personal_response(inv: VenueInvite, accepted_name=None) -> PersonalInvite:
 # ---------------------------------------------------------------------------------------------
 @router.get("/api/venues/{venue_id}/invites/link", response_model=InviteLinkResponse)
 async def get_team_link(
+    request: Request,
     venue_id: UUID,
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db),
@@ -86,7 +88,7 @@ async def get_team_link(
     await verify_venue_manager_access(venue_id, current_user, db)
     try:
         inv = await get_or_create_link(db, venue_id, current_user.id)
-        resp = _link_response(inv)
+        resp = _link_response(inv, public_base(request))
         await db.commit()
     except Exception as e:
         await db.rollback()
@@ -96,6 +98,7 @@ async def get_team_link(
 
 @router.post("/api/venues/{venue_id}/invites/link/regenerate", response_model=InviteLinkResponse)
 async def regenerate_team_link(
+    request: Request,
     venue_id: UUID,
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db),
@@ -103,7 +106,7 @@ async def regenerate_team_link(
     await verify_venue_manager_access(venue_id, current_user, db)
     try:
         inv = await regenerate_link(db, venue_id, current_user.id)
-        resp = _link_response(inv)
+        resp = _link_response(inv, public_base(request))
         await db.commit()
     except Exception as e:
         await db.rollback()
@@ -116,6 +119,7 @@ async def regenerate_team_link(
 # ---------------------------------------------------------------------------------------------
 @router.get("/api/venues/{venue_id}/invites", response_model=List[PersonalInvite])
 async def list_invites(
+    request: Request,
     venue_id: UUID,
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db),
@@ -129,11 +133,13 @@ async def list_invites(
     )).scalars().all()
     acc_ids = {r.accepted_by_user_id for r in rows if r.accepted_by_user_id}
     names = {u.id: _person(u) for u in (await db.execute(select(User).where(User.id.in_(acc_ids)))).scalars().all()} if acc_ids else {}
-    return [_personal_response(r, names.get(r.accepted_by_user_id)) for r in rows]
+    base = public_base(request)
+    return [_personal_response(r, names.get(r.accepted_by_user_id), base) for r in rows]
 
 
 @router.post("/api/venues/{venue_id}/invites", response_model=InviteBatchResult)
 async def create_invites(
+    request: Request,
     venue_id: UUID,
     body: InviteBatchCreate,
     current_user: User = Depends(require_manager_or_admin),
@@ -145,6 +151,7 @@ async def create_invites(
     if len(body.rows) > MAX_ROWS:
         raise HTTPException(status_code=400, detail=f"Up to {MAX_ROWS} people per upload.")
     now = datetime.now(timezone.utc)
+    base = public_base(request)                     # Phase 29.1
     results: List[InviteRowResult] = []
     to_send: List[VenueInvite] = []
     seen = set()
@@ -192,7 +199,7 @@ async def create_invites(
                 inv = open_invites[email]
                 results.append(InviteRowResult(
                     row=i, name=name, email=email, result="already_invited",
-                    message="Already invited; use Resend if they lost it.", invite_id=inv.id, url=invite_url(inv.token),
+                    message="Already invited; use Resend if they lost it.", invite_id=inv.id, url=invite_url(inv.token, base),
                 ))
                 continue
             inv = VenueInvite(
@@ -204,7 +211,7 @@ async def create_invites(
             db.add(inv)
             await db.flush()
             results.append(InviteRowResult(
-                row=i, name=name, email=email, result="invited", message="Invited.", invite_id=inv.id, url=invite_url(inv.token),
+                row=i, name=name, email=email, result="invited", message="Invited.", invite_id=inv.id, url=invite_url(inv.token, base),
             ))
             if body.send:
                 to_send.append(inv)
@@ -224,12 +231,16 @@ async def create_invites(
 
         async def _one(inv):
             async with sem:
-                return await send_invite(inv, venue, inviter)
+                return await send_invite(inv, venue, inviter, base)
         for e_ok, t_ok in await asyncio.gather(*[_one(inv) for inv in to_send]):
             emailed += int(e_ok)
             texted += int(t_ok)
 
     invited = sum(1 for r in results if r.result == "invited")
+    if invited:
+        await activity.for_venue("invites_sent", venue_id, current_user.id,
+                                 f"Invited {invited} {'person' if invited == 1 else 'people'}"
+                                 + (" from a CSV file" if body.source == "import" else ""))   # Phase 29.1
     return InviteBatchResult(
         results=results, invited=invited, skipped=len(results) - invited,
         emailed=emailed, texted=texted, email_available=email_available(),
@@ -245,6 +256,7 @@ async def _manager_invite(db: AsyncSession, venue_id: UUID, invite_id: UUID) -> 
 
 @router.post("/api/venues/{venue_id}/invites/{invite_id}/resend", response_model=PersonalInvite)
 async def resend_invite(
+    request: Request,
     venue_id: UUID,
     invite_id: UUID,
     current_user: User = Depends(require_manager_or_admin),
@@ -263,8 +275,9 @@ async def resend_invite(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not resend: {e}")
-    await send_invite(inv, venue, _person(current_user))
-    return _personal_response(inv)
+    base = public_base(request)
+    await send_invite(inv, venue, _person(current_user), base)
+    return _personal_response(inv, None, base)
 
 
 @router.delete("/api/venues/{venue_id}/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -359,4 +372,6 @@ async def accept_invite(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not join the team: {e}")
     await notify_events.team_joined(venue_id, current_user.id)
+    await activity.for_worker("team_joined", venue_id, current_user.id, current_user.id,
+                              "{name} joined the team with " + ("a personal invite" if inv.kind == "personal" else "the team link"))   # Phase 29.1
     return InviteAcceptResult(venue_id=venue_id, venue_name=venue_name, already_member=False)

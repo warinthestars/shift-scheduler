@@ -29,6 +29,7 @@ from src.services.notify_events import (
 )
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 from src.services.clock import auto_close_open_entries
+from src.services.activity import record_in
 
 logger = logging.getLogger("shiftboard.notification_worker")
 
@@ -116,13 +117,18 @@ async def scan_late(db: AsyncSession, now: datetime) -> int:
             continue
         worker = await db.scalar(select(User).where(User.id == r.worker_id))
         name = ev.title if ev else s.title
-        sent += await notify_in(
+        first_alert = await notify_in(
             db, [r.worker_id], "not_clocked_in",
             f"You haven't clocked in: {s.role_type} · {name}",
             f"Your shift started at {when_text(s.start_time, venue)}. Clock in now, or message your manager if you're running late.",
             worker_shift_link(r.id), venue_id=s.venue_id, event_id=s.event_id, request_id=r.id,
             urgent=True, dedupe_key=f"late-w:{r.id}",
         )
+        sent += first_alert
+        if first_alert:   # Phase 29.1: once per booking, in the venue's activity log
+            await record_in(db, s.venue_id, "not_clocked_in",
+                            f"{person(worker)} hadn't clocked in 10 min after the start: {s.role_type} · {name}",
+                            event_id=s.event_id, request_id=r.id, worker_id=r.worker_id)
         sent += await notify_in(
             db, await manager_ids(db, s.venue_id), "late_worker",
             f"{person(worker)} hasn't clocked in",
@@ -181,6 +187,11 @@ async def run_tick() -> None:
         logger.exception("notification delivery failed")
 
 
+# Phase 29.2: health for the admin System page (this process) + a Redis heartbeat (any process)
+WORKER_STATE = {"started_at": None, "last_tick_at": None, "last_ok": None, "last_error": None, "ticks": 0}
+HEARTBEAT_KEY = "shiftboard:notification-worker:last-tick"
+
+
 async def _acquire_lock():
     """Returns (redis_client or None, got_lock: bool)."""
     try:
@@ -194,6 +205,7 @@ async def _acquire_lock():
 
 async def notification_worker_loop() -> None:
     logger.info("Notification worker started.")
+    WORKER_STATE["started_at"] = datetime.now(timezone.utc)
     await asyncio.sleep(10)   # let startup/seed finish
     while True:
         client = None
@@ -201,9 +213,17 @@ async def notification_worker_loop() -> None:
             client, got = await _acquire_lock()
             if got:
                 await run_tick()
+                now = datetime.now(timezone.utc)
+                WORKER_STATE.update(last_tick_at=now, last_ok=True, last_error=None, ticks=WORKER_STATE["ticks"] + 1)
+                if client is not None:
+                    try:
+                        await client.set(HEARTBEAT_KEY, now.isoformat(), ex=3600)
+                    except Exception:
+                        pass
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as e:
+            WORKER_STATE.update(last_tick_at=datetime.now(timezone.utc), last_ok=False, last_error=str(e)[:300])
             logger.exception("notification worker tick failed")
         finally:
             if client is not None:

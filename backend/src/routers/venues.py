@@ -33,6 +33,8 @@ from src.services.shift_views import to_shift_responses
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 from src.services.clock import auto_close_open_entries, late_minutes as clock_late_minutes
 from src.services.locations import load_locations
+from src.services import activity
+from src.services import admin_audit
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -147,6 +149,8 @@ async def create_venue(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create venue: {str(e)}")
 
+    await admin_audit.record(current_user.id, "venue_created", f"Created venue {venue.name}",
+                             target_type="venue", target_id=venue.id)   # Phase 29.2
     return venue
 
 @router.get("/{venue_id}", response_model=VenueResponse)
@@ -193,9 +197,11 @@ async def get_venue_pending_requests(
             Shift.venue_id == venue_id,
             func.lower(ShiftRequest.status).in_([
                 "pending", "pending_manager_approval"
-            ])
+            ]),
+            Shift.end_time > datetime.now(timezone.utc),          # Phase 29.1: not for shifts that are over
+            func.upper(Shift.status) != "CANCELLED",
         )
-        .order_by(ShiftRequest.created_at.asc())
+        .order_by(Shift.start_time.asc(), ShiftRequest.created_at.asc())
     )
     return result.scalars().all()
 
@@ -237,6 +243,9 @@ async def update_venue_settings(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update venue: {str(e)}")
+    changed = ", ".join(k.replace("_", " ") for k in list(data.keys())[:6])
+    await activity.for_venue("venue_settings", venue_id, current_user.id,
+                             f"Updated venue settings{': ' + changed if changed else ''}")   # Phase 29.1
     return venue
 
 
@@ -463,17 +472,41 @@ async def get_venue_whitelist(
 @router.delete("/{venue_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_venue(
     venue_id: UUID,
+    confirm_name: str = Query("", description="Phase 29.2: must equal the venue's name"),
+    delete_history: bool = Query(False, description="Phase 29.2: also allowed when the venue has time entries (payroll)"),
     current_user: User = Depends(require_super_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """Delete a venue (Super Admin only)"""
-    result = await db.execute(select(Venue).where(Venue.id == venue_id))
-    venue = result.scalar_one_or_none()
+    """
+    Delete a venue (Super Admin only). Everything at the venue goes with it (events, shifts,
+    bookings, time entries, invites, activity) through ON DELETE CASCADE.
+    Phase 29.2 safety: the caller must type the venue name, and a venue with payroll history
+    (time entries) needs delete_history=true.
+    """
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
     if not venue:
         raise HTTPException(status_code=404, detail="Venue not found")
-
-    await db.delete(venue)
-    await db.commit()
+    name = venue.name
+    if (confirm_name or "").strip().lower() != (name or "").strip().lower():
+        raise HTTPException(status_code=400, detail=f"Type the venue name exactly ({name}) to delete it.")
+    te_count = int(await db.scalar(
+        select(func.count(TimeEntry.id)).join(Shift, Shift.id == TimeEntry.shift_id).where(Shift.venue_id == venue_id)
+    ) or 0)
+    if te_count and not delete_history:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name} has {te_count} time entries (payroll history). Download its payroll CSV first, then confirm deleting the history too.",
+        )
+    try:
+        # Core delete with DB cascades. Do NOT use db.delete(venue) (lazy-loads relationships -> MissingGreenlet).
+        await db.execute(delete(Venue).where(Venue.id == venue_id))
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete venue: {str(e)}")
+    await admin_audit.record(current_user.id, "venue_deleted",
+                             f"Deleted venue {name}" + (f" and {te_count} time entries" if te_count else ""),
+                             target_type="venue", target_id=venue_id)
 
 @router.get("/{venue_id}/export-hours")
 async def export_venue_hours_csv(

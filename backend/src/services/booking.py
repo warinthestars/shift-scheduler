@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 from src.models import Shift, ShiftEvent, ShiftRequest, User
 from src.services.auto_confirm import evaluate_shift_request, check_double_booking
 from src.services import notify_events
+from src.services import activity
 from src.services.team import is_blocked
 
 logger = logging.getLogger("shiftboard.booking")
@@ -207,6 +208,7 @@ async def request_position(
     # Phase 28: tell the venue's managers a request is waiting (runs after the commit; never raises)
     if status_val != "approved":
         await notify_events.request_pending(req_id)
+    await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id)   # Phase 29.1
     return req_id
 
 

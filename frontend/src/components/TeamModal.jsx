@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Users, UserPlus, Link2, Copy, Download, RefreshCw, Mail, Phone, Upload, ShieldCheck, Trash2, Ban,
-  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog,
+  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
+import WorkerProfilePanel, { Avatar } from './WorkerProfilePanel';
 import { fmtShortDate } from '../utils/venueTime';
 
 const inputCls =
@@ -178,14 +179,22 @@ function PositionPicker({ options, value, onChange }) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Members tab
+// Members tab (Phase 29.1: compact rows that expand into the full profile)
 // ---------------------------------------------------------------------------------------------
-function MemberCard({ m, venueId, positionOptions, onUpdated, onMessage }) {
+const FILTERS = [
+  ['active', 'On team'],
+  ['removed', 'Removed'],
+  ['blocked', 'Blocked'],
+  ['all', 'Everyone'],
+];
+
+function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUpdated, onMessage }) {
   const [editing, setEditing] = useState(false);
   const [positions, setPositions] = useState(m.positions || []);
   const [notes, setNotes] = useState(m.notes || '');
   const [confirm, setConfirm] = useState(null); // 'blocked' | 'removed'
   const [busy, setBusy] = useState(false);
+  const [profileKey, setProfileKey] = useState(0);
   const name = `${m.first_name} ${m.last_name}`.trim() || m.email;
   const allOptions = useMemo(() => {
     const names = positionOptions.slice();
@@ -203,6 +212,7 @@ function MemberCard({ m, venueId, positionOptions, onUpdated, onMessage }) {
       onMessage({ type: 'success', text: `${name}: ${res.data.message}` });
       setEditing(false);
       setConfirm(null);
+      setProfileKey((k) => k + 1);
     } catch (err) {
       onMessage({ type: 'error', text: err.response?.data?.detail || 'Could not save.' });
     } finally {
@@ -210,122 +220,126 @@ function MemberCard({ m, venueId, positionOptions, onUpdated, onMessage }) {
     }
   };
 
-  const here = m.venue_rating_count > 0
-    ? `Here: ★ ${Number(m.venue_rating).toFixed(1)} (${m.venue_rating_count})`
-    : null;
-  const again = m.would_book_again_yes + m.would_book_again_no > 0
-    ? `Would book again ${m.would_book_again_yes}/${m.would_book_again_yes + m.would_book_again_no}`
-    : null;
-
   return (
-    <div className={cardCls}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-white">{name}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${STATUS_CHIP[m.status] || STATUS_CHIP.active}`}>
-              {m.status === 'active' ? 'On team' : m.status === 'removed' ? 'Removed' : 'Blocked'}
-            </span>
-            <RatingBadge rating={m.aggregate_rating} count={m.rating_count} />
-            <ReliabilityBadge data={m.reliability} />
+    <div className={`rounded-xl border ${open ? 'border-emerald-500/40 bg-slate-950' : 'border-slate-800 bg-slate-950 hover:border-slate-700'}`}>
+      <button type="button" onClick={onToggle} className="w-full text-left px-3 py-2.5 flex items-center gap-3">
+        <Avatar person={m} size="w-9 h-9 text-xs" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-sm font-bold text-white truncate">{name}</span>
+            {m.status !== 'active' && (
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${STATUS_CHIP[m.status] || STATUS_CHIP.removed}`}>
+                {m.status === 'removed' ? 'Removed' : 'Blocked'}
+              </span>
+            )}
+            {(m.positions || []).slice(0, 3).map((p) => (
+              <span key={p} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[9px] font-bold uppercase">{p}</span>
+            ))}
+            {m.notes && <span title={m.notes} className="text-[10px] text-amber-300">• note</span>}
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-1">
-            {m.phone && <a href={`tel:${m.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{m.phone}</a>}
-            {m.email && <a href={`mailto:${m.email}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Mail className="w-3 h-3" />{m.email}</a>}
-          </div>
-          <div className="text-[11px] text-slate-500 mt-1">
+          <div className="text-[11px] text-slate-500 truncate">
             {m.shifts_worked} shift{m.shifts_worked === 1 ? '' : 's'} here
-            {m.last_worked && ` · last ${fmtShortDate(m.last_worked)}`}
+            {m.last_worked && ` · last ${fmtShortDate(m.last_worked, timeZone)}`}
             {m.upcoming > 0 && ` · ${m.upcoming} upcoming`}
-            {here && ` · ${here}`}
-            {again && ` · ${again}`}
-            {` · ${SOURCE_LABEL[m.source] || ''}`}
+            {m.phone ? ` · ${m.phone}` : m.email ? ` · ${m.email}` : ''}
           </div>
-          {m.positions?.length > 0 && !editing && (
-            <div className="flex flex-wrap gap-1 mt-2">
-              {m.positions.map((p) => (
-                <span key={p} className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-bold uppercase">{p}</span>
-              ))}
+        </div>
+        <div className="hidden sm:flex items-center gap-1.5">
+          <RatingBadge rating={m.aggregate_rating} count={m.rating_count} showCount={false} />
+          <ReliabilityBadge data={m.reliability} />
+        </div>
+        {open ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3 border-t border-slate-800 pt-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {m.phone && <a href={`tel:${m.phone}`} className={btnGhost}><Phone className="w-3.5 h-3.5" /> Call</a>}
+            {m.email && <a href={`mailto:${m.email}`} className={btnGhost}><Mail className="w-3.5 h-3.5" /> Email</a>}
+            {!editing && (
+              <button type="button" className={btnGhost} onClick={() => setEditing(true)}>
+                <Pencil className="w-3.5 h-3.5" /> Positions & note
+              </button>
+            )}
+            <span className="flex-1" />
+            {m.status === 'active' && (
+              <>
+                <button type="button" className={btnGhost} disabled={busy} onClick={() => setConfirm('removed')}>
+                  <Trash2 className="w-3.5 h-3.5" /> Remove
+                </button>
+                <button type="button" className={btnGhost} disabled={busy} onClick={() => setConfirm('blocked')}>
+                  <Ban className="w-3.5 h-3.5 text-rose-400" /> Block
+                </button>
+              </>
+            )}
+            {m.status === 'removed' && (
+              <button type="button" className={btnGhost} disabled={busy} onClick={() => patch({ status: 'active' })}>
+                <RotateCcw className="w-3.5 h-3.5" /> Add back
+              </button>
+            )}
+            {m.status === 'blocked' && (
+              <button type="button" className={btnGhost} disabled={busy} onClick={() => patch({ status: 'active' })}>
+                <RotateCcw className="w-3.5 h-3.5" /> Unblock
+              </button>
+            )}
+          </div>
+
+          {confirm && (
+            <div className="p-3 rounded-xl border border-rose-600/40 bg-rose-500/5 text-xs text-rose-100 flex flex-wrap items-center gap-2">
+              <span className="flex-1 min-w-[12rem]">
+                {confirm === 'blocked'
+                  ? `Block ${name}? They won't see or be able to request your shifts, and their waiting requests are declined. Existing bookings stay until you remove them.`
+                  : `Remove ${name} from the team? They lose team perks (instant booking, new-shift alerts) but can still request open shifts.`}
+              </span>
+              <button type="button" className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-40"
+                disabled={busy} onClick={() => patch({ status: confirm })}>
+                {confirm === 'blocked' ? 'Block' : 'Remove'}
+              </button>
+              <button type="button" className={btnGhost} onClick={() => setConfirm(null)}>Cancel</button>
             </div>
           )}
-          {m.notes && !editing && (
-            <p className="text-xs text-slate-300 mt-2 whitespace-pre-line bg-slate-900 border border-slate-800 rounded-lg p-2">
-              <span className="text-slate-500 font-semibold">Private note: </span>{m.notes}
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {!editing && (
-            <button type="button" className={btnGhost} onClick={() => setEditing(true)}>
-              <Pencil className="w-3.5 h-3.5" /> Edit
-            </button>
-          )}
-          {m.status === 'active' && (
-            <>
-              <button type="button" className={btnGhost} disabled={busy} onClick={() => setConfirm('removed')}>
-                <Trash2 className="w-3.5 h-3.5" /> Remove
-              </button>
-              <button type="button" className={btnGhost} disabled={busy} onClick={() => setConfirm('blocked')}>
-                <Ban className="w-3.5 h-3.5 text-rose-400" /> Block
-              </button>
-            </>
-          )}
-          {m.status === 'removed' && (
-            <button type="button" className={btnGhost} disabled={busy} onClick={() => patch({ status: 'active' })}>
-              <RotateCcw className="w-3.5 h-3.5" /> Add back
-            </button>
-          )}
-          {m.status === 'blocked' && (
-            <button type="button" className={btnGhost} disabled={busy} onClick={() => patch({ status: 'active' })}>
-              <RotateCcw className="w-3.5 h-3.5" /> Unblock
-            </button>
-          )}
-        </div>
-      </div>
 
-      {confirm && (
-        <div className="mt-3 p-3 rounded-xl border border-rose-600/40 bg-rose-500/5 text-xs text-rose-100 flex flex-wrap items-center gap-2">
-          <span className="flex-1 min-w-[12rem]">
-            {confirm === 'blocked'
-              ? `Block ${name}? They won't see or be able to request your shifts, and their waiting requests are declined. Existing bookings stay until you remove them.`
-              : `Remove ${name} from the team? They lose team perks (instant booking, new-shift alerts) but can still request open shifts.`}
-          </span>
-          <button type="button" className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-40"
-            disabled={busy} onClick={() => patch({ status: confirm })}>
-            {confirm === 'blocked' ? 'Block' : 'Remove'}
-          </button>
-          <button type="button" className={btnGhost} onClick={() => setConfirm(null)}>Cancel</button>
-        </div>
-      )}
+          {editing && (
+            <div className="space-y-3 p-3 rounded-xl border border-slate-800 bg-slate-900">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Positions they work here</label>
+                <PositionPicker options={allOptions} value={positions} onChange={setPositions} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Private note (managers only)</label>
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={2000} className={inputCls}
+                  placeholder="e.g. Great with VIP tables. Prefers weekends." />
+              </div>
+              <div className="flex gap-2">
+                <button type="button" className={btnPrimary} disabled={busy} onClick={() => patch({ positions, notes })}>
+                  {busy ? 'Saving…' : 'Save'}
+                </button>
+                <button type="button" className={btnGhost} onClick={() => { setEditing(false); setPositions(m.positions || []); setNotes(m.notes || ''); }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
-      {editing && (
-        <div className="mt-3 space-y-3 border-t border-slate-800 pt-3">
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Positions they work here</label>
-            <PositionPicker options={allOptions} value={positions} onChange={setPositions} />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Private note (managers only)</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={2000} className={inputCls}
-              placeholder="e.g. Great with VIP tables. Prefers weekends." />
-          </div>
-          <div className="flex gap-2">
-            <button type="button" className={btnPrimary} disabled={busy} onClick={() => patch({ positions, notes })}>
-              {busy ? 'Saving…' : 'Save'}
-            </button>
-            <button type="button" className={btnGhost} onClick={() => { setEditing(false); setPositions(m.positions || []); setNotes(m.notes || ''); }}>
-              Cancel
-            </button>
-          </div>
+          <WorkerProfilePanel venueId={venueId} workerId={m.worker_id} timeZone={timeZone} compact refreshKey={profileKey} />
         </div>
       )}
     </div>
   );
 }
 
-function AddPeoplePanel({ venueId, positionOptions, onAdded, onMessage, onGoInvite }) {
-  const [mode, setMode] = useState('create'); // 'create' | 'existing'
-  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', positions: [] });
+const RELATION_LABEL = {
+  active: ['On your team', 'text-emerald-300'],
+  removed: ['Removed', 'text-slate-400'],
+  blocked: ['Blocked', 'text-rose-300'],
+  worked: ['On your team (worked here)', 'text-emerald-300'],
+  requested: ['Requested here', 'text-amber-300'],
+  none: ['', ''],
+};
+const looksLikeEmail = (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test((v || '').trim());
+
+function CreateAccountForm({ venueId, positionOptions, initialEmail, onDone, onMessage }) {
+  const [form, setForm] = useState({ first_name: '', last_name: '', email: initialEmail || '', phone: '', positions: [] });
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -334,83 +348,179 @@ function AddPeoplePanel({ venueId, positionOptions, onAdded, onMessage, onGoInvi
     e.preventDefault();
     setBusy(true);
     try {
-      if (mode === 'existing') {
-        await api.post(`/venues/${venueId}/team`, { email: form.email, positions: form.positions });
-        onMessage({ type: 'success', text: `${form.email} added to the team.` });
-        setForm({ first_name: '', last_name: '', email: '', phone: '', positions: [] });
-      } else {
-        const res = await api.post(`/venues/${venueId}/team/accounts`, form);
-        setResult(res.data);
-      }
-      onAdded();
+      const res = await api.post(`/venues/${venueId}/team/accounts`, form);
+      setResult(res.data);
+      onDone(false);
     } catch (err) {
-      onMessage({ type: 'error', text: err.response?.data?.detail || 'Could not add them.' });
+      onMessage({ type: 'error', text: err.response?.data?.detail || 'Could not create the account.' });
     } finally {
       setBusy(false);
     }
   };
 
-  if (result) {
+  if (result) return <TempPassword result={result} onDone={() => onDone(true)} />;
+  return (
+    <form onSubmit={submit} className={`${cardCls} space-y-3`}>
+      <div className="text-sm font-bold text-white flex items-center gap-2"><KeyRound className="w-4 h-4 text-amber-400" /> Create an account for them</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <input className={inputCls} placeholder="First name" value={form.first_name} onChange={(e) => set('first_name', e.target.value)} required />
+        <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={(e) => set('last_name', e.target.value)} />
+        <input className={inputCls} type="email" placeholder="Email" value={form.email} onChange={(e) => set('email', e.target.value)} required />
+        <input className={inputCls} placeholder="Mobile (optional)" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+      </div>
+      <PositionPicker options={positionOptions} value={form.positions} onChange={(v) => set('positions', v)} />
+      <p className="text-[11px] text-slate-500">They get a temporary password (shown once) to sign in with. If the email already has a worker account, they're just added to your team.</p>
+      <div className="flex gap-2">
+        <button type="submit" className={btnPrimary} disabled={busy}><UserPlus className="w-4 h-4" /> {busy ? 'Saving…' : 'Create account'}</button>
+        <button type="button" className={btnGhost} onClick={() => onDone(true)}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Phase 29.1: Add people = search first. Finds people who worked or requested here, anyone who
+ * lets venues find them, and any account by its exact email. Falls back to invite / create account.
+ */
+function AddPeoplePanel({ venueId, positionOptions, onAdded, onMessage, onGoInvite, onClose }) {
+  const [q, setQ] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [addingId, setAddingId] = useState(null);
+  const [positions, setPositions] = useState([]);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => {
+    if (debounced.length < 2) {
+      setResults([]);
+      return undefined;
+    }
+    let active = true;
+    setSearching(true);
+    api
+      .get(`/venues/${venueId}/people`, { params: { q: debounced } })
+      .then((res) => active && setResults(res.data || []))
+      .catch(() => active && setResults([]))
+      .finally(() => active && setSearching(false));
+    return () => {
+      active = false;
+    };
+  }, [venueId, debounced]);
+
+  const add = async (p) => {
+    setAddingId(p.worker_id);
+    try {
+      await api.post(`/venues/${venueId}/team`, { worker_id: p.worker_id, positions });
+      onMessage({ type: 'success', text: `${p.first_name} ${p.last_name} added to the team. They've been notified.` });
+      setResults((rs) => rs.map((r) => (r.worker_id === p.worker_id ? { ...r, relation: 'active', can_add: false } : r)));
+      onAdded();
+    } catch (err) {
+      onMessage({ type: 'error', text: err.response?.data?.detail || 'Could not add them.' });
+    } finally {
+      setAddingId(null);
+    }
+  };
+
+  if (creating) {
     return (
-      <TempPassword
-        result={result}
-        onDone={() => {
-          setResult(null);
-          setForm({ first_name: '', last_name: '', email: '', phone: '', positions: [] });
+      <CreateAccountForm
+        venueId={venueId}
+        positionOptions={positionOptions}
+        initialEmail={looksLikeEmail(q) ? q.trim() : ''}
+        onMessage={onMessage}
+        onDone={(close) => {
+          onAdded();
+          if (close) setCreating(false);
         }}
       />
     );
   }
 
+  const exactEmail = looksLikeEmail(debounced);
   return (
-    <form onSubmit={submit} className={`${cardCls} space-y-3`}>
-      <div className="flex flex-wrap gap-2">
-        {[
-          ['create', 'Create an account for them'],
-          ['existing', 'They already have an account'],
-        ].map(([id, label]) => (
-          <button key={id} type="button" onClick={() => setMode(id)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${mode === id ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
-            {label}
-          </button>
-        ))}
-        <button type="button" onClick={onGoInvite} className="px-3 py-1.5 rounded-lg text-xs font-semibold border bg-slate-800 text-slate-400 border-slate-700">
-          Send an invite instead
-        </button>
+    <div className={`${cardCls} space-y-3`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-bold text-white flex items-center gap-2"><UserPlus className="w-4 h-4 text-emerald-400" /> Add people</div>
+        <button type="button" onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800" aria-label="Close"><X className="w-4 h-4" /></button>
       </div>
-      {mode === 'create' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <input className={inputCls} placeholder="First name" value={form.first_name} onChange={(e) => set('first_name', e.target.value)} required />
-          <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={(e) => set('last_name', e.target.value)} />
-          <input className={inputCls} placeholder="Mobile (optional)" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
-          <input className={inputCls} type="email" placeholder="Email" value={form.email} onChange={(e) => set('email', e.target.value)} required />
+      <div className="relative">
+        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} className={`${inputCls} pl-9`}
+          placeholder="Search by name, email or phone" />
+      </div>
+      <div>
+        <label className="block text-[11px] font-semibold text-slate-400 mb-1">Tag them as (optional)</label>
+        <PositionPicker options={positionOptions} value={positions} onChange={setPositions} />
+      </div>
+
+      {debounced.length >= 2 && (
+        <div className="space-y-1.5">
+          {searching && results.length === 0 ? (
+            <p className="text-xs text-slate-500">Searching…</p>
+          ) : results.length === 0 ? (
+            <div className="p-3 rounded-xl border border-slate-800 text-xs text-slate-400 space-y-2">
+              <p>
+                No one found. People only show up if they've worked or requested here, or let venues find them in their settings.
+                {exactEmail ? ' No account uses that email yet.' : ' An exact email address always works.'}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={btnGhost} onClick={onGoInvite}><Send className="w-3.5 h-3.5" /> Invite {exactEmail ? debounced : 'them'}</button>
+                <button type="button" className={btnGhost} onClick={() => setCreating(true)}><KeyRound className="w-3.5 h-3.5" /> Create an account</button>
+              </div>
+            </div>
+          ) : (
+            results.map((p) => {
+              const [relLabel, relCls] = RELATION_LABEL[p.relation] || RELATION_LABEL.none;
+              return (
+                <div key={p.worker_id} className="p-2.5 rounded-xl border border-slate-800 bg-slate-900 flex items-center gap-3">
+                  <Avatar person={p} size="w-8 h-8 text-[11px]" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-sm font-semibold text-white">{`${p.first_name} ${p.last_name}`.trim()}</span>
+                      <RatingBadge rating={p.aggregate_rating} count={p.rating_count} showCount={false} />
+                      {relLabel && <span className={`text-[10px] font-semibold ${relCls}`}>{relLabel}</span>}
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate">
+                      {[p.email, p.phone].filter(Boolean).join(' · ')}
+                      {p.reliability_score !== null && p.reliability_score !== undefined && ` · ${Math.round(p.reliability_score)}% reliable`}
+                    </div>
+                  </div>
+                  {p.can_add ? (
+                    <button type="button" className={btnGhost} disabled={addingId === p.worker_id} onClick={() => add(p)}>
+                      <Plus className="w-3.5 h-3.5" /> {addingId === p.worker_id ? 'Adding…' : 'Add'}
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">{p.relation === 'blocked' ? 'Unblock them in the list' : 'Already on your team'}</span>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
-      {mode === 'existing' && (
-        <input className={inputCls} type="email" placeholder="Their ShiftBoard email" value={form.email} onChange={(e) => set('email', e.target.value)} required />
-      )}
-      <div>
-        <label className="block text-xs font-semibold text-slate-300 mb-1">Positions</label>
-        <PositionPicker options={positionOptions} value={form.positions} onChange={(v) => set('positions', v)} />
+
+      <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
+        <span className="text-[11px] text-slate-500 mr-auto pt-2">Not on ShiftBoard yet?</span>
+        <button type="button" className={`${btnGhost} mt-2`} onClick={onGoInvite}><Send className="w-3.5 h-3.5" /> Invite by email, text or QR</button>
+        <button type="button" className={`${btnGhost} mt-2`} onClick={() => setCreating(true)}><KeyRound className="w-3.5 h-3.5" /> Create an account</button>
       </div>
-      <p className="text-[11px] text-slate-500">
-        {mode === 'create'
-          ? 'Creates a worker account with a temporary password you give them. If the email already has an account, they are just added to your team.'
-          : 'Adds an existing worker account to your team.'}
-      </p>
-      <button type="submit" className={btnPrimary} disabled={busy}>
-        <UserPlus className="w-4 h-4" /> {busy ? 'Saving…' : mode === 'create' ? 'Create account' : 'Add to team'}
-      </button>
-    </form>
+    </div>
   );
 }
 
-function MembersTab({ venueId, positionOptions, onChanged, onMessage, onGoInvite }) {
+function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, onGoInvite }) {
   const [members, setMembers] = useState([]);
   const [filter, setFilter] = useState('active');
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [openId, setOpenId] = useState(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -446,20 +556,24 @@ function MembersTab({ venueId, positionOptions, onChanged, onMessage, onGoInvite
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[12rem]">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, email, phone, position" className={`${inputCls} pl-9`} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter your team by name, phone or position" className={`${inputCls} pl-9`} />
         </div>
-        <select value={filter} onChange={(e) => setFilter(e.target.value)} className={`${inputCls} w-auto`}>
-          <option value="active">On team</option>
-          <option value="removed">Removed</option>
-          <option value="blocked">Blocked</option>
-          <option value="all">Everyone</option>
-        </select>
-        <button type="button" className={btnPrimary} onClick={() => setAdding((a) => !a)}>
-          <UserPlus className="w-4 h-4" /> {adding ? 'Close' : 'Add people'}
-        </button>
+        <div className="flex bg-slate-800 border border-slate-700 rounded-xl p-0.5 overflow-x-auto">
+          {FILTERS.map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setFilter(id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap ${filter === id ? 'bg-emerald-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {!adding && (
+          <button type="button" className={`${btnPrimary} justify-center`} onClick={() => setAdding(true)}>
+            <UserPlus className="w-4 h-4" /> Add people
+          </button>
+        )}
       </div>
 
       {adding && (
@@ -469,20 +583,40 @@ function MembersTab({ venueId, positionOptions, onChanged, onMessage, onGoInvite
           onAdded={() => { setTick((t) => t + 1); onChanged(); }}
           onMessage={onMessage}
           onGoInvite={onGoInvite}
+          onClose={() => setAdding(false)}
         />
       )}
 
-      {loading ? (
+      {loading && members.length === 0 ? (
         <p className="text-sm text-slate-500 py-8 text-center">Loading…</p>
       ) : shown.length === 0 ? (
-        <p className="text-sm text-slate-500 py-8 text-center">
-          {filter === 'active' ? 'No one on the team yet. Add people or share your team link.' : 'No one here.'}
-        </p>
+        <div className="text-center py-10 space-y-3">
+          <Users className="w-8 h-8 text-slate-600 mx-auto" />
+          <p className="text-sm text-slate-400">
+            {filter === 'active' ? 'No one on the team yet.' : q ? 'No one matches.' : 'No one here.'}
+          </p>
+          {filter === 'active' && !q && (
+            <div className="flex justify-center gap-2">
+              <button type="button" className={btnGhost} onClick={() => setAdding(true)}><UserPlus className="w-3.5 h-3.5" /> Add people</button>
+              <button type="button" className={btnGhost} onClick={onGoInvite}><Link2 className="w-3.5 h-3.5" /> Share your team link</button>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="space-y-2">
-          <p className="text-[11px] text-slate-500">{shown.length} {shown.length === 1 ? 'person' : 'people'}</p>
+          <p className="text-[11px] text-slate-500">{shown.length} {shown.length === 1 ? 'person' : 'people'} · tap someone for their history and actions</p>
           {shown.map((m) => (
-            <MemberCard key={m.worker_id} m={m} venueId={venueId} positionOptions={positionOptions} onUpdated={updated} onMessage={onMessage} />
+            <MemberRow
+              key={m.worker_id}
+              m={m}
+              venueId={venueId}
+              timeZone={timeZone}
+              positionOptions={positionOptions}
+              open={openId === m.worker_id}
+              onToggle={() => setOpenId(openId === m.worker_id ? null : m.worker_id)}
+              onUpdated={updated}
+              onMessage={onMessage}
+            />
           ))}
         </div>
       )}
@@ -534,6 +668,12 @@ function TeamLinkCard({ venueId, venueName, onMessage }) {
           Anyone with this link or QR code can join your team: post it in the staff group chat or print it for the back office.
           New people create an account; existing ones just sign in.
         </p>
+        {/localhost|127\.0\.0\.1/.test(link.url) && !/localhost|127\.0\.0\.1/.test(window.location.hostname) && (
+          <p className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/40 rounded-lg p-2 flex gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            This link points at localhost, so it won't open on anyone's phone. Set APP_BASE_URL in the server's secrets file to your site address.
+          </p>
+        )}
         <div className="flex gap-2">
           <input readOnly value={link.url} className={`${inputCls} font-mono text-xs`} onFocus={(e) => e.target.select()} />
           <button type="button" className={btnGhost} onClick={async () => setCopied(await copyText(link.url))}>
@@ -822,6 +962,9 @@ function ManagersTab({ venueId, onMessage }) {
     <div className="space-y-4">
       <div className={`${cardCls} space-y-2`}>
         <div className="text-sm font-bold text-white flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-400" /> Managers of this venue</div>
+        {managers.length === 0 && (
+          <p className="text-xs text-slate-500">No managers yet. Only platform admins can run this venue until you add one below.</p>
+        )}
         <div className="divide-y divide-slate-800">
           {managers.map((m) => (
             <div key={m.user_id} className="py-2 flex flex-wrap items-center gap-2 text-sm">
@@ -875,28 +1018,43 @@ function ManagersTab({ venueId, onMessage }) {
 
 /**
  * Phase 29: Team page (modal) for a venue: members, invites (link / QR / CSV), co-managers.
- * Props: venue ({id, name}), positions (venue positions [{name}]), onClose, onChanged
+ * Phase 29.1: counts on the tabs, search-first "Add people", rows that expand into the profile.
+ * Props: venue ({id, name}), positions (venue positions [{name}]), timeZone, onClose, onChanged
  */
-export default function TeamModal({ venue, positions = [], onClose, onChanged }) {
+export default function TeamModal({ venue, positions = [], timeZone, onClose, onChanged }) {
   const [tab, setTab] = useState('members');
   const [msg, setMsg] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [summaryTick, setSummaryTick] = useState(0);
   const positionOptions = useMemo(() => (positions || []).map((p) => p.name).filter(Boolean), [positions]);
-  const changed = () => onChanged && onChanged();
+  const changed = () => {
+    setSummaryTick((t) => t + 1);
+    if (onChanged) onChanged();
+  };
+
+  useEffect(() => {
+    api.get(`/venues/${venue.id}/team/summary`).then((res) => setSummary(res.data)).catch(() => setSummary(null));
+  }, [venue.id, summaryTick, tab]);
 
   const tabs = [
-    ['members', 'Team', Users],
-    ['invite', 'Invite', Send],
-    ['managers', 'Managers', ShieldCheck],
+    ['members', 'Team', Users, summary?.active],
+    ['invite', 'Invite', Send, summary?.invites_pending],
+    ['managers', 'Managers', ShieldCheck, summary?.managers],
   ];
 
   const headerExtra = (
     <div className="flex flex-wrap gap-2">
-      {tabs.map(([id, label, Icon]) => (
+      {tabs.map(([id, label, Icon, count]) => (
         <button key={id} type="button" onClick={() => { setTab(id); setMsg(null); }}
           className={`px-3 py-1.5 rounded-lg text-xs font-bold border inline-flex items-center gap-1.5 ${
             tab === id ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
           }`}>
           <Icon className="w-3.5 h-3.5" /> {label}
+          {count > 0 && (
+            <span className={`px-1.5 rounded-full text-[10px] ${tab === id ? 'bg-slate-950/20' : 'bg-slate-700 text-slate-200'}`}>
+              {id === 'invite' ? `${count} pending` : count}
+            </span>
+          )}
         </button>
       ))}
     </div>
@@ -918,12 +1076,12 @@ export default function TeamModal({ venue, positions = [], onClose, onChanged })
         </div>
       )}
       {tab === 'members' && (
-        <MembersTab venueId={venue.id} positionOptions={positionOptions} onChanged={changed} onMessage={setMsg} onGoInvite={() => setTab('invite')} />
+        <MembersTab venueId={venue.id} timeZone={timeZone} positionOptions={positionOptions} onChanged={changed} onMessage={setMsg} onGoInvite={() => setTab('invite')} />
       )}
       {tab === 'invite' && (
         <InviteTab venueId={venue.id} venueName={venue.name} positionOptions={positionOptions} onMessage={setMsg} />
       )}
-      {tab === 'managers' && <ManagersTab venueId={venue.id} onMessage={setMsg} />}
+      {tab === 'managers' && <ManagersTab venueId={venue.id} onMessage={(m) => { setMsg(m); changed(); }} />}
     </ModalShell>
   );
 }

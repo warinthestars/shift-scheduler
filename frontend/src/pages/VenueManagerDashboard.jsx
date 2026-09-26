@@ -1,20 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
-  Calendar as CalendarIcon, Clock, DollarSign, Users, Plus, Trash2, Check, X,
-  Building2, Star, AlertCircle, ShieldCheck, Zap, ArrowRight,
-  Download, ArrowRightLeft, MessageSquare, FileText, List as ListIcon, Settings, UserPlus
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X,
 } from 'lucide-react';
-import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
-import { format, parse, startOfWeek, getDay } from 'date-fns';
-import { enUS } from 'date-fns/locale';
-import 'react-big-calendar/lib/css/react-big-calendar.css';
-import ShiftBoard from '../components/ShiftBoard';
-import ShiftRosterModal from '../components/ShiftRosterModal';
-import TipBadge from '../components/TipBadge';
-import ReliabilityBadge from '../components/ReliabilityBadge';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
 import ShiftEventFormModal from '../components/ShiftEventFormModal';
@@ -22,23 +12,18 @@ import ShiftBoardModal from '../components/ShiftBoardModal';
 import ReasonDialog from '../components/ReasonDialog';
 import DuplicateEventModal from '../components/DuplicateEventModal';
 import TimesheetModal from '../components/TimesheetModal';
-import PayLabel from '../components/PayLabel';
 import TeamModal from '../components/TeamModal';
-import RatingBadge from '../components/RatingBadge';
-import { zonedLocalToUtcIso, fmtShortDate } from '../utils/venueTime';
+import ReviewModal from '../components/ReviewModal';
+import ActivityFeed from '../components/ActivityFeed';
+import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
+import { WorkerProfileModal } from '../components/WorkerProfilePanel';
 
-const locales = {
-  'en-US': enUS,
-};
-
-const localizer = dateFnsLocalizer({
-  format,
-  parse,
-  startOfWeek,
-  getDay,
-  locales,
-});
-
+/**
+ * Venue manager dashboard.
+ * Phase 29.1 layout: Posted Shifts on the left (2/3), and on the right the things that need you
+ * (requests, hand-offs) plus the venue's activity log. On phones a "Needs attention" strip at the
+ * top jumps to the queues. The old Phase 16 roster/calendar code (never shown) was removed.
+ */
 export default function VenueManagerDashboard() {
   const { user } = useAuth();
   const isPlatformAdmin = ['platform_admin', 'super_admin'].includes((user?.role || '').toLowerCase());
@@ -53,7 +38,6 @@ export default function VenueManagerDashboard() {
       ? (localStorage.getItem('shiftboard_admin_venue_id') || user?.venue_id || null)
       : (user?.venue_id || null));
 
-  const [venueShifts, setVenueShifts] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
   const [pendingTransfers, setPendingTransfers] = useState([]);
   const [currentVenueId, setCurrentVenueId] = useState(initialVenue);
@@ -63,11 +47,6 @@ export default function VenueManagerDashboard() {
   const [exportingCSV, setExportingCSV] = useState(false);
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [notification, setNotification] = useState(null);
-
-  // Phase 16: Roster & Calendar Views state
-  const [viewMode, setViewMode] = useState("calendar"); // Toggles between "list" and "calendar".
-  const [roster, setRoster] = useState([]); // Holds the data from `/api/venues/{venue_id}/roster`.
-  const [selectedShift, setSelectedShift] = useState(null); // Triggers the drill-down modal.
 
   const [reliabilityMap, setReliabilityMap] = useState({});
   const [managedVenues, setManagedVenues] = useState([]);
@@ -80,6 +59,18 @@ export default function VenueManagerDashboard() {
   const [timesheetEventId, setTimesheetEventId] = useState(null);
   const [openTarget, setOpenTarget] = useState(null); // Phase 28: { venueId, eventId } from a notification link
   const [showTeam, setShowTeam] = useState(false);    // Phase 29: Team page
+  const [review, setReview] = useState(null);         // Phase 29.1: { type: 'request' | 'transfer', data }
+  const [profileWorkerId, setProfileWorkerId] = useState(null); // Phase 29.1: from the activity log
+  const noticeTimer = useRef(null);
+
+  // Phase 29.1: success / info banners clear themselves after 6 s; errors stay until dismissed
+  useEffect(() => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    if (notification && notification.type !== 'error') {
+      noticeTimer.current = setTimeout(() => setNotification(null), 6000);
+    }
+    return () => noticeTimer.current && clearTimeout(noticeTimer.current);
+  }, [notification]);
 
   const fetchVenueData = async (venueId) => {
     try {
@@ -104,20 +95,16 @@ export default function VenueManagerDashboard() {
         return;
       }
 
-      const [shiftsRes, requestsRes, venueRes, transfersRes, rosterRes, reliabilityRes] = await Promise.all([
-        api.get(`/venues/${activeId}/shifts`),
+      const [requestsRes, venueRes, transfersRes, reliabilityRes] = await Promise.all([
         api.get(`/venues/${activeId}/requests/pending`),
         api.get(`/venues/${activeId}`),
         api.get(`/transfers/venue/${activeId}/pending`).catch(() => ({ data: [] })),
-        api.get(`/venues/${activeId}/roster`).catch(() => ({ data: [] })),
         api.get(`/venues/${activeId}/reliability`).catch(() => ({ data: {} })),
       ]);
 
-      setVenueShifts(shiftsRes.data || []);
       setPendingRequests(requestsRes.data || []);
       setVenueDetails(venueRes.data || null);
       setPendingTransfers(transfersRes.data || []);
-      setRoster(rosterRes.data || []);
       setReliabilityMap(reliabilityRes.data || {});
       setBoardRefreshKey((k) => k + 1);
     } catch (err) {
@@ -133,6 +120,7 @@ export default function VenueManagerDashboard() {
 
   useEffect(() => {
     fetchVenueData(currentVenueId || user?.venue_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.venue_id]);
 
   // Listen to Super Admin venue switcher from Navbar
@@ -146,13 +134,14 @@ export default function VenueManagerDashboard() {
     };
     window.addEventListener('admin_venue_changed', handleAdminVenueSwitch);
     return () => window.removeEventListener('admin_venue_changed', handleAdminVenueSwitch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Phase 28: handle ?venue= / ?event= (also when already on this page)
+  // Phase 28: handle ?venue= / ?event= (also when already on this page); Phase 29: ?team=1
   useEffect(() => {
     const venue = searchParams.get('venue');
     const event = searchParams.get('event');
-    const team = searchParams.get('team');          // Phase 29: ?team=1 opens the Team page
+    const team = searchParams.get('team');
     if (!venue && !event && !team) return;
     const targetVenue = venue || currentVenueId;
     if (venue && String(venue) !== String(currentVenueId)) {
@@ -190,64 +179,17 @@ export default function VenueManagerDashboard() {
     loadVenuePositions(currentVenueId);
   }, [currentVenueId]);
 
-  // Phase 16: Fetch roster data when currentVenueId changes
-  useEffect(() => {
-    if (!currentVenueId) return;
-    const fetchRoster = async () => {
-      try {
-        const res = await api.get(`/venues/${currentVenueId}/roster`);
-        setRoster(res.data || []);
-      } catch (err) {
-        console.error('Error fetching venue roster:', err);
-      }
-    };
-    fetchRoster();
-  }, [currentVenueId]);
-
-  // Transform roster into react-big-calendar events
-  const calendarEvents = useMemo(() => {
-    return (roster || []).map((shift) => ({
-      id: shift.id,
-      title: shift.name || shift.title,
-      start: new Date(shift.start_time),
-      end: new Date(shift.end_time),
-      resource: shift,
-    }));
-  }, [roster]);
-
-  // Group roster shifts by Date for List view
-  const shiftsByDate = useMemo(() => {
-    return (roster || []).reduce((acc, shift) => {
-      const dateKey = shift.start_time
-        ? new Date(shift.start_time).toLocaleDateString([], {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-          })
-        : 'Unscheduled';
-      if (!acc[dateKey]) acc[dateKey] = [];
-      acc[dateKey].push(shift);
-      return acc;
-    }, {});
-  }, [roster]);
-
   // Approval queue actions
   const handleApprove = async (requestId) => {
     try {
       setActionLoading(`approve-${requestId}`);
       await api.post(`/requests/${requestId}/approve`);
       setPendingRequests((prev) => prev.filter((r) => r.id !== requestId));
-      setNotification({
-        type: 'success',
-        message: 'Worker request approved and confirmed for shift!',
-      });
+      setNotification({ type: 'success', message: 'Approved. They are booked and have been notified.' });
+      setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({
-        type: 'error',
-        message: err.response?.data?.detail || 'Failed to approve request.',
-      });
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to approve request.' });
     } finally {
       setActionLoading(null);
     }
@@ -258,16 +200,11 @@ export default function VenueManagerDashboard() {
       setActionLoading(`deny-${requestId}`);
       await api.post(`/requests/${requestId}/deny`);
       setPendingRequests((prev) => prev.filter((r) => r.id !== requestId));
-      setNotification({
-        type: 'info',
-        message: 'Shift application declined.',
-      });
+      setNotification({ type: 'info', message: 'Request declined. They have been notified.' });
+      setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({
-        type: 'error',
-        message: err.response?.data?.detail || 'Failed to deny request.',
-      });
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to deny request.' });
     } finally {
       setActionLoading(null);
     }
@@ -279,16 +216,11 @@ export default function VenueManagerDashboard() {
       setActionLoading(`transfer-approve-${transferId}`);
       await api.post(`/transfers/${transferId}/manager-review`, { action: 'approve' });
       setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId));
-      setNotification({
-        type: 'success',
-        message: 'Shift transfer approved! Spot reassigned to new worker.',
-      });
+      setNotification({ type: 'success', message: 'Hand-off approved. The spot now belongs to the new worker.' });
+      setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({
-        type: 'error',
-        message: err.response?.data?.detail || 'Failed to approve shift transfer.',
-      });
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to approve the hand-off.' });
     } finally {
       setActionLoading(null);
     }
@@ -299,16 +231,11 @@ export default function VenueManagerDashboard() {
       setActionLoading(`transfer-deny-${transferId}`);
       await api.post(`/transfers/${transferId}/manager-review`, { action: 'deny' });
       setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId));
-      setNotification({
-        type: 'info',
-        message: 'Shift transfer request rejected.',
-      });
+      setNotification({ type: 'info', message: 'Hand-off denied. The original worker keeps the shift.' });
+      setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({
-        type: 'error',
-        message: err.response?.data?.detail || 'Failed to deny transfer.',
-      });
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to deny the hand-off.' });
     } finally {
       setActionLoading(null);
     }
@@ -319,9 +246,7 @@ export default function VenueManagerDashboard() {
     if (!currentVenueId) return;
     try {
       setExportingCSV(true);
-      const response = await api.get(`/venues/${currentVenueId}/payroll/export`, {
-        responseType: 'blob',
-      });
+      const response = await api.get(`/venues/${currentVenueId}/payroll/export`, { responseType: 'blob' });
       const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -331,21 +256,14 @@ export default function VenueManagerDashboard() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      setNotification({
-        type: 'success',
-        message: '📊 Payroll CSV downloaded successfully!',
-      });
+      setNotification({ type: 'success', message: 'Payroll CSV downloaded.' });
     } catch (err) {
       console.error('Error exporting payroll CSV:', err);
-      setNotification({
-        type: 'error',
-        message: 'Failed to download payroll CSV.',
-      });
+      setNotification({ type: 'error', message: 'Failed to download payroll CSV.' });
     } finally {
       setExportingCSV(false);
     }
   };
-
 
   const handleManagerVenueChange = (e) => {
     const newId = e.target.value;
@@ -356,6 +274,17 @@ export default function VenueManagerDashboard() {
   const afterChange = (message) => {
     setNotification({ type: 'success', message });
     fetchVenueData(currentVenueId);
+  };
+
+  const openEvent = (eventId) => {
+    setReview(null);
+    setProfileWorkerId(null);
+    setOpenTarget({ venueId: currentVenueId, eventId });
+  };
+
+  const scrollTo = (id) => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const askCancelEvent = (ev) =>
@@ -396,7 +325,7 @@ export default function VenueManagerDashboard() {
 
   if (!loading && !currentVenueId) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+      <div className="min-h-screen w-full bg-slate-950 text-slate-100 flex items-center justify-center p-6">
         <div className="max-w-md text-center bg-slate-900 border border-slate-800 rounded-2xl p-8">
           <Building2 className="w-10 h-10 text-amber-400 mx-auto mb-3" />
           <h1 className="text-lg font-bold text-white mb-1">No venue assigned yet</h1>
@@ -408,27 +337,28 @@ export default function VenueManagerDashboard() {
     );
   }
 
+  const tz = venueDetails?.timezone;
+  const attention = pendingRequests.length + pendingTransfers.length;
+  const headerBtn =
+    'px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm disabled:opacity-50';
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 pb-16">
-      {/* Header Banner */}
-      <section className="bg-slate-900 border-b border-slate-800 py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-          <div className="flex items-center space-x-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-400 flex items-center justify-center text-slate-950 font-black text-xl shadow-lg shadow-amber-500/20">
-              <Building2 className="w-7 h-7" />
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 pb-16">
+      {/* Header */}
+      <section className="w-full bg-slate-900 border-b border-slate-800 py-6">
+        <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-400 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/20 flex-shrink-0">
+              <Building2 className="w-6 h-6" />
             </div>
-            <div>
-              <div className="flex items-center space-x-2.5">
-                <h1 className="text-2xl font-bold text-white">
-                  {venueDetails?.name || 'Venue Management'}
-                </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  Venue Manager
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl sm:text-2xl font-bold text-white truncate">{venueDetails?.name || 'Venue'}</h1>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  {isPlatformAdmin ? 'Platform admin' : 'Venue manager'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 mt-1">
-                {venueDetails?.address || 'Review applicant queue, approve workers, and publish shifts.'}
-              </p>
+              <p className="text-xs text-slate-400 mt-0.5 truncate">{venueDetails?.address || ''}</p>
               {!isPlatformAdmin && managedVenues.length > 1 && (
                 <select
                   value={currentVenueId || ''}
@@ -443,66 +373,36 @@ export default function VenueManagerDashboard() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setShowTeam(true)}
-              disabled={!venueDetails}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
-            >
-              <UserPlus className="w-4 h-4 text-emerald-400" />
-              <span>Team</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowVenueSettings(true)}
-              disabled={!venueDetails}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
-            >
-              <Settings className="w-4 h-4 text-amber-400" />
-              <span>Venue Settings</span>
-            </button>
-
-            {currentVenueId && (
-              <Link
-                to={`/venues/${currentVenueId}`}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm"
-              >
-                <Users className="w-4 h-4 text-emerald-400" />
-                <span>Public page</span>
-              </Link>
-            )}
-
-            {/* Download Payroll CSV Button */}
-            <button
-              type="button"
-              onClick={exportPayroll}
-              disabled={exportingCSV || !currentVenueId}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
-            >
-              <Download className="w-4 h-4 text-emerald-400" />
-              <span>{exportingCSV ? 'Downloading...' : 'Download Payroll CSV'}</span>
-            </button>
-
-            {/* Create New Shift Button */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setEventForm({ mode: 'create' })}
-              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-emerald-500/20"
+              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
             >
-              <Plus className="w-4 h-4" />
-              <span>Post a Shift</span>
+              <Plus className="w-4 h-4" /> Post a Shift
             </button>
+            <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
+              <UserPlus className="w-4 h-4 text-emerald-400" /> Team
+            </button>
+            <button type="button" onClick={() => setShowVenueSettings(true)} disabled={!venueDetails} className={headerBtn}>
+              <Settings className="w-4 h-4 text-amber-400" /> Settings
+            </button>
+            <button type="button" onClick={exportPayroll} disabled={exportingCSV || !currentVenueId} className={headerBtn}>
+              <Download className="w-4 h-4 text-emerald-400" /> {exportingCSV ? 'Downloading…' : 'Payroll CSV'}
+            </button>
+            {currentVenueId && (
+              <Link to={`/venues/${currentVenueId}`} className={headerBtn}>
+                <Globe className="w-4 h-4 text-sky-400" /> Public page
+              </Link>
+            )}
           </div>
         </div>
       </section>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
+      <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
         {notification && (
           <div
-            className={`p-4 rounded-xl border flex items-center justify-between transition ${
+            className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
               notification.type === 'success'
                 ? 'bg-emerald-950/80 border-emerald-700 text-emerald-200'
                 : notification.type === 'error'
@@ -510,213 +410,89 @@ export default function VenueManagerDashboard() {
                 : 'bg-indigo-950/80 border-indigo-700 text-indigo-200'
             }`}
           >
-            <div className="flex items-center space-x-2.5">
+            <div className="flex items-center gap-2.5">
               {notification.type === 'success' ? (
                 <Check className="w-5 h-5 text-emerald-400 flex-shrink-0" />
               ) : (
-                <AlertCircle className="w-5 h-5 text-indigo-400 flex-shrink-0" />
+                <AlertCircle className="w-5 h-5 flex-shrink-0" />
               )}
               <span className="text-sm font-medium">{notification.message}</span>
             </div>
-            <button onClick={() => setNotification(null)} className="text-xs underline hover:opacity-80">
-              Dismiss
+            <button type="button" onClick={() => setNotification(null)} aria-label="Dismiss" className="p-1 rounded-lg hover:bg-white/10">
+              <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
-        {/* Section 1: Pending Transfers */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <ArrowRightLeft className="w-5 h-5 text-amber-400" />
-              <h2 className="text-base font-bold text-white">
-                Pending Transfers ({pendingTransfers.length})
-              </h2>
-            </div>
-            <span className="text-xs text-slate-400">
-              Worker-to-worker shift swaps awaiting manager approval
-            </span>
+        {/* Phones / tablets: jump to the queues that sit below the shifts */}
+        {attention > 0 && (
+          <div className="lg:hidden flex flex-wrap gap-2">
+            {pendingRequests.length > 0 && (
+              <button type="button" onClick={() => scrollTo('approval-queue')}
+                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
+                <Users className="w-4 h-4" /> {pendingRequests.length} request{pendingRequests.length === 1 ? '' : 's'} to review
+              </button>
+            )}
+            {pendingTransfers.length > 0 && (
+              <button type="button" onClick={() => scrollTo('pending-transfers')}
+                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
+                <ArrowRightLeft className="w-4 h-4" /> {pendingTransfers.length} hand-off{pendingTransfers.length === 1 ? '' : 's'} to approve
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          {/* Left: posted shifts */}
+          <div className="lg:col-span-2 min-w-0">
+            <PostedShiftsBoard
+              venueId={currentVenueId}
+              openEventId={openTarget && String(openTarget.venueId) === String(currentVenueId) ? openTarget.eventId : null}
+              onOpenedEvent={() => setOpenTarget(null)}
+              onDataChanged={() => fetchVenueData(currentVenueId)}
+              refreshKey={boardRefreshKey}
+              reliabilityMap={reliabilityMap}
+              onApprove={handleApprove}
+              onDeny={handleDeny}
+              onOpenBoard={setActiveDiscussionShift}
+              onEditEvent={(id) => setEventForm({ mode: 'edit', eventId: id })}
+              onCancelEvent={askCancelEvent}
+              onDuplicateEvent={(ev) => setDupEvent(ev)}
+              onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
+              onRemovePerson={askRemovePerson}
+              onCancelPosition={askCancelPosition}
+              actionLoading={actionLoading}
+              timeZone={tz}
+            />
           </div>
 
-          {pendingTransfers.length === 0 ? (
-            <div className="text-center py-8 bg-slate-950/50 rounded-xl border border-slate-800">
-              <Check className="w-6 h-6 text-emerald-500/60 mx-auto mb-1.5" />
-              <p className="text-xs text-slate-400">No shift transfer requests waiting for approval.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {pendingTransfers.map((transfer) => {
-                const shift = transfer.shift;
-                const fromWorker = transfer.from_worker;
-                const toWorker = transfer.to_worker;
-                const isActionLoading = actionLoading?.includes(transfer.id);
-
-                return (
-                  <div
-                    key={transfer.id}
-                    className="p-4 bg-slate-950 border border-slate-800 rounded-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 text-xs font-semibold border border-amber-500/30">
-                          Transfer Proposal
-                        </span>
-                      </div>
-                      <p className="text-sm font-medium text-white">
-                        <span className="font-bold text-slate-100">{fromWorker?.first_name} {fromWorker?.last_name || ''}</span>
-                        {' wants to transfer '}
-                        <span className="font-bold text-emerald-400">[{shift?.title || 'Shift'}]</span>
-                        {' to '}
-                        <span className="font-bold text-slate-100">{toWorker?.first_name} {toWorker?.last_name || ''}</span>.
-                      </p>
-
-                      <div className="text-xs text-slate-400 mt-1 flex items-center space-x-2">
-                        <span className="text-emerald-400 font-semibold">{shift?.title}</span>
-                        <span>•</span>
-                        <span>{shift?.role_type}</span>
-                        <span>•</span>
-                        <span className="inline-flex items-center gap-1.5">
-                          <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} />
-                          <TipBadge shift={shift} />
-                        </span>
-                        <span>•</span>
-                        <span>{fmtShortDate(shift?.start_time, venueDetails?.timezone)}</span>
-                      </div>
-                      {transfer.notes && (
-                        <p className="text-xs text-amber-300/90 mt-1.5 italic bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">
-                          Notes: "{transfer.notes}"
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleApproveTransfer(transfer.id)}
-                        disabled={isActionLoading}
-                        className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1 shadow-md shadow-emerald-600/20 disabled:opacity-50"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Approve</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDenyTransfer(transfer.id)}
-                        disabled={isActionLoading}
-                        className="px-3.5 py-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold transition flex items-center space-x-1 border border-rose-600/30 disabled:opacity-50"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                        <span>Deny</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {/* Right: what needs you + activity */}
+          <aside className="space-y-6 min-w-0">
+            <ApprovalQueueCard
+              requests={pendingRequests}
+              reliabilityMap={reliabilityMap}
+              timeZone={tz}
+              actionLoading={actionLoading}
+              onReview={(req) => setReview({ type: 'request', data: req })}
+              onApprove={handleApprove}
+              onDeny={handleDeny}
+            />
+            <TransfersCard
+              transfers={pendingTransfers}
+              timeZone={tz}
+              actionLoading={actionLoading}
+              onReview={(t) => setReview({ type: 'transfer', data: t })}
+              onApprove={handleApproveTransfer}
+              onDeny={handleDenyTransfer}
+            />
+            <ActivityFeed
+              venueId={currentVenueId}
+              refreshKey={boardRefreshKey}
+              onOpenEvent={openEvent}
+              onOpenWorker={setProfileWorkerId}
+            />
+          </aside>
         </div>
-
-        {/* Section 2: Shift Application Approval Queue */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <Users className="w-5 h-5 text-amber-400" />
-              <h2 className="text-base font-bold text-white">
-                Approval Queue ({pendingRequests.length} pending)
-              </h2>
-            </div>
-            <span className="text-xs text-slate-400">
-              Workers requiring manual review
-            </span>
-          </div>
-
-          {pendingRequests.length === 0 ? (
-            <div className="text-center py-12 bg-slate-950/50 rounded-xl border border-slate-800">
-              <Check className="w-8 h-8 text-emerald-500/60 mx-auto mb-2" />
-              <p className="text-xs text-slate-400">All caught up! No pending shift requests in the queue.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {pendingRequests.map((req) => {
-                const worker = req.worker;
-                const shift = req.shift;
-
-                return (
-                  <div
-                    key={req.id}
-                    className="p-4 bg-slate-950 border border-slate-800 rounded-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
-                  >
-                    <div>
-                      <div className="flex items-center space-x-2.5">
-                        <span className="text-sm font-bold text-white">
-                          {worker?.first_name} {worker?.last_name || 'Worker'}
-                        </span>
-                        <RatingBadge rating={worker?.aggregate_rating} count={worker?.rating_count} />
-                        <ReliabilityBadge data={reliabilityMap[worker?.id]} />
-                        <span className="text-xs text-slate-500">
-                          {worker?.email}
-                        </span>
-                      </div>
-
-                      <div className="text-xs text-slate-400 mt-1 flex items-center space-x-2">
-                        <span className="text-emerald-400 font-semibold">{shift?.title}</span>
-                        <span>•</span>
-                        <span>{shift?.role_type}</span>
-                        <span>•</span>
-                        <span className="inline-flex items-center gap-1.5">
-                          <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} />
-                          <TipBadge shift={shift} />
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleApprove(req.id)}
-                        disabled={actionLoading === `approve-${req.id}`}
-                        className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1 shadow-md shadow-emerald-600/20 disabled:opacity-50"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Approve</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeny(req.id)}
-                        disabled={actionLoading === `deny-${req.id}`}
-                        className="px-3.5 py-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold transition flex items-center space-x-1 border border-rose-600/30 disabled:opacity-50"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                        <span>Deny</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Section 3 (Phase 23): Posted Shifts board */}
-        <PostedShiftsBoard
-          venueId={currentVenueId}
-          openEventId={openTarget && String(openTarget.venueId) === String(currentVenueId) ? openTarget.eventId : null}
-          onOpenedEvent={() => setOpenTarget(null)}
-          onDataChanged={() => fetchVenueData(currentVenueId)}
-          refreshKey={boardRefreshKey}
-          reliabilityMap={reliabilityMap}
-          onApprove={handleApprove}
-          onDeny={handleDeny}
-          onOpenBoard={setActiveDiscussionShift}
-          onEditEvent={(id) => setEventForm({ mode: 'edit', eventId: id })}
-          onCancelEvent={askCancelEvent}
-          onDuplicateEvent={(ev) => setDupEvent(ev)}
-          onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
-          onRemovePerson={askRemovePerson}
-          onCancelPosition={askCancelPosition}
-          actionLoading={actionLoading}
-          timeZone={venueDetails?.timezone}
-        />
       </main>
 
       {eventForm && venueDetails && (
@@ -742,7 +518,7 @@ export default function VenueManagerDashboard() {
       {dupEvent && (
         <DuplicateEventModal
           event={dupEvent}
-          timeZone={venueDetails?.timezone}
+          timeZone={tz}
           onClose={() => setDupEvent(null)}
           onDone={(count) => afterChange(`Created ${count} ${count === 1 ? 'copy' : 'copies'}.`)}
         />
@@ -750,7 +526,7 @@ export default function VenueManagerDashboard() {
       {timesheetEventId && (
         <TimesheetModal
           eventId={timesheetEventId}
-          timeZone={venueDetails?.timezone}
+          timeZone={tz}
           onClose={() => setTimesheetEventId(null)}
           onChanged={() => fetchVenueData(currentVenueId)}
         />
@@ -766,10 +542,33 @@ export default function VenueManagerDashboard() {
         />
       )}
 
+      {review && currentVenueId && (
+        <ReviewModal
+          venueId={currentVenueId}
+          item={review}
+          timeZone={tz}
+          busy={!!actionLoading}
+          onApprove={review.type === 'transfer' ? handleApproveTransfer : handleApprove}
+          onDeny={review.type === 'transfer' ? handleDenyTransfer : handleDeny}
+          onOpenEvent={openEvent}
+          onClose={() => setReview(null)}
+        />
+      )}
+
+      {profileWorkerId && currentVenueId && (
+        <WorkerProfileModal
+          venueId={currentVenueId}
+          workerId={profileWorkerId}
+          timeZone={tz}
+          onClose={() => setProfileWorkerId(null)}
+        />
+      )}
+
       {showTeam && venueDetails && (
         <TeamModal
           venue={venueDetails}
           positions={venuePositions}
+          timeZone={tz}
           onClose={() => setShowTeam(false)}
           onChanged={() => fetchVenueData(currentVenueId)}
         />
@@ -792,7 +591,6 @@ export default function VenueManagerDashboard() {
           }}
         />
       )}
-
     </div>
   );
 }

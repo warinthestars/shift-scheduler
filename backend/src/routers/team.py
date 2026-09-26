@@ -12,30 +12,39 @@ Everything here requires the venue's manager (or a platform admin).
   DELETE /api/venues/{venue_id}/managers/{user_id}
   PUT    /api/venues/{venue_id}/ratings/{request_id}     rate a finished shift (1-5 + would book again)
   DELETE /api/venues/{venue_id}/ratings/{request_id}
+
+Phase 29.1:
+  GET    /api/venues/{venue_id}/team/summary             counts for the Team tabs
+  GET    /api/venues/{venue_id}/people?q=                search people (respects each worker's "who can find me")
+  GET    /api/venues/{venue_id}/people/{worker_id}       profile + history at this venue (queue "Review")
 """
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, update, delete
+from sqlalchemy import select, func, update, delete, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import (
     User, Venue, VenueManager, VenueWhitelist, Shift, ShiftRequest, ShiftOffer, Rating,
+    VenueInvite, ShiftEvent, TimeEntry,
 )
 from src.schemas import (
     TeamMember, TeamMemberUpdate, TeamMemberUpdateResult, TeamAddExisting, TeamCreateWorker,
     AccountCreateResult, VenueManagerItem, ManagerCreate, WorkerReliability, RatingInput, RatingResponse,
+    PersonResult, WorkerProfile, WorkerHistoryItem, TeamSummary,
 )
 from src.auth import require_manager_or_admin, get_password_hash, normalize_role
 from src.routers.venues import verify_venue_manager_access
 from src.routers.admin import _generate_temp_password
 from src.services.team import set_membership, TEAM_STATUSES
 from src.services.reliability import compute_reliability
-from src.services.invites import valid_email
+from src.services.invites import valid_email, invite_status
+from src.services import activity, notify_events
 
 logger = logging.getLogger("shiftboard.team")
 
@@ -59,8 +68,11 @@ def _clean_positions(values: Optional[List[str]]) -> List[str]:
 # ---------------------------------------------------------------------------------------------
 # Team list
 # ---------------------------------------------------------------------------------------------
-async def build_team(db: AsyncSession, venue_id: UUID, only_ids: Optional[List[UUID]] = None) -> List[TeamMember]:
-    """Everyone on the list (any status) + everyone who has worked / been booked here."""
+async def build_team(
+    db: AsyncSession, venue_id: UUID, only_ids: Optional[List[UUID]] = None, force_ids: Optional[List[UUID]] = None,
+) -> List[TeamMember]:
+    """Everyone on the list (any status) + everyone who has worked / been booked here.
+    Phase 29.1: force_ids are included even with no relationship (status 'none'), for profiles."""
     now = datetime.now(timezone.utc)
     wl_q = select(VenueWhitelist).where(VenueWhitelist.venue_id == venue_id)
     if only_ids is not None:
@@ -77,7 +89,7 @@ async def build_team(db: AsyncSession, venue_id: UUID, only_ids: Optional[List[U
         worked_q = worked_q.where(ShiftRequest.worker_id.in_(only_ids))
     worked_ids = set((await db.execute(worked_q)).scalars().all())
 
-    ids = set(rows.keys()) | worked_ids
+    ids = set(rows.keys()) | worked_ids | set(force_ids or [])
     if not ids:
         return []
     users = {u.id: u for u in (await db.execute(
@@ -133,9 +145,9 @@ async def build_team(db: AsyncSession, venue_id: UUID, only_ids: Optional[List[U
             email=u.email,
             phone=u.phone,
             avatar_url=u.avatar_url,
-            status=(row.status or "active") if row is not None else "active",
+            status=(row.status or "active") if row is not None else ("active" if wid in worked_ids else "none"),
             on_list=row is not None,
-            source=(row.source if row is not None else "worked"),
+            source=(row.source if row is not None else ("worked" if wid in worked_ids else None)),
             positions=list(row.positions or []) if row is not None else [],
             notes=row.notes if row is not None else None,
             shifts_worked=n_done,
@@ -183,24 +195,33 @@ async def add_existing_worker(
     db: AsyncSession = Depends(get_db),
 ):
     await verify_venue_manager_access(venue_id, current_user, db)
-    email = (body.email or "").strip().lower()
-    if not valid_email(email):
-        raise HTTPException(status_code=400, detail="Enter a valid email address.")
-    user = await db.scalar(select(User).where(func.lower(User.email) == email))
-    if user is None:
-        raise HTTPException(status_code=404, detail="No ShiftBoard account uses that email. Create an account for them, or send an invite.")
+    if body.worker_id is not None:
+        # Phase 29.1: picked from People search. Only people the venue may see can be added this way.
+        user = await db.scalar(select(User).where(User.id == body.worker_id))
+        if user is None or not await _may_see(db, venue_id, user):
+            raise HTTPException(status_code=404, detail="Person not found. Add them by their email instead.")
+    else:
+        email = (body.email or "").strip().lower()
+        if not valid_email(email):
+            raise HTTPException(status_code=400, detail="Enter a valid email address.")
+        user = await db.scalar(select(User).where(func.lower(User.email) == email))
+        if user is None:
+            raise HTTPException(status_code=404, detail="No ShiftBoard account uses that email. Create an account for them, or send an invite.")
     if normalize_role(user.role) != "worker":
         raise HTTPException(status_code=400, detail="That account is a manager or admin account, not a worker.")
     if not user.is_active:
         raise HTTPException(status_code=400, detail="That account is deactivated. Ask an admin to reactivate it.")
+    user_id = user.id
     try:
-        await set_membership(db, venue_id, user.id, status="active", source="manager",
+        await set_membership(db, venue_id, user_id, status="active", source="manager",
                              positions=_clean_positions(body.positions), added_by=current_user.id)
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not add them: {e}")
-    return await _one_member(db, venue_id, user.id)
+    await activity.for_worker("team_added", venue_id, user_id, current_user.id, "Added {name} to the team")   # Phase 29.1
+    await notify_events.team_added(venue_id, user_id)                                                       # Phase 29.1
+    return await _one_member(db, venue_id, user_id)
 
 
 @router.post("/{venue_id}/team/accounts", response_model=AccountCreateResult, status_code=status.HTTP_201_CREATED)
@@ -225,9 +246,12 @@ async def create_worker_account(
         if existing is not None:
             if normalize_role(existing.role) != "worker":
                 raise HTTPException(status_code=409, detail="That email belongs to a manager or admin account.")
-            await set_membership(db, venue_id, existing.id, status="active", source="manager",
+            existing_id = existing.id
+            await set_membership(db, venue_id, existing_id, status="active", source="manager",
                                  positions=positions, added_by=current_user.id)
             await db.commit()
+            await activity.for_worker("team_added", venue_id, existing_id, current_user.id, "Added {name} to the team")
+            await notify_events.team_added(venue_id, existing_id)
             return AccountCreateResult(
                 user_id=existing.id, created=False,
                 message=f"{email} already has an account, so they were added to your team. They sign in as usual.",
@@ -259,6 +283,7 @@ async def create_worker_account(
         await db.rollback()
         logger.exception("create_worker_account failed")
         raise HTTPException(status_code=500, detail=f"Could not create the account: {e}")
+    await activity.for_worker("team_account", venue_id, user_id, current_user.id, "Created an account for {name} and added them to the team")
     return AccountCreateResult(
         user_id=user_id, created=True, temporary_password=temp,
         message="Account created. Give them this temporary password; it's shown only once.",
@@ -331,6 +356,11 @@ async def update_member(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not save: {e}")
 
+    if new_status is not None:
+        await activity.for_worker(
+            "team_status", venue_id, worker_id, current_user.id,
+            {"active": "Put {name} back on the team", "removed": "Removed {name} from the team", "blocked": "Blocked {name}"}[new_status],
+        )
     if new_status in ("blocked", "removed"):
         booked_upcoming = int(await db.scalar(
             select(func.count(ShiftRequest.id))
@@ -438,6 +468,7 @@ async def add_manager(
         await db.rollback()
         logger.exception("add_manager failed")
         raise HTTPException(status_code=500, detail=f"Could not add the manager: {e}")
+    await activity.for_worker("manager_added", venue_id, user_id, current_user.id, "Added {name} as a manager")
     return AccountCreateResult(
         user_id=user_id, created=created, temporary_password=temp,
         message=("Manager account created. Give them this temporary password; it's shown only once."
@@ -467,6 +498,7 @@ async def remove_manager(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not remove the manager: {e}")
+    await activity.for_worker("manager_removed", venue_id, user_id, current_user.id, "Removed {name} as a manager")
     return None
 
 
@@ -563,3 +595,191 @@ async def delete_rating(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not remove the rating: {e}")
     return resp
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 29.1: people search, profiles, summary
+# ---------------------------------------------------------------------------------------------
+DISCOVERABLE_VALUES = ("private", "venues", "everyone")
+
+
+def mask_email(email: Optional[str]) -> Optional[str]:
+    if not email or "@" not in email:
+        return None
+    local, domain = email.split("@", 1)
+    return f"{local[:2]}{'*' * max(3, len(local) - 2)}@{domain}"
+
+
+async def _relations(db: AsyncSession, venue_id: UUID, ids: List[UUID]) -> Dict[UUID, str]:
+    """worker_id -> active | removed | blocked | worked | requested (missing = none)."""
+    if not ids:
+        return {}
+    rel: Dict[UUID, str] = {}
+    for wid, st in (await db.execute(
+        select(ShiftRequest.worker_id, ShiftRequest.status)
+        .join(Shift, Shift.id == ShiftRequest.shift_id)
+        .where(Shift.venue_id == venue_id, ShiftRequest.worker_id.in_(ids))
+    )).all():
+        if (st or "").lower() in WORKED_STATUSES:
+            rel[wid] = "worked"
+        else:
+            rel.setdefault(wid, "requested")
+    for wid, st in (await db.execute(
+        select(VenueWhitelist.worker_id, VenueWhitelist.status)
+        .where(VenueWhitelist.venue_id == venue_id, VenueWhitelist.worker_id.in_(ids))
+    )).all():
+        rel[wid] = st or "active"
+    return rel
+
+
+async def _may_see(db: AsyncSession, venue_id: UUID, user: User) -> bool:
+    """A venue can look someone up if they're related to it, or chose to be findable by venues."""
+    if (user.discoverable or "private") in ("venues", "everyone"):
+        return True
+    return user.id in await _relations(db, venue_id, [user.id])
+
+
+@router.get("/{venue_id}/team/summary", response_model=TeamSummary)
+async def team_summary(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await verify_venue_manager_access(venue_id, current_user, db)
+    members = await build_team(db, venue_id)
+    invites = (await db.execute(
+        select(VenueInvite).where(VenueInvite.venue_id == venue_id, VenueInvite.kind == "personal")
+    )).scalars().all()
+    managers = int(await db.scalar(select(func.count(VenueManager.user_id)).where(VenueManager.venue_id == venue_id)) or 0)
+    return TeamSummary(
+        active=sum(1 for m in members if m.status == "active"),
+        removed=sum(1 for m in members if m.status == "removed"),
+        blocked=sum(1 for m in members if m.status == "blocked"),
+        invites_pending=sum(1 for i in invites if invite_status(i) == "pending"),
+        managers=managers,
+    )
+
+
+@router.get("/{venue_id}/people", response_model=List[PersonResult])
+async def search_people(
+    venue_id: UUID,
+    q: str = Query("", max_length=100),
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Finds WORKER accounts by name, email or phone.
+    * People related to this venue (team list, worked or requested here): name, email or phone.
+    * Everyone else: only if they allow venues to find them ("venues" or "everyone"), by name or email.
+    * An exact email address always finds the account (the manager already knows it).
+    """
+    await verify_venue_manager_access(venue_id, current_user, db)
+    term = (q or "").strip().lower()
+    if len(term) < 2:
+        return []
+    digits = re.sub(r"\D", "", term)
+    related = (
+        select(VenueWhitelist.worker_id).where(VenueWhitelist.venue_id == venue_id)
+        .union(
+            select(ShiftRequest.worker_id).join(Shift, Shift.id == ShiftRequest.shift_id).where(Shift.venue_id == venue_id)
+        )
+    )
+    like = f"%{term}%"
+    name_or_email = or_(
+        func.lower(func.concat(User.first_name, " ", User.last_name)).like(like),
+        func.lower(User.email).like(like),
+    )
+    conds = [
+        and_(name_or_email, or_(User.id.in_(related), User.discoverable.in_(("venues", "everyone")))),
+        func.lower(User.email) == term,
+    ]
+    if len(digits) >= 4:
+        conds.append(and_(func.regexp_replace(func.coalesce(User.phone, ""), "[^0-9]", "", "g").like(f"%{digits}%"), User.id.in_(related)))
+    users = (await db.execute(
+        select(User).where(func.lower(User.role) == "worker", User.is_active == True, or_(*conds)).limit(25)
+    )).scalars().all()
+    if not users:
+        return []
+    ids = [u.id for u in users]
+    rel = await _relations(db, venue_id, ids)
+    positions = {r.worker_id: list(r.positions or []) for r in (await db.execute(
+        select(VenueWhitelist).where(VenueWhitelist.venue_id == venue_id, VenueWhitelist.worker_id.in_(ids))
+    )).scalars().all()}
+    scores = await compute_reliability(db, ids)
+    out = []
+    for u in users:
+        r = rel.get(u.id, "none")
+        known = r != "none" or (u.email or "").lower() == term
+        out.append(PersonResult(
+            worker_id=u.id, first_name=u.first_name or "", last_name=u.last_name or "",
+            email=u.email if known else mask_email(u.email),
+            phone=u.phone if r != "none" else None,
+            avatar_url=u.avatar_url, relation=r, positions=positions.get(u.id, []),
+            aggregate_rating=float(u.aggregate_rating or 0.0), rating_count=int(u.rating_count or 0),
+            reliability_score=(scores.get(u.id) or {}).get("score"),
+            can_add=r not in ("active", "worked", "blocked"),   # "worked" (no removed/blocked row) is already on the team
+        ))
+    order = {"active": 0, "worked": 1, "requested": 2, "removed": 3, "none": 4, "blocked": 5}
+    out.sort(key=lambda p: (order.get(p.relation, 9), (p.first_name or "").lower(), (p.last_name or "").lower()))
+    return out[:20]
+
+
+@router.get("/{venue_id}/people/{worker_id}", response_model=WorkerProfile)
+async def person_profile(
+    venue_id: UUID,
+    worker_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker profile for this venue: team info, ratings, reliability and their history HERE (newest first)."""
+    await verify_venue_manager_access(venue_id, current_user, db)
+    user = await db.scalar(select(User).where(User.id == worker_id))
+    if user is None or normalize_role(user.role) != "worker" or not await _may_see(db, venue_id, user):
+        raise HTTPException(status_code=404, detail="Person not found.")
+    found = await build_team(db, venue_id, only_ids=[worker_id], force_ids=[worker_id])
+    if not found:
+        raise HTTPException(status_code=404, detail="Person not found.")
+    member = found[0]
+    if member.status == "none":
+        member.email = mask_email(member.email)
+        member.phone = None
+
+    rows = (await db.execute(
+        select(ShiftRequest, Shift)
+        .join(Shift, Shift.id == ShiftRequest.shift_id)
+        .where(Shift.venue_id == venue_id, ShiftRequest.worker_id == worker_id)
+        .order_by(Shift.start_time.desc())
+        .limit(15)
+    )).all()
+    req_ids = [r.id for r, _ in rows]
+    shift_ids = [s.id for _, s in rows]
+    event_ids = {s.event_id for _, s in rows if s.event_id}
+    titles = {e.id: e.title for e in (await db.execute(select(ShiftEvent).where(ShiftEvent.id.in_(event_ids)))).scalars().all()} if event_ids else {}
+    ratings = {r.shift_request_id: r for r in (await db.execute(select(Rating).where(Rating.shift_request_id.in_(req_ids)))).scalars().all()} if req_ids else {}
+    first_in = dict((await db.execute(
+        select(TimeEntry.shift_id, func.min(TimeEntry.clock_in_time))
+        .where(TimeEntry.worker_id == worker_id, TimeEntry.shift_id.in_(shift_ids))
+        .group_by(TimeEntry.shift_id)
+    )).all()) if shift_ids else {}
+    history = []
+    for r, s in rows:
+        late = None
+        t = first_in.get(s.id)
+        if t is not None:
+            mins = int((t - s.start_time).total_seconds() // 60)
+            late = mins if mins > 10 else 0
+        rt = ratings.get(r.id)
+        history.append(WorkerHistoryItem(
+            request_id=r.id, event_id=s.event_id, title=titles.get(s.event_id) or s.title or "Shift",
+            role_type=s.role_type or "Worker", start_time=s.start_time, end_time=s.end_time,
+            status=(r.status or "").lower(), late_minutes=late,
+            my_rating=rt.rating if rt else None, would_book_again=rt.would_book_again if rt else None,
+        ))
+    pending_here = sum(1 for h in history if h.status in ("pending", "pending_manager_approval"))
+    other_venues = int(await db.scalar(
+        select(func.count(func.distinct(Shift.venue_id)))
+        .select_from(ShiftRequest).join(Shift, Shift.id == ShiftRequest.shift_id)
+        .where(ShiftRequest.worker_id == worker_id, Shift.venue_id != venue_id,
+               func.lower(ShiftRequest.status).in_(WORKED_STATUSES))
+    ) or 0)
+    return WorkerProfile(member=member, history=history, pending_here=pending_here, other_venues=other_venues)

@@ -28,6 +28,7 @@ from src.auth import require_manager_or_admin, get_current_user, normalize_role
 from src.routers.venues import verify_venue_manager_access
 from src.services import staffing
 from src.services import notify_events
+from src.services import activity
 
 router = APIRouter(tags=["Staffing"])
 
@@ -61,6 +62,7 @@ async def assign(
     await _managed_shift(db, shift_id, current_user)
     request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id)
     await notify_events.assigned(request_id)          # after commit; never raises
+    await activity.for_request("assigned", request_id, current_user.id)   # Phase 29.1
     return AssignResult(request_id=request_id, message=message)
 
 
@@ -75,6 +77,8 @@ async def offer(
     result, offer_ids = await staffing.create_offers(db, current_user, shift_id, body.worker_ids, body.message)
     if offer_ids:
         await notify_events.offers_sent(offer_ids)    # after commit; never raises
+        await activity.for_shift("offers_sent", shift_id, current_user.id,
+                                 f"Offered {{what}} to {len(offer_ids)} {'person' if len(offer_ids) == 1 else 'people'}")   # Phase 29.1
     return result
 
 
@@ -110,6 +114,7 @@ async def accept(
 ):
     request_id, o = await staffing.accept_offer(db, current_user, offer_id)
     await notify_events.offer_accepted(o.id, request_id)
+    await activity.for_request("offer_accepted", request_id, current_user.id)   # Phase 29.1
     return OfferAcceptResult(request_id=request_id, message="You're booked. It's on your calendar now.")
 
 
@@ -122,4 +127,5 @@ async def decline(
     o, nobody_left = await staffing.decline_offer(db, current_user, offer_id)
     if nobody_left:
         await notify_events.offer_nobody(o.id)
+        await activity.for_shift("offer_nobody", o.shift_id, current_user.id, "No one accepted the offer for {what}")   # Phase 29.1
     return {"detail": "Declined. Thanks for letting them know."}
