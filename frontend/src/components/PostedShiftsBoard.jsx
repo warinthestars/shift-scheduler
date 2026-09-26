@@ -35,6 +35,7 @@ export default function PostedShiftsBoard({
   timeZone,
   openEventId = null,      // Phase 28: open this event's roster once it loads (notification link)
   onOpenedEvent,
+  onDataChanged,           // Phase 29: after assign / offer / rating (parent reloads, which bumps refreshKey)
 }) {
   const [scope, setScope] = useState('upcoming');
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'calendar'
@@ -44,6 +45,8 @@ export default function PostedShiftsBoard({
   const [selectedKey, setSelectedKey] = useState(null);
   const [menuKey, setMenuKey] = useState(null);
   const [loadedFor, setLoadedFor] = useState(null); // `${venueId}|${scope}` of the events in state
+  const [reloadTick, setReloadTick] = useState(0);   // Phase 29
+  const handleChanged = () => (onDataChanged ? onDataChanged() : setReloadTick((t) => t + 1));
 
   useEffect(() => {
     if (!venueId) {
@@ -70,7 +73,7 @@ export default function PostedShiftsBoard({
     return () => {
       active = false;
     };
-  }, [venueId, scope, refreshKey]);
+  }, [venueId, scope, refreshKey, reloadTick]);
 
   // Phase 28: open the event from a notification link (search 'all' if it's not in this list)
   useEffect(() => {
@@ -338,6 +341,8 @@ export default function PostedShiftsBoard({
           onCancelPosition={onCancelPosition}
           actionLoading={actionLoading}
           timeZone={timeZone}
+          venueId={venueId}
+          onChanged={handleChanged}
         />
       )}
     </div>

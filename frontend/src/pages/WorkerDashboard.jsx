@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
@@ -15,6 +15,9 @@ import EventListingCard from '../components/EventListingCard';
 import EventListingModal from '../components/EventListingModal';
 import WorkerCalendar from '../components/WorkerCalendar';
 import ShiftDetailsModal from '../components/ShiftDetailsModal';
+import WorkerOffers from '../components/WorkerOffers';
+import RatingBadge from '../components/RatingBadge';
+import { PENDING_INVITE_KEY } from './JoinPage';
 import { fmtDateTime, fmtTime } from '../utils/venueTime';
 import {
   STATUS_LABELS, PENDING_STATUSES, dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
@@ -53,18 +56,23 @@ export default function WorkerDashboard() {
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [shiftToDrop, setShiftToDrop] = useState(null);
   const [dropping, setDropping] = useState(false);
+  const [offers, setOffers] = useState([]);              // Phase 29: shifts offered to me
+  const [offerBusy, setOfferBusy] = useState(null);
+  const navigate = useNavigate();
 
   const fetchWorkerData = async (showSpinner = true) => {
     try {
       if (showSpinner) setLoading(true);
-      const [listingsRes, myRes, transfersRes, activeClocksRes, calendarRes] = await Promise.all([
+      const [listingsRes, myRes, transfersRes, activeClocksRes, calendarRes, offersRes] = await Promise.all([
         api.get('/listings'),
         api.get('/users/me/shifts'),
         api.get('/transfers/my-incoming'),
         api.get('/shifts/time-entries/active').catch(() => ({ data: [] })),
         api.get('/me/calendar').catch(() => ({ data: { items: [], unread_count: 0 } })),
+        api.get('/me/offers').catch(() => ({ data: [] })),
       ]);
       setListings(listingsRes.data || []);
+      setOffers(offersRes.data || []);
       setCalendar({
         items: calendarRes.data?.items || [],
         unread_count: calendarRes.data?.unread_count || 0,
@@ -86,8 +94,37 @@ export default function WorkerDashboard() {
   };
 
   useEffect(() => {
+    // Phase 29: finish joining a team if they signed up from an invite link
+    let pendingInvite = null;
+    try {
+      pendingInvite = localStorage.getItem(PENDING_INVITE_KEY);
+    } catch (e) {
+      pendingInvite = null;
+    }
+    if (pendingInvite) {
+      navigate(`/join/${pendingInvite}`, { replace: true });
+      return;
+    }
     fetchWorkerData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Phase 29: accept / decline an offer
+  const handleOffer = async (offer, action) => {
+    setOfferBusy(offer.offer_id);
+    try {
+      const res = await api.post(`/offers/${offer.offer_id}/${action}`);
+      setNotification({
+        type: action === 'accept' ? 'success' : 'info',
+        message: action === 'accept' ? res.data.message : 'Offer declined.',
+      });
+    } catch (err) {
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Could not update the offer.' });
+    } finally {
+      setOfferBusy(null);
+      fetchWorkerData(false);
+    }
+  };
 
   // Phase 26.1: withdraw a request that is still waiting for approval
   const handleWithdraw = async (req) => {
@@ -630,9 +667,8 @@ export default function WorkerDashboard() {
 
           {/* Quick Metrics */}
           <div className="flex items-center space-x-3 bg-slate-950/80 px-4 py-2.5 rounded-2xl border border-slate-800">
-            <div className="flex items-center space-x-1.5 text-amber-400 text-sm font-bold">
-              <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
-              <span>{Number(user?.aggregate_rating || user?.rating_average || 5.0).toFixed(1)}</span>
+            <div className="flex items-center text-sm">
+              <RatingBadge rating={user?.aggregate_rating ?? user?.rating_average} count={user?.rating_count} />
             </div>
             <span className="text-slate-700">•</span>
             <div className="text-xs text-slate-300">
@@ -765,6 +801,14 @@ export default function WorkerDashboard() {
             </button>
           </div>
         </div>
+
+        {/* Phase 29: shifts a manager offered to me (shown on every tab) */}
+        <WorkerOffers
+          offers={offers}
+          busyId={offerBusy}
+          onAccept={(o) => handleOffer(o, 'accept')}
+          onDecline={(o) => handleOffer(o, 'decline')}
+        />
 
         {/* TAB 1: Find Shifts (Phase 26.1: one card per event) */}
         {activeTab === 'find' && (

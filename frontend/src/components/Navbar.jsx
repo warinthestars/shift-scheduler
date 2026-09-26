@@ -164,8 +164,14 @@ export default function Navbar() {
             {user && userRole === 'worker' && (
               <div className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-semibold">
                 <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                <span>{Number(user.rating_average || user.aggregate_rating || 5.0).toFixed(1)}</span>
-                <span className="text-amber-500/70">({user.rating_count || 0})</span>
+                {user.rating_count ? (
+                  <>
+                    <span>{Number(user.rating_average || user.aggregate_rating || 0).toFixed(1)}</span>
+                    <span className="text-amber-500/70">({user.rating_count})</span>
+                  </>
+                ) : (
+                  <span>New</span>
+                )}
               </div>
             )}
 
@@ -218,7 +224,7 @@ export default function Navbar() {
             {userRole === 'worker' && (
               <div className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-semibold">
                 <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                <span>{Number(user.rating_average || user.aggregate_rating || 5.0).toFixed(1)}</span>
+                <span>{user.rating_count ? Number(user.rating_average || user.aggregate_rating || 0).toFixed(1) : 'New'}</span>
               </div>
             )}
           </div>

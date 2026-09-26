@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 from src.models import Shift, ShiftEvent, ShiftRequest, User
 from src.services.auto_confirm import evaluate_shift_request, check_double_booking
 from src.services import notify_events
+from src.services.team import is_blocked
 
 logger = logging.getLogger("shiftboard.booking")
 
@@ -96,6 +97,8 @@ async def request_position(
             raise HTTPException(status_code=400, detail="This position was cancelled.")
         if as_utc(shift.start_time) <= datetime.now(timezone.utc):
             raise HTTPException(status_code=400, detail="This shift has already started.")
+        if await is_blocked(db, shift.venue_id, worker.id):          # Phase 29
+            raise HTTPException(status_code=403, detail="This venue isn't taking requests from you right now.")
 
         # --- One active request per event -------------------------------------------------
         same_event_q = (

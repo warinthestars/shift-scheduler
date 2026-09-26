@@ -97,6 +97,13 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const from = location.state?.from?.pathname;
+  const inviteVenue = location.state?.inviteVenue || null;   // Phase 29: came from a team invite
+
+  // Phase 29: the invite page sends new people straight to "Create account"
+  useEffect(() => {
+    if (location.state?.mode === 'register') setMode('register');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -296,6 +303,11 @@ export default function LoginPage() {
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
+        {inviteVenue && (
+          <div className="mb-4 p-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-sm text-emerald-100 text-center">
+            {mode === 'register' ? 'Create your account' : 'Sign in'} to join the <strong>{inviteVenue}</strong> team.
+          </div>
+        )}
         <div className="bg-slate-900 py-8 px-6 shadow-2xl rounded-2xl border border-slate-800 sm:px-10">
           {mode === 'signin' && fbStatus.show_demo_logins && (
             <div className="mb-6 p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 text-xs">

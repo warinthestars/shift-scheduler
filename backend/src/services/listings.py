@@ -19,6 +19,7 @@ from src.models import ShiftEvent, Shift, ShiftRequest, Venue, VenueWhitelist, U
 from src.schemas import EventListing, ListingPosition, ListingVenue, ListingMyRequest
 from src.services.auto_confirm import decide_approval
 from src.services.locations import load_locations, to_listing_location, geofence_on
+from src.services.team import blocked_venue_ids
 from src.services.booking import (
     as_utc, ACTIVE_STATUSES, ASSIGNED_STATUSES, BOOKED_STATUSES, PENDING_STATUSES,
 )
@@ -123,12 +124,15 @@ async def build_listings(
     )).all()
 
     locations = await load_locations(db, [e.location_id for e in events])   # Phase 27
+    blocked = await blocked_venue_ids(db, user.id)                        # Phase 29
 
     out: List[EventListing] = []
     for ev in events:
         venue = venues.get(ev.venue_id)
         if venue is None:
             continue
+        if event_id is None and venue.id in blocked:
+            continue          # Phase 29: a venue that blocked you doesn't show up in Find Shifts
         ev_shifts = shifts_by_event.get(ev.id, [])
         start, end = as_utc(ev.start_time), as_utc(ev.end_time)
         hours = round(max(0.0, (end - start).total_seconds() / 3600.0), 2)

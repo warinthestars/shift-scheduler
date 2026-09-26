@@ -21,6 +21,7 @@ from src.services.firebase import (
     get_enabled_providers
 )
 from src.serializers import build_user_response
+from src.services.always_admin import is_always_admin_email, promote_always_admin
 
 _ORIGINAL_LOAD_CONFIG = load_firebase_web_config
 _ORIGINAL_VERIFY = verify_firebase_id_token
@@ -246,8 +247,12 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
         if not email:
             raise HTTPException(status_code=400, detail="Your sign-in account has no email address.")
 
+        # Phase 28.1: verified emails in ALWAYS_ADMIN_EMAILS are always platform admins
+        always_admin = email_verified and is_always_admin_email(email)
+
         try:
             user = await db.scalar(select(User).where(User.firebase_uid == firebase_uid))
+            dirty = False
 
             if not user:
                 existing = await db.scalar(select(User).where(func.lower(User.email) == email))
@@ -267,7 +272,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
                         existing.avatar_url = claims.get("picture")
                     user = existing
                 else:
-                    if not settings.ALLOW_SELF_REGISTRATION:
+                    if not settings.ALLOW_SELF_REGISTRATION and not always_admin:
                         raise HTTPException(
                             status_code=403,
                             detail="Self-registration is disabled. Ask an administrator to create your account."
@@ -294,7 +299,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
                         first_name=first_name,
                         last_name=last_name,
                         phone=request.phone.strip() if request.phone else None,
-                        role="worker",
+                        role="platform_admin" if always_admin else "worker",
                         avatar_url=claims.get("picture"),
                         skills=[],
                         aggregate_rating=5.0,
@@ -303,7 +308,14 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
                         is_active=True,
                     )
                     db.add(user)
+                dirty = True
 
+            # Existing (already persisted) users: upgrade if listed. New users already got the role above.
+            if always_admin and user.id is not None:
+                if await promote_always_admin(db, user):
+                    dirty = True
+
+            if dirty:
                 await db.commit()
                 await db.refresh(user)
         except HTTPException:

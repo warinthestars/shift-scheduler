@@ -5,7 +5,7 @@ import api from '../api/client';
 import {
   Calendar as CalendarIcon, Clock, DollarSign, Users, Plus, Trash2, Check, X,
   Building2, Star, AlertCircle, ShieldCheck, Zap, ArrowRight,
-  Download, ArrowRightLeft, MessageSquare, FileText, List as ListIcon, Settings
+  Download, ArrowRightLeft, MessageSquare, FileText, List as ListIcon, Settings, UserPlus
 } from 'lucide-react';
 import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
@@ -23,6 +23,8 @@ import ReasonDialog from '../components/ReasonDialog';
 import DuplicateEventModal from '../components/DuplicateEventModal';
 import TimesheetModal from '../components/TimesheetModal';
 import PayLabel from '../components/PayLabel';
+import TeamModal from '../components/TeamModal';
+import RatingBadge from '../components/RatingBadge';
 import { zonedLocalToUtcIso, fmtShortDate } from '../utils/venueTime';
 
 const locales = {
@@ -77,6 +79,7 @@ export default function VenueManagerDashboard() {
   const [dupEvent, setDupEvent] = useState(null);
   const [timesheetEventId, setTimesheetEventId] = useState(null);
   const [openTarget, setOpenTarget] = useState(null); // Phase 28: { venueId, eventId } from a notification link
+  const [showTeam, setShowTeam] = useState(false);    // Phase 29: Team page
 
   const fetchVenueData = async (venueId) => {
     try {
@@ -149,7 +152,8 @@ export default function VenueManagerDashboard() {
   useEffect(() => {
     const venue = searchParams.get('venue');
     const event = searchParams.get('event');
-    if (!venue && !event) return;
+    const team = searchParams.get('team');          // Phase 29: ?team=1 opens the Team page
+    if (!venue && !event && !team) return;
     const targetVenue = venue || currentVenueId;
     if (venue && String(venue) !== String(currentVenueId)) {
       if (isPlatformAdmin) {
@@ -160,9 +164,11 @@ export default function VenueManagerDashboard() {
       }
     }
     if (event) setOpenTarget({ venueId: targetVenue, eventId: event });
+    if (team) setShowTeam(true);
     const next = new URLSearchParams(searchParams);
     next.delete('venue');
     next.delete('event');
+    next.delete('team');
     setSearchParams(next, { replace: true }); // keeps ?notifications= for the bell
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -440,6 +446,16 @@ export default function VenueManagerDashboard() {
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
+              onClick={() => setShowTeam(true)}
+              disabled={!venueDetails}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
+            >
+              <UserPlus className="w-4 h-4 text-emerald-400" />
+              <span>Team</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setShowVenueSettings(true)}
               disabled={!venueDetails}
               className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
@@ -635,10 +651,7 @@ export default function VenueManagerDashboard() {
                         <span className="text-sm font-bold text-white">
                           {worker?.first_name} {worker?.last_name || 'Worker'}
                         </span>
-                        <span className="flex items-center space-x-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-xs font-semibold border border-amber-500/20">
-                          <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                          <span>{Number(worker?.aggregate_rating || 5.0).toFixed(1)}</span>
-                        </span>
+                        <RatingBadge rating={worker?.aggregate_rating} count={worker?.rating_count} />
                         <ReliabilityBadge data={reliabilityMap[worker?.id]} />
                         <span className="text-xs text-slate-500">
                           {worker?.email}
@@ -689,6 +702,7 @@ export default function VenueManagerDashboard() {
           venueId={currentVenueId}
           openEventId={openTarget && String(openTarget.venueId) === String(currentVenueId) ? openTarget.eventId : null}
           onOpenedEvent={() => setOpenTarget(null)}
+          onDataChanged={() => fetchVenueData(currentVenueId)}
           refreshKey={boardRefreshKey}
           reliabilityMap={reliabilityMap}
           onApprove={handleApprove}
@@ -749,6 +763,15 @@ export default function VenueManagerDashboard() {
           shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.role_type})`}
           currentUserRole={user?.role}
           onClose={() => setActiveDiscussionShift(null)}
+        />
+      )}
+
+      {showTeam && venueDetails && (
+        <TeamModal
+          venue={venueDetails}
+          positions={venuePositions}
+          onClose={() => setShowTeam(false)}
+          onChanged={() => fetchVenueData(currentVenueId)}
         />
       )}
 

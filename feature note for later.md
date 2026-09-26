@@ -1,0 +1,1 @@
+venue rating system from staff to venue, similar to the rating system which will be implemented for workers. 

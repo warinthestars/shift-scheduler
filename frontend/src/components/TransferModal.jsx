@@ -166,7 +166,7 @@ export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [],
               >
                 {eligibleWorkers.map((w) => (
                   <option key={w.id} value={w.id}>
-                    {w.first_name} {w.last_name} ({w.email}) — ★ {Number(w.aggregate_rating || 5.0).toFixed(1)}
+                    {w.first_name} {w.last_name} ({w.email}) — {w.rating_count ? `★ ${Number(w.aggregate_rating || 0).toFixed(1)}` : 'New'}
                   </option>
                 ))}
               </select>

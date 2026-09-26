@@ -11,6 +11,7 @@ from src.models import Venue, Shift, User, ShiftRequest, UserRole, VenueManager,
 from src.schemas import VenueResponse, UserResponse, UserCreateAdmin, UserUpdateAdmin, AdminPasswordReset, AdminPasswordResetResponse
 from src.auth import require_admin, get_password_hash, normalize_role
 from src.serializers import auth_source_for
+from src.services.always_admin import is_always_admin_email
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 VALID_ROLES = ("worker", "venue_manager", "platform_admin")
@@ -199,7 +200,7 @@ async def create_admin_user(
                     if role_clean == "venue_manager":
                         db.add(VenueManager(venue_id=v.id, user_id=new_user.id, is_primary=False))
                     elif role_clean == "worker":
-                        db.add(VenueWhitelist(venue_id=v.id, worker_id=new_user.id, is_active=True))
+                        db.add(VenueWhitelist(venue_id=v.id, worker_id=new_user.id, is_active=True, status="active", source="admin"))
 
         await db.commit()
     except HTTPException:
@@ -236,6 +237,11 @@ async def update_admin_user(
             raise HTTPException(status_code=400, detail="You cannot change your own role.")
         if is_self and user_update.is_active is False:
             raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
+        if is_always_admin_email(user.email) and (new_role != "platform_admin" or user_update.is_active is False):
+            raise HTTPException(
+                status_code=400,
+                detail="This account is listed in ALWAYS_ADMIN_EMAILS and must stay an active Platform Admin. Remove it from the secrets file first."
+            )
 
         losing_admin = old_role == "platform_admin" and (role_changed or user_update.is_active is False)
         if losing_admin:
@@ -280,12 +286,26 @@ async def update_admin_user(
 
         if rebuild_venues:
             await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id))
-            await db.execute(delete(VenueWhitelist).where(VenueWhitelist.worker_id == user.id))
+            # Phase 29: keep team notes / positions / blocks. Only ACTIVE team rows for venues that were
+            # unticked are deleted (as before); removed/blocked rows are kept; ticked venues are (re)activated.
+            wl_rows = {
+                r.venue_id: r for r in (await db.execute(
+                    select(VenueWhitelist).where(VenueWhitelist.worker_id == user.id)
+                )).scalars().all()
+            }
+            for vid, r in wl_rows.items():
+                if (new_role != "worker" or vid not in target_ids) and (r.status or "active") == "active":
+                    await db.delete(r)
             for idx, vid in enumerate(target_ids):
                 if new_role == "venue_manager":
                     db.add(VenueManager(venue_id=vid, user_id=user.id, is_primary=(idx == 0)))
                 elif new_role == "worker":
-                    db.add(VenueWhitelist(venue_id=vid, worker_id=user.id, is_active=True))
+                    existing_wl = wl_rows.get(vid)
+                    if existing_wl is not None:
+                        existing_wl.status = "active"
+                        existing_wl.is_active = True
+                    else:
+                        db.add(VenueWhitelist(venue_id=vid, worker_id=user.id, is_active=True, status="active", source="admin"))
 
         await db.commit()
     except HTTPException:
@@ -376,6 +396,11 @@ async def delete_admin_user(
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
+    if is_always_admin_email(user.email):
+        raise HTTPException(
+            status_code=400,
+            detail="This account is listed in ALWAYS_ADMIN_EMAILS and cannot be deleted. Remove it from the secrets file first."
+        )
 
     if normalize_role(user.role) == "platform_admin":
         admin_count = await db.scalar(
