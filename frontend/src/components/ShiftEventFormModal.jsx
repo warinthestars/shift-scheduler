@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock, MapPin, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock, MapPin, AlertTriangle, LayoutTemplate, Send, Save } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { payText } from './PayLabel';
@@ -47,7 +47,44 @@ function defaultsFor(pos) {
   };
 }
 
+// Phase 29.3: plain 'YYYY-MM-DDTHH:MM' arithmetic (no timezone involved)
+function shiftLocal(localValue, ms) {
+  const [d, t] = localValue.split('T');
+  const [y, m, day] = d.split('-').map(Number);
+  const [hh, mm] = (t || '00:00').split(':').map(Number);
+  const out = new Date(Date.UTC(y, m - 1, day, hh, mm) + ms);
+  return out.toISOString().slice(0, 16);
+}
+function localMs(localValue) {
+  const [d, t] = localValue.split('T');
+  const [y, m, day] = d.split('-').map(Number);
+  const [hh, mm] = (t || '00:00').split(':').map(Number);
+  return Date.UTC(y, m - 1, day, hh, mm);
+}
+
 let rowSeq = 0;
+function rowFromPosition(p, withIds = false) {
+  rowSeq += 1;
+  return {
+    key: withIds && p.shift_id ? p.shift_id : `tpl-${rowSeq}`,
+    shift_id: withIds ? p.shift_id || null : null,
+    role_type: p.role_type,
+    custom: false,
+    capacity: p.capacity,
+    hourly_rate: Number(p.hourly_rate).toFixed(2),
+    hourly_rate_max: p.hourly_rate_max != null ? Number(p.hourly_rate_max).toFixed(2) : '',
+    hide_rate: !!p.hide_rate,
+    tips_eligible: !!p.tips_eligible,
+    tip_pool: !!p.tip_pool,
+    role_notes: p.role_notes || '',
+    staff_notes: p.staff_notes || '',
+    approval_mode: p.approval_mode || 'venue_default',
+    booked: withIds ? p.assigned_count || 0 : 0,
+    pending: withIds ? p.pending_count || 0 : 0,
+    showNotes: !!(p.role_notes || p.staff_notes),
+  };
+}
+
 function blankRow(pos) {
   rowSeq += 1;
   return {
@@ -66,9 +103,21 @@ function blankRow(pos) {
   };
 }
 
-export default function ShiftEventFormModal({ mode = 'create', venue, positions = null, eventId = null, onClose, onSaved }) {
+/**
+ * Post / edit an event (Phase 25.2+), and Phase 29.3:
+ *   mode 'create'   : "Start from a template" picker; Save as draft or Publish. templateId preselects one.
+ *   mode 'edit'     : a draft shows Save draft + Save & publish; a published event shows Save changes.
+ *   mode 'template' : edit or create an event template (template = existing one, or null for new).
+ *                     Times are just start/end clock times; onSaved(savedTemplate).
+ * onSaved(result) gets the saved event (EventDetail, with .status) or template.
+ */
+export default function ShiftEventFormModal({
+  mode = 'create', venue, positions = null, eventId = null, templateId = null, template = null, onClose, onSaved,
+}) {
   const tz = venue?.timezone;
   const isEdit = mode === 'edit' && !!eventId;
+  const isTemplate = mode === 'template';
+  const isCreate = !isEdit && !isTemplate;
 
   // ---- Positions: use the prop if given, otherwise load them for this venue ----
   const [fetchedPositions, setFetchedPositions] = useState(null);
@@ -105,8 +154,85 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
   const [geofenceMode, setGeofenceMode] = useState('venue_default');
   const [locStaffOn, setLocStaffOn] = useState(false);
   const [locStaffNotes, setLocStaffNotes] = useState('');
-  const [rows, setRows] = useState(() => (isEdit ? [] : [blankRow(null)]));
-  const [touched, setTouched] = useState(false);
+  const [rows, setRows] = useState(() => (isEdit ? [] : isTemplate && template ? template.positions.map((p) => rowFromPosition(p)) : [blankRow(null)]));
+  const [touched, setTouched] = useState(isTemplate && !!template);
+  // Phase 29.3
+  const [eventStatus, setEventStatus] = useState('published');   // edit mode: the event's status
+  const [templates, setTemplates] = useState([]);                  // create mode: the venue's templates
+  const [pickedTemplate, setPickedTemplate] = useState('');
+  const [templateNote, setTemplateNote] = useState('');
+  const [pickerKey, setPickerKey] = useState(0);                   // remounts the location picker after a template fills it
+  const [tplName, setTplName] = useState(template?.name || '');
+  const [tplStart, setTplStart] = useState(template?.start_local || '18:00');
+  const [tplEnd, setTplEnd] = useState(template?.end_local || '23:00');
+
+  // Phase 29.3: template mode starts from the template's own values
+  useEffect(() => {
+    if (!isTemplate || !template) return;
+    setTitle(template.title || '');
+    setNotes(template.notes || '');
+    setStaffNotes(template.staff_notes || '');
+    setWhere(template.location && !template.location.is_archived ? { kind: 'saved', location: template.location } : { kind: 'venue' });
+    setGeofenceMode(template.geofence_mode || 'venue_default');
+    setLocStaffNotes(template.location_staff_notes || '');
+    setLocStaffOn(!!template.location_staff_notes);
+    if (template.location?.is_archived) setTemplateNote(`“${template.location.name}” is archived, so this template now uses the venue address.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Phase 29.3: the venue's templates, for "Start from a template" (create mode)
+  useEffect(() => {
+    if (!isCreate || !venue?.id) return undefined;
+    let active = true;
+    api
+      .get(`/venues/${venue.id}/event-templates`)
+      .then((res) => {
+        if (!active) return;
+        const list = res.data || [];
+        setTemplates(list);
+        const pre = templateId && list.find((t) => t.id === templateId);
+        if (pre) applyTemplate(pre);
+      })
+      .catch(() => active && setTemplates([]));
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreate, venue?.id, templateId]);
+
+  const applyTemplate = (tpl) => {
+    setPickedTemplate(tpl.id);
+    setTouched(true);
+    setTitle(tpl.title || '');
+    setNotes(tpl.notes || '');
+    setStaffNotes(tpl.staff_notes || '');
+    setGeofenceMode(tpl.geofence_mode || 'venue_default');
+    setLocStaffNotes(tpl.location_staff_notes || '');
+    setLocStaffOn(!!tpl.location_staff_notes);
+    const archived = tpl.location && tpl.location.is_archived;
+    setWhere(tpl.location && !archived ? { kind: 'saved', location: tpl.location } : { kind: 'venue' });
+    setPickerKey((k) => k + 1);
+    setRows(tpl.positions.length ? tpl.positions.map((p) => rowFromPosition(p)) : [blankRow(null)]);
+    // Keep the date already picked (or tomorrow), use the template's clock times
+    const day = start ? start.slice(0, 10) : utcToZonedLocalInput(new Date(Date.now() + 86400000).toISOString(), tz).slice(0, 10);
+    const s = `${day}T${tpl.start_local}`;
+    const e = tpl.overnight ? `${shiftLocal(`${day}T00:00`, 86400000).slice(0, 10)}T${tpl.end_local}` : `${day}T${tpl.end_local}`;
+    setStart(s);
+    setEnd(e);
+    setTemplateNote(
+      `Filled in from “${tpl.name}”. Check the date` +
+      (archived ? `. Its location “${tpl.location.name}” is archived, so the venue address is used.` : '.')
+    );
+  };
+
+  // Phase 29.3: moving the start keeps the event's length (so changing the date moves the end too)
+  const changeStart = (value) => {
+    if (start && end && value && value.length >= 16) {
+      const dur = localMs(end) - localMs(start);
+      if (dur > 0) setEnd(shiftLocal(value, dur));
+    }
+    setStart(value);
+  };
 
   // Auto-fill the first empty row once the venue's positions arrive (create mode only)
   useEffect(() => {
@@ -121,6 +247,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
       .get(`/events/${eventId}`)
       .then((res) => {
         const ev = res.data;
+        setEventStatus(ev.status || 'published');    // Phase 29.3
         setTitle(ev.title || '');
         setStart(utcToZonedLocalInput(ev.start_time, tz));
         setEnd(utcToZonedLocalInput(ev.end_time, tz));
@@ -203,13 +330,22 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
   const venueGeoOn = !!venue?.geofence_enabled;
   const geoOn = geofenceMode === 'on' || (geofenceMode === 'venue_default' && venueGeoOn);
 
-  const handleSubmit = async () => {
+  /** publish: create -> publish now (false = draft); edit of a draft -> also publish after saving. */
+  const handleSubmit = async (publish = true) => {
     setError('');
+    if (isTemplate && !tplName.trim()) return setError('Give the template a name.');
     if (!title.trim()) return setError('Give the event a name.');
-    if (!start || !end) return setError('Pick a start and end time.');
-    const startIso = zonedLocalToUtcIso(start, tz);
-    const endIso = zonedLocalToUtcIso(end, tz);
-    if (new Date(endIso) <= new Date(startIso)) return setError('End time must be after the start time.');
+    let startIso = null;
+    let endIso = null;
+    if (isTemplate) {
+      if (!tplStart || !tplEnd) return setError('Pick a start and end time.');
+      if (tplStart === tplEnd) return setError("The end time can't be the same as the start time.");
+    } else {
+      if (!start || !end) return setError('Pick a start and end time.');
+      startIso = zonedLocalToUtcIso(start, tz);
+      endIso = zonedLocalToUtcIso(end, tz);
+      if (new Date(endIso) <= new Date(startIso)) return setError('End time must be after the start time.');
+    }
     if (rows.length === 0) return setError('Add at least one position.');
 
     const payloadPositions = [];
@@ -265,10 +401,44 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
 
     setSaving(true);
     try {
-      const res = isEdit
-        ? await api.put(`/events/${eventId}`, body)
-        : await api.post('/events', { ...body, venue_id: venue.id });
-      onSaved && onSaved(res.data);
+      if (isTemplate) {
+        // Phase 29.3: a typed-in new location is saved to the venue's list first
+        let locationId = locationFields.location_id;
+        if (locationFields.new_location) {
+          const loc = await api.post(`/venues/${venue.id}/locations`, locationFields.new_location);
+          locationId = loc.data.id;
+        }
+        const tplBody = {
+          name: tplName.trim(),
+          title: body.title,
+          start_local: tplStart,
+          end_local: tplEnd,
+          notes: body.notes,
+          staff_notes: body.staff_notes,
+          location_id: locationId,
+          geofence_mode: body.geofence_mode,
+          location_staff_notes: body.location_staff_notes,
+          positions: payloadPositions.map(({ shift_id: _omit, ...p }) => p),
+        };
+        const res = template
+          ? await api.put(`/venues/${venue.id}/event-templates/${template.id}`, tplBody)
+          : await api.post(`/venues/${venue.id}/event-templates`, tplBody);
+        onSaved && onSaved(res.data);
+        return;
+      }
+      let res;
+      let published = false;
+      if (isEdit) {
+        res = await api.put(`/events/${eventId}`, body);
+        if (publish && eventStatus === 'draft') {
+          res = await api.post(`/events/${eventId}/publish`);
+          published = true;
+        }
+      } else {
+        res = await api.post('/events', { ...body, venue_id: venue.id, publish });
+        published = publish;
+      }
+      onSaved && onSaved(res.data, { published });
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not save.');
     } finally {
@@ -276,25 +446,44 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
     }
   };
 
+  const isDraft = isEdit && eventStatus === 'draft';
+  const primaryCls = 'px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50 inline-flex items-center gap-1.5';
+  const secondaryCls = 'px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 text-sm font-semibold disabled:opacity-50 inline-flex items-center gap-1.5';
   const footer = (
     <>
-      <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
+      <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700 mr-auto">
         Cancel
       </button>
-      <button
-        type="button"
-        onClick={handleSubmit}
-        disabled={saving || loading}
-        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50"
-      >
-        {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Publish shift'}
-      </button>
+      {isTemplate ? (
+        <button type="button" onClick={() => handleSubmit(false)} disabled={saving} className={primaryCls}>
+          <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save template'}
+        </button>
+      ) : isEdit && !isDraft ? (
+        <button type="button" onClick={() => handleSubmit(false)} disabled={saving || loading} className={primaryCls}>
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+      ) : (
+        <>
+          <button type="button" onClick={() => handleSubmit(false)} disabled={saving || loading} className={secondaryCls}
+            title="Only managers can see a draft. Publish it when it's ready.">
+            <Save className="w-4 h-4" /> {isDraft ? 'Save draft' : 'Save as draft'}
+          </button>
+          <button type="button" onClick={() => handleSubmit(true)} disabled={saving || loading} className={primaryCls}
+            title="Workers can see and request it, and your team is told.">
+            <Send className="w-4 h-4" /> {saving ? 'Saving…' : isDraft ? 'Save & publish' : 'Publish'}
+          </button>
+        </>
+      )}
     </>
   );
 
+  const modalTitle = isTemplate
+    ? (template ? `Edit template: ${template.name}` : 'New event template')
+    : isDraft ? 'Edit draft' : isEdit ? 'Edit posted shift' : 'Post a shift';
+
   return (
     <ModalShell
-      title={isEdit ? 'Edit posted shift' : 'Post a shift'}
+      title={modalTitle}
       subtitle={venue?.name}
       icon={<Calendar className="w-5 h-5 text-emerald-400" />}
       onClose={onClose}
@@ -309,26 +498,82 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           {/* Left: event details */}
           <div className="lg:col-span-2 space-y-4">
+            {/* Phase 29.3: start from a template */}
+            {isCreate && templates.length > 0 && (
+              <div className="p-3 rounded-xl bg-indigo-500/5 border border-indigo-500/30 space-y-2">
+                <label className="flex items-center gap-1 text-xs font-semibold text-indigo-200">
+                  <LayoutTemplate className="w-3.5 h-3.5" /> Start from a template
+                </label>
+                <select
+                  value={pickedTemplate}
+                  onChange={(e) => {
+                    const tpl = templates.find((t) => t.id === e.target.value);
+                    if (tpl) applyTemplate(tpl);
+                  }}
+                  className={inputCls}
+                >
+                  <option value="" disabled>Choose a template…</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} · {t.start_local}–{t.end_local}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {isDraft && (
+              <p className="text-[11px] text-slate-300 bg-slate-800/60 border border-dashed border-slate-500 rounded-xl p-2.5">
+                This is a <strong>draft</strong>. Workers can't see it until you publish it.
+              </p>
+            )}
+            {templateNote && (
+              <p className="text-[11px] text-indigo-200 bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-2.5">{templateNote}</p>
+            )}
+            {isTemplate && (
+              <div>
+                <label className={labelCls}>Template name *</label>
+                <input value={tplName} onChange={(e) => setTplName(e.target.value)} className={inputCls} placeholder="Friday Jazz" />
+                <p className="text-[10px] text-slate-500 mt-1">What you'll pick from when posting. Workers never see it.</p>
+              </div>
+            )}
             <div>
               <label className={labelCls}>Event / shift name *</label>
               <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="Friday Gala" />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
+            {isTemplate ? (
               <div>
-                <label className={labelCls}>Starts ({tz || 'local'} time) *</label>
-                <input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} className={inputCls} />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>Starts at ({tz || 'local'}) *</label>
+                    <input type="time" value={tplStart} onChange={(e) => setTplStart(e.target.value)} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Ends at *</label>
+                    <input type="time" value={tplEnd} onChange={(e) => setTplEnd(e.target.value)} className={inputCls} />
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {tplStart && tplEnd && tplEnd <= tplStart && tplEnd !== tplStart
+                    ? 'Ends the next day (overnight).'
+                    : 'You pick the date each time you post from this template.'}
+                </p>
               </div>
-              <div>
-                <label className={labelCls}>Ends ({tz || 'local'} time) *</label>
-                <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className={inputCls} />
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
+                <div>
+                  <label className={labelCls}>Starts ({tz || 'local'} time) *</label>
+                  <input type="datetime-local" value={start} onChange={(e) => changeStart(e.target.value)} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Ends ({tz || 'local'} time) *</label>
+                  <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className={inputCls} />
+                </div>
               </div>
-            </div>
+            )}
             {/* Phase 27: Where */}
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-300">
                 <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Where
               </label>
-              <EventLocationPicker venue={venue} value={where} onChange={setWhere} />
+              <EventLocationPicker key={pickerKey} venue={venue} value={where} onChange={setWhere} />
 
               <div>
                 <label className={labelCls}>Clock-in location check</label>
@@ -392,7 +637,7 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
                 className={inputCls}
                 placeholder="Only people you've booked see this. e.g. Door code 4471, park in lot B, ask for Sam on arrival."
               />
-              {isEdit && (
+              {isEdit && !isDraft && (
                 <p className="text-[10px] text-slate-500 mt-1">
                   Changing the time or any notes flags the shift as “Updated” for everyone booked until they read it.
                 </p>

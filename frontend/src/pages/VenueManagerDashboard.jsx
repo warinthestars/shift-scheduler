@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X,
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X, LayoutTemplate,
 } from 'lucide-react';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
@@ -11,6 +11,7 @@ import ShiftEventFormModal from '../components/ShiftEventFormModal';
 import ShiftBoardModal from '../components/ShiftBoardModal';
 import ReasonDialog from '../components/ReasonDialog';
 import DuplicateEventModal from '../components/DuplicateEventModal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import TimesheetModal from '../components/TimesheetModal';
 import TeamModal from '../components/TeamModal';
 import ReviewModal from '../components/ReviewModal';
@@ -53,7 +54,9 @@ export default function VenueManagerDashboard() {
   const [boardRefreshKey, setBoardRefreshKey] = useState(0);
   const [venuePositions, setVenuePositions] = useState([]);
   const [showVenueSettings, setShowVenueSettings] = useState(false);
-  const [eventForm, setEventForm] = useState(null); // { mode: 'create' } | { mode: 'edit', eventId }
+  const [settingsTab, setSettingsTab] = useState('details');   // Phase 29.3
+  const [confirmDialog, setConfirmDialog] = useState(null);    // Phase 29.3
+  const [eventForm, setEventForm] = useState(null); // { mode: 'create', templateId? } | { mode: 'edit', eventId }
   const [reasonDialog, setReasonDialog] = useState(null);
   const [dupEvent, setDupEvent] = useState(null);
   const [timesheetEventId, setTimesheetEventId] = useState(null);
@@ -299,6 +302,59 @@ export default function VenueManagerDashboard() {
       },
     });
 
+  // Phase 29.3: drafts and templates
+  const publishEvent = async (ev) => {
+    setActionLoading(`publish-${ev.event_id}`);
+    try {
+      await api.post(`/events/${ev.event_id}/publish`);
+      afterChange(`Published “${ev.title}”. Workers can see it and your team has been told.`);
+    } catch (err) {
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Could not publish.' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const askUnpublish = (ev) =>
+    setConfirmDialog({
+      title: 'Move back to drafts?',
+      message: `Workers will stop seeing “${ev.title}” until you publish it again. Nobody has requested it yet.`,
+      confirmLabel: 'Move to drafts',
+      onConfirm: async () => {
+        await api.post(`/events/${ev.event_id}/unpublish`);
+        afterChange(`“${ev.title}” is a draft again.`);
+      },
+    });
+
+  const askDeleteDraft = (ev) =>
+    setConfirmDialog({
+      title: 'Delete this draft?',
+      message: `“${ev.title}” and its positions will be deleted. Nobody was told about it, so nobody is affected.`,
+      confirmLabel: 'Delete draft',
+      danger: true,
+      onConfirm: async () => {
+        await api.delete(`/events/${ev.event_id}`);
+        afterChange('Draft deleted.');
+      },
+    });
+
+  const askSaveTemplate = (ev) =>
+    setConfirmDialog({
+      title: 'Save as a template',
+      message: 'Saves the times, where, notes and positions (with pay) so you can post this event again in a few clicks. Dates and people are not saved.',
+      confirmLabel: 'Save template',
+      input: { label: 'Template name', placeholder: 'e.g. Friday Jazz', initial: ev.title, required: true },
+      onConfirm: async (name) => {
+        await api.post(`/events/${ev.event_id}/save-as-template`, { name });
+        setNotification({ type: 'success', message: `Saved the template “${name}”. Pick it next time you post a shift.` });
+      },
+    });
+
+  const openTemplates = () => {
+    setSettingsTab('templates');
+    setShowVenueSettings(true);
+  };
+
   const askCancelPosition = (pos, ev) =>
     setReasonDialog({
       title: `Cancel ${pos.role_type}?`,
@@ -381,10 +437,13 @@ export default function VenueManagerDashboard() {
             >
               <Plus className="w-4 h-4" /> Post a Shift
             </button>
+            <button type="button" onClick={openTemplates} disabled={!venueDetails} className={headerBtn}>
+              <LayoutTemplate className="w-4 h-4 text-indigo-300" /> Templates
+            </button>
             <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
               <UserPlus className="w-4 h-4 text-emerald-400" /> Team
             </button>
-            <button type="button" onClick={() => setShowVenueSettings(true)} disabled={!venueDetails} className={headerBtn}>
+            <button type="button" onClick={() => { setSettingsTab('details'); setShowVenueSettings(true); }} disabled={!venueDetails} className={headerBtn}>
               <Settings className="w-4 h-4 text-amber-400" /> Settings
             </button>
             <button type="button" onClick={exportPayroll} disabled={exportingCSV || !currentVenueId} className={headerBtn}>
@@ -458,6 +517,10 @@ export default function VenueManagerDashboard() {
               onEditEvent={(id) => setEventForm({ mode: 'edit', eventId: id })}
               onCancelEvent={askCancelEvent}
               onDuplicateEvent={(ev) => setDupEvent(ev)}
+              onPublishEvent={publishEvent}
+              onUnpublishEvent={askUnpublish}
+              onDeleteDraft={askDeleteDraft}
+              onSaveTemplate={askSaveTemplate}
               onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
               onRemovePerson={askRemovePerson}
               onCancelPosition={askCancelPosition}
@@ -499,15 +562,20 @@ export default function VenueManagerDashboard() {
         <ShiftEventFormModal
           mode={eventForm.mode}
           eventId={eventForm.eventId}
+          templateId={eventForm.templateId}
           venue={venueDetails}
           positions={venuePositions}
           onClose={() => setEventForm(null)}
-          onSaved={() => {
+          onSaved={(saved, info = {}) => {
             setEventForm(null);
             fetchVenueData(currentVenueId);
             setNotification({
               type: 'success',
-              message: eventForm.mode === 'edit' ? 'Event updated.' : 'Event and shifts published.',
+              message: saved?.status === 'draft'
+                ? 'Draft saved. Only managers can see it. Publish it from Posted Shifts when it’s ready.'
+                : info.published
+                  ? 'Published. Workers can see it and your team has been told.'
+                  : 'Event updated.',
             });
             loadVenuePositions(currentVenueId);
           }}
@@ -515,12 +583,13 @@ export default function VenueManagerDashboard() {
       )}
 
       {reasonDialog && <ReasonDialog {...reasonDialog} onClose={() => setReasonDialog(null)} />}
+      {confirmDialog && <ConfirmDialog {...confirmDialog} onClose={() => setConfirmDialog(null)} />}
       {dupEvent && (
         <DuplicateEventModal
           event={dupEvent}
           timeZone={tz}
           onClose={() => setDupEvent(null)}
-          onDone={(count) => afterChange(`Created ${count} ${count === 1 ? 'copy' : 'copies'}.`)}
+          onDone={(count, asDraft) => afterChange(`Created ${count} ${asDraft ? 'draft ' : ''}${count === 1 ? 'copy' : 'copies'}.`)}
         />
       )}
       {timesheetEventId && (
@@ -578,6 +647,12 @@ export default function VenueManagerDashboard() {
         <VenueSettingsModal
           mode="edit"
           venue={venueDetails}
+          initialTab={settingsTab}
+          onUseTemplate={(tpl) => {
+            setShowVenueSettings(false);
+            loadVenuePositions(currentVenueId);
+            setEventForm({ mode: 'create', templateId: tpl.id });
+          }}
           onClose={() => {
             setShowVenueSettings(false);
             loadVenuePositions(currentVenueId);

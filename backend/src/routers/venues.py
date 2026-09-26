@@ -791,11 +791,12 @@ REQUESTED_STATUSES = ("pending", "pending_manager_approval")
 @router.get("/{venue_id}/events", response_model=List[VenueEventResponse])
 async def get_venue_events(
     venue_id: UUID,
-    scope: str = Query("upcoming", pattern="^(upcoming|past|all)$"),
+    scope: str = Query("upcoming", pattern="^(upcoming|past|all|drafts)$"),
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
+    Phase 29.3: scope=drafts lists only draft events (any date, soonest first).
     Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
     Shift row per role; rows sharing (title, start_time, end_time) are one event.
     Each position lists assigned workers and pending requests.
@@ -808,6 +809,8 @@ async def get_venue_events(
         q = q.where(Shift.end_time >= now_utc).order_by(Shift.start_time.asc(), Shift.role_type.asc())
     elif scope == "past":
         q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
+    elif scope == "drafts":
+        q = q.where(func.upper(Shift.status) == "DRAFT").order_by(Shift.start_time.asc(), Shift.role_type.asc())
     else:
         q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
     shifts = (await db.execute(q)).scalars().all()
@@ -925,6 +928,7 @@ async def get_venue_events(
             events[key] = {
                 "event_key": key,
                 "event_id": s.event_id,
+                "status": (event_objs[s.event_id].status or "published") if s.event_id in event_objs else "published",   # Phase 29.3
                 "title": s.title or "Shift",
                 "start_time": s.start_time,
                 "end_time": s.end_time,

@@ -47,7 +47,7 @@ async def build_listings(
     """
     now = datetime.now(timezone.utc)
 
-    q = select(ShiftEvent)
+    q = select(ShiftEvent).where(ShiftEvent.status != "draft")   # Phase 29.3: drafts are manager-only
     if event_id is not None:
         q = q.where(ShiftEvent.id == event_id)
     else:

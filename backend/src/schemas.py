@@ -503,6 +503,7 @@ class EventPosition(BaseModel):
 class VenueEventResponse(BaseModel):
     event_key: str
     event_id: Optional[UUID] = None
+    status: str = "published"                # Phase 29.3: draft | published
     location_name: Optional[str] = None      # Phase 27: None = venue address
     cancelled: bool = False
     cancel_reason: Optional[str] = None
@@ -729,6 +730,7 @@ class EventCreate(BaseModel):
     geofence_mode: str = "venue_default"     # Phase 27: venue_default | on | off
     location_staff_notes: Optional[str] = None          # Phase 27: event-specific, confirmed staff only
     positions: List[EventPositionInput]
+    publish: bool = True                     # Phase 29.3: False = save as a draft (workers can't see it)
 
 
 class EventUpdate(BaseModel):
@@ -776,6 +778,8 @@ class EventDetail(BaseModel):
     location_staff_notes: Optional[str] = None          # Phase 27
     cancelled: bool = False
     cancel_reason: Optional[str] = None
+    status: str = "published"                           # Phase 29.3: draft | published
+    published_at: Optional[datetime] = None             # Phase 29.3
     positions: List[EventDetailPosition]
 
 
@@ -801,6 +805,7 @@ class ReasonBody(BaseModel):
 
 class DuplicateEventRequest(BaseModel):
     dates: List[date]
+    as_draft: bool = False                   # Phase 29.3: copies of a draft are always drafts
 
 
 class DuplicateEventResult(BaseModel):
@@ -1550,3 +1555,55 @@ class AdminDelivery(BaseModel):
 
 class AdminTestEmail(BaseModel):
     to: EmailStr
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.3: Event templates
+# ------------------------------------------------------------------------------
+class EventTemplatePosition(BaseModel):
+    role_type: str
+    capacity: int = 1
+    hourly_rate: float
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    role_notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    approval_mode: str = "venue_default"
+
+
+class EventTemplateInput(BaseModel):
+    name: str                                # what managers pick from ("Friday Jazz")
+    title: str                               # the event name it fills in
+    start_local: str                         # 'HH:MM' venue time
+    end_local: str                           # 'HH:MM'; earlier than start = ends the next day
+    notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    location_id: Optional[UUID] = None       # a saved venue location (None = venue address)
+    geofence_mode: str = "venue_default"
+    location_staff_notes: Optional[str] = None
+    positions: List[EventTemplatePosition]
+
+
+class EventTemplateResponse(BaseModel):
+    id: UUID
+    venue_id: UUID
+    name: str
+    title: str
+    start_local: str
+    end_local: str
+    overnight: bool = False                  # end_local is on the next day
+    notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    location: Optional[VenueLocationResponse] = None
+    geofence_mode: str = "venue_default"
+    location_staff_notes: Optional[str] = None
+    positions: List[EventTemplatePosition]
+    created_by_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SaveAsTemplateRequest(BaseModel):
+    name: str

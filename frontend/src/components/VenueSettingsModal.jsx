@@ -3,6 +3,7 @@ import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateC
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import VenueLocationsPanel from './VenueLocationsPanel';
+import EventTemplatesPanel from './EventTemplatesPanel';
 import { TIMEZONE_OPTIONS } from '../utils/venueTime';
 
 const POLICIES = [
@@ -157,9 +158,12 @@ function PositionCard({ venueId, position, onChanged, onError }) {
   );
 }
 
-export default function VenueSettingsModal({ mode = 'edit', venue = null, showManagerEmail = false, onClose, onSaved }) {
+// Phase 29.3: initialTab ('details' | 'positions' | 'locations' | 'templates'); onUseTemplate(template) shows "Use" on templates
+export default function VenueSettingsModal({
+  mode = 'edit', venue = null, showManagerEmail = false, initialTab = 'details', onUseTemplate = null, onClose, onSaved,
+}) {
   const isEdit = mode === 'edit' && !!venue?.id;
-  const [tab, setTab] = useState('details');
+  const [tab, setTab] = useState(isEdit ? initialTab : 'details');
   const [form, setForm] = useState(emptyForm(venue));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -273,8 +277,13 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
   const mapUrl = form.lat && form.lng ? `https://www.google.com/maps?q=${form.lat},${form.lng}` : null;
 
   const tabs = isEdit ? (
-    <div className="flex gap-2">
-      {[{ id: 'details', label: 'Details' }, { id: 'positions', label: 'Positions & pay' }, { id: 'locations', label: 'Locations' }].map((t) => (
+    <div className="flex flex-wrap gap-2">
+      {[
+        { id: 'details', label: 'Details' },
+        { id: 'positions', label: 'Positions & pay' },
+        { id: 'locations', label: 'Locations' },
+        { id: 'templates', label: 'Event templates' },   // Phase 29.3
+      ].map((t) => (
         <button key={t.id} type="button" onClick={() => setTab(t.id)}
           className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
           {t.label}
@@ -490,6 +499,8 @@ export default function VenueSettingsModal({ mode = 'edit', venue = null, showMa
         </div>
       ) : tab === 'locations' ? (
         <VenueLocationsPanel venue={venue} onError={setError} />
+      ) : tab === 'templates' ? (
+        <EventTemplatesPanel venue={venue} onError={setError} onUseTemplate={onUseTemplate} />
       ) : (
         <div className="space-y-4">
           <p className="text-xs text-slate-400">

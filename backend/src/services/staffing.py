@@ -76,6 +76,8 @@ async def _book_locked(
             raise HTTPException(status_code=400, detail="This event was cancelled.")
     if (shift.status or "").upper() == "CANCELLED":
         raise HTTPException(status_code=400, detail="This position was cancelled.")
+    if (shift.status or "").upper() == "DRAFT":                                        # Phase 29.3
+        raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before booking people.")
     if as_utc(shift.end_time) <= now:
         raise HTTPException(status_code=400, detail="This shift is already over.")
     if await is_blocked(db, shift.venue_id, worker.id):
@@ -219,6 +221,8 @@ async def create_offers(
             raise HTTPException(status_code=404, detail="Position not found.")
         if (shift.status or "").upper() == "CANCELLED":
             raise HTTPException(status_code=400, detail="This position was cancelled.")
+        if (shift.status or "").upper() == "DRAFT":                                    # Phase 29.3
+            raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before sending offers.")
         if shift.event_id:
             ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id))
             if ev is not None and ev.cancelled_at is not None:

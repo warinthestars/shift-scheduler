@@ -164,6 +164,8 @@ CREATE TABLE shift_events (
     location_staff_notes TEXT,
     cancelled_at TIMESTAMPTZ,
     cancel_reason TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'published',          -- Phase 29.3: draft | published
+    published_at TIMESTAMPTZ,                                 -- Phase 29.3: first time it went live
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_event_time CHECK (end_time > start_time)
@@ -505,3 +507,25 @@ CREATE TABLE admin_audit (
 );
 CREATE INDEX idx_admin_audit_created ON admin_audit(created_at DESC);
 CREATE INDEX idx_admin_audit_target ON admin_audit(target_type, target_id);
+
+-- ------------------------------------------------------------------------------
+-- Phase 29.3: Event templates (a venue's reusable event setups)
+-- ------------------------------------------------------------------------------
+CREATE TABLE event_templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    name VARCHAR(120) NOT NULL,                               -- what managers pick from ("Friday Jazz")
+    title VARCHAR(255) NOT NULL,                              -- the event name it fills in
+    start_local VARCHAR(5) NOT NULL,                          -- 'HH:MM' venue time
+    end_local VARCHAR(5) NOT NULL,                            -- 'HH:MM'; earlier than start = next day
+    notes TEXT,
+    staff_notes TEXT,
+    location_id UUID REFERENCES venue_locations(id) ON DELETE SET NULL,
+    geofence_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
+    location_staff_notes TEXT,
+    positions JSONB NOT NULL DEFAULT '[]'::jsonb,             -- [{role_type, capacity, hourly_rate, ...}]
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_event_templates_venue ON event_templates(venue_id);

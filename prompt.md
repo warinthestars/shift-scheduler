@@ -1,146 +1,80 @@
-# Phase 29.2: Admin Console Overhaul
+# Phase 29.3: Draft & Publish, and Event Templates
 
-**Why:** The admin page hasn't changed much since Phase 20, while venues, teams, invites, notifications and ratings were added around it. An audit of the live `/admin` page found these problems:
+**Why:** Until now, pressing Post a Shift made the event public at once and messaged the whole team. A manager couldn't:
+- set up next week's events and check them first
+- keep a half-finished event
+- reuse the setup of an event they run every week, other than copying one that was already posted
 
-* **Stats:** confusing ("7 users, 4 workers, 1 managers"), and nothing tells the admin what needs doing.
-* **Venue table:**
-  - The **Geofence** column showed "150m" even when geofencing was off.
-  - **Auto-approve** showed the legacy rating threshold instead of the real booking policy.
-  - Venues with no manager weren't flagged.
-* **User table:**
-  - Workers showed **"None assigned"** even after working at a venue.
-  - Everything loaded at once, with no paging.
-  - No way to open one person and see their history.
-* **Edit user:**
-  - Could only change role and venues. Name, email and phone were not editable.
-  - **Esc didn't close it.**
-* **Create user:** forced the admin to type a password (placeholder said "min 6"; the server needs 8).
-* **Venue delete:** used a browser `confirm()`, then deleted everything with no protection for payroll history.
-* **Missing tools:**
-  - no record of what admins changed
-  - no way to see whether emails/texts are going out or whether the background worker is alive
-  - no way to retry failed notifications
-* **Duplicate accounts:** easy to miss (e.g. a Firebase sign-up next to an admin-made account with the same name).
+This phase adds a **draft** state for events and **event templates**, which are managed from a new tab in Venue Settings.
 
 ## What this phase adds
 
-The admin page becomes a console with five tabs (kept in the URL as `?tab=`). A venue or a person opens in a **right-hand drawer** from any tab; Esc or the backdrop closes it.
+1. **Draft & publish:**
+   * Post a Shift now has **Save as draft** and **Publish** buttons.
+   * A draft is visible only to managers and admins. Workers never see it anywhere:
+     - listings and event pages
+     - the venue directory and public venue page
+     - new-shift alerts
+     - offers
+   * Nobody can request a draft, and a manager can't assign or offer it.
+   * Editing a draft never flags "Updated" for anyone. The form shows **Save draft** and **Save & publish**.
+   * **Publish** (a button on the draft's card) makes it live and sends the usual "New shift at …" alert to the team at that moment.
+     - A draft whose start time has passed can't be published until its date is changed.
+   * **Move back to drafts** (⋯ menu) hides a published event again, but only while nobody has requested it, been booked on it, or has an open offer.
+   * **Delete draft** (⋯ menu) removes a draft completely. Published events still use Cancel.
+   * **How it works underneath:**
+     - `shift_events.status` is `draft` | `published`, and a draft's positions carry shift status `DRAFT`.
+     - Every existing worker-facing query that only looks at `OPEN` positions skips drafts automatically.
+     - The few queries that look at "anything not cancelled" were updated.
+   * **Posted Shifts:**
+     - drafts have a dashed border and a **Draft · not visible to workers** badge
+     - a new **Drafts** filter
+     - drafts show grey in the calendar
+     - the event's roster says it's a draft and hides Assign/Offer and Cancel position
+   * **Duplicate / repeat** has a **Create the copies as drafts** checkbox. Copies of a draft are always drafts.
+   * Activity log lines: "Saved a draft", "Published", "Moved … back to drafts", "Deleted the draft".
+   * Admin console numbers (staffed %, open spots, events) ignore drafts.
+2. **Event templates:**
+   * A template is a named setup of:
+     - an event name
+     - start and end clock times (an end earlier than the start means it finishes the next day)
+     - a saved location, the clock-in check setting and notes
+     - positions with spots, pay range, tips, approval and position notes
+   * Templates belong to one venue. There's a limit of 50 per venue, and names must be unique within the venue.
+   * **Venue Settings → Event templates** (new tab): cards showing times, location and positions, with **Use**, **Edit** and **Delete**, plus a **New template** button.
+     - Templates are created and edited in the same form as posting a shift, so every option is there.
+     - A typed-in new location is saved to the venue's list.
+   * **Post a Shift → Start from a template:** fills in everything. It keeps the date you already picked, or uses tomorrow; you then change the date and publish or save a draft.
+   * **Use** on a template opens Post a Shift already filled in.
+   * **⋯ → Save as template** on any posted event or draft saves its times (in venue time), where, notes and positions.
+   * A **Templates** button in the dashboard header opens the tab directly.
+   * If a template's saved location was archived since, the template falls back to the venue address and says so.
+3. **Small form improvement:** moving the start time now moves the end time too (same length), so changing the date no longer leaves the end on the old day.
+4. **Layout fixes on Posted Shifts:**
+   * The pay / "Needs OK" / "Tips" line no longer runs into the "0/2 filled" column.
+   * The action buttons wrap on phones instead of spilling out of the card.
 
-1. **Overview:**
-   * **Needs attention**: a clickable list of what needs doing, including:
-     - failed emails/texts in the last 24 h
-     - venues with **no manager**
-     - open spots on shifts starting within **48 h** (per venue)
-     - requests waiting **over 24 h**
-     - `APP_BASE_URL` pointing at localhost
-     - email in console mode
-   * **Tiles:**
-     - **People**: workers · managers · admins
-     - **Venues**: events in the next 7 days
-     - **Staffed, next 7 days**: fill %, open spots
-     - **Waiting on managers**: requests + hand-offs, plus how many are over 24 h
-     - **Emails & texts, 24 h**: sent / failed
-   * **Latest at venues** (activity across every venue) and **Admin actions** (the new audit log).
-2. **Venues:**
-   * **Table** with search. Columns:
-     - managers
-     - active team
-     - events (30 d)
-     - open spots (7 d)
-     - requests waiting
-     - **real booking policy**
-     - **Clock-in: On site / Anywhere** (from `geofence_enabled`)
-     - last activity
-   * **Warning chips**: No manager / No positions set up / No team yet.
-   * **Dashboard** button: opens that venue's manager dashboard, switching the navbar venue.
-   * **Venue drawer:**
-     - health facts
-     - managers (click → person drawer)
-     - the venue's activity log
-     - admin changes for the venue
-     - **Team**, **Settings** and **Open dashboard** buttons, reusing the existing TeamModal and VenueSettingsModal
-     - a **safe delete**:
-       - you must type the venue name
-       - it warns about upcoming events
-       - a checkbox must be ticked to also delete clock-ins/time sheets; without it the server refuses (409) if payroll history exists
-   * **New venue** now lets you name the manager by email at creation, then opens the new venue's drawer.
-3. **People** (was "User Management"):
-   * **Server-side** search (name/email/phone), 25 per page.
-   * **Filters:** role, venue (managers, team members *and* anyone who has requested there), active/deactivated, sign-in type.
-   * **Each row shows:**
-     - venue chips: amber = manages, green = on team, grey = **worked there**, struck-out = removed, red = blocked
-     - shifts worked · upcoming
-     - rating, sign-in type
-     - last request, joined
-   * A **"Same name"** flag marks likely duplicate accounts.
-   * Phones get a card list.
-   * **Person drawer:**
-     - stats: worked, upcoming, rating, reliability
-     - **editable name, email, phone, role and venues**, saved with one button that sends only what changed
-     - every venue connection (with team positions and the venue's private note)
-     - their last 20 shifts across all venues
-     - their notification and privacy settings
-     - admin changes about them
-     - **Account**: reset password, deactivate/reactivate, and delete (type the email to confirm)
-     - Esc closes it
-   * **New user** generates a **temporary password by default** and shows it once, with **Copy password** and **Copy sign-in message**. "Set one now" requires 8+ characters.
-4. **Activity:**
-   * **Venue activity** across every venue (venue filter + category chips, Load more). Clicking an event line opens that event in the manager dashboard; a worker line opens the person.
-   * **Admin changes**: the full audit log (People / Venues / System filter, Load more).
-5. **System:**
-   * **Configuration check**, each with ok/warning:
-     - public address
-     - email
-     - texts
-     - Google/Firebase sign-in
-     - self sign-up
-     - always-admin accounts
-   * **Background worker:**
-     - on/off
-     - **last heartbeat** (stored in Redis by whichever backend process runs the worker)
-     - last error
-     - delivery counts: queued, sent, failed, skipped
-   * **Failed emails & texts** list, with **Retry** per row and **Retry all (last 7 days)**.
-   * **Send a test email** through the real email settings.
-   * Row counts for the main tables.
-6. **Admin audit log** (new `admin_audit` table). Records:
-   - user created, edited (with the list of changes), role changed, activated/deactivated, password reset, deleted
-   - venue created, deleted
-   - delivery retries
-   - test emails
-7. **Backend fixes:**
-   * `POST /api/admin/users`: `password` is optional. If it's blank, the server generates a temporary password and returns it once as `temporary_password`. A typed password must be 8+ characters.
-   * `PATCH /api/admin/users/{id}`:
-     - accepts `email`: unique; ALWAYS_ADMIN accounts are refused
-     - a blank `phone` now clears the phone instead of saving `""`
-   * `DELETE /api/venues/{id}`:
-     - requires `?confirm_name=<venue name>` (case-insensitive)
-     - returns **409** if clock-ins exist, unless `&delete_history=true`
-     - deletes through database cascades
-     - is audited
-   * The navbar's admin venue switcher reloads its list when the console creates or deletes a venue.
-
-⚠️ **Schema change:** one new table (`admin_audit`). See §E.
+⚠️ **Schema change:** two new columns on `shift_events` and one new table (`event_templates`). See §E.
 
 ## 0. Rules for this phase (read first)
 * Do **NOT** touch:
   - `backend/src/auth.py`, `backend/src/routers/auth.py`, `backend/src/services/firebase.py`, `backend/src/services/always_admin.py`
   - `main.py` CORS logic (only add the one import and `include_router` line shown)
   - `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/vite.config.js`
-* No new npm or Python packages.
+* No new npm or Python packages. (`JSONB` comes from SQLAlchemy's PostgreSQL dialect, already installed.)
 * No native PostgreSQL ENUMs:
-  - `admin_audit.target_type`: `user` | `venue` | `system`
-  - `admin_audit.action`: see the docstring in `services/admin_audit.py`
+  - `shift_events.status`: `draft` | `published`
+  - `shifts.status` gains the value `DRAFT` (still VARCHAR)
 * Aware UTC datetimes only.
-* `admin_audit.record(...)` always runs **after** the endpoint's commit, opens its own session and never raises. Never move it inside a transaction.
-* **Keep the old endpoints.** The new console doesn't call `GET /api/admin/users` or `/api/admin/stats`, but leave them in place.
+* Activity and notification hooks always run **after** the endpoint's commit. `notify_events.new_event_posted` is called on publish, never for drafts.
+* Delete drafts with a `delete(ShiftEvent).where(...)` statement (the database cascades to positions). Never use `db.delete(event)`.
 * **NEW FILE / FULL FILE REPLACEMENT**: write exactly the content shown. **EDITS**: each edit is an exact *Find* → *Replace with*. Every *Find* appears **exactly once** in the current file; apply them in order.
   - Some files use Windows line endings (CRLF). Match on the text and keep the file's line endings.
-* These blocks were generated from the real current (Phase 29.1) files and checked:
-  - after applying them, the backend imports cleanly and all 147 API operations build, 16 of them under `/api/admin`
+* These blocks were generated from the real current (Phase 29.2) files and checked:
+  - after applying them, the backend imports cleanly and all 155 API operations build (8 new)
   - the frontend bundles with no missing imports
-  - 64 new integration checks pass against PostgreSQL 16, and the Phase 29 and 29.1 suites still pass
-  - every tab, both drawers, the delete dialog and the create-user flow were rendered with the real Tailwind build at desktop and phone widths
+  - 67 new integration checks pass against PostgreSQL 16, and the Phase 29, 29.1 and 29.2 suites still pass
+  - the board, Drafts filter, ⋯ menu, Save-as-template dialog, Post a Shift with a template, the Templates tab and the template editor were rendered with the real Tailwind build at desktop and phone widths
 
   Don't "improve" them.
 
@@ -148,554 +82,1294 @@ The admin page becomes a console with five tabs (kept in the URL as `?tab=`). A 
 
 # PART A: Database, models, schemas
 
-## A1. `database/init.sql` (EDIT: append)
+## A1. `database/init.sql` (EDITS)
+Two columns on `shift_events`; the `event_templates` table appended at the end.
 
 **Edit 1.** Find:
 ```sql
-);
-CREATE INDEX idx_venue_activity_venue_created ON venue_activity(venue_id, created_at DESC);
+    cancelled_at TIMESTAMPTZ,
+    cancel_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 ```
 Replace with:
 ```sql
-);
-CREATE INDEX idx_venue_activity_venue_created ON venue_activity(venue_id, created_at DESC);
+    cancelled_at TIMESTAMPTZ,
+    cancel_reason TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'published',          -- Phase 29.3: draft | published
+    published_at TIMESTAMPTZ,                                 -- Phase 29.3: first time it went live
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+```
 
--- ==============================================================================
--- Phase 29.2: Platform admin audit log (who changed users, venues and system settings)
--- ==============================================================================
-CREATE TABLE admin_audit (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(40) NOT NULL,
-    target_type VARCHAR(20) NOT NULL,                     -- user | venue | system
-    target_id UUID,                                       -- no FK: the target may be deleted
-    summary VARCHAR(400) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+**Edit 2.** Find:
+```sql
 CREATE INDEX idx_admin_audit_created ON admin_audit(created_at DESC);
 CREATE INDEX idx_admin_audit_target ON admin_audit(target_type, target_id);
+```
+Replace with:
+```sql
+CREATE INDEX idx_admin_audit_created ON admin_audit(created_at DESC);
+CREATE INDEX idx_admin_audit_target ON admin_audit(target_type, target_id);
+
+-- ------------------------------------------------------------------------------
+-- Phase 29.3: Event templates (a venue's reusable event setups)
+-- ------------------------------------------------------------------------------
+CREATE TABLE event_templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    name VARCHAR(120) NOT NULL,                               -- what managers pick from ("Friday Jazz")
+    title VARCHAR(255) NOT NULL,                              -- the event name it fills in
+    start_local VARCHAR(5) NOT NULL,                          -- 'HH:MM' venue time
+    end_local VARCHAR(5) NOT NULL,                            -- 'HH:MM'; earlier than start = next day
+    notes TEXT,
+    staff_notes TEXT,
+    location_id UUID REFERENCES venue_locations(id) ON DELETE SET NULL,
+    geofence_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
+    location_staff_notes TEXT,
+    positions JSONB NOT NULL DEFAULT '[]'::jsonb,             -- [{role_type, capacity, hourly_rate, ...}]
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_event_templates_venue ON event_templates(venue_id);
 ```
 
 ---
 
-## A2. `backend/src/models.py` (EDIT)
+## A2. `backend/src/models.py` (EDITS)
+`ShiftEvent.status` / `published_at` and the new `EventTemplate` model (positions stored as JSONB).
 
 **Edit 1.** Find:
 ```python
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-
-class VenueActivity(Base):
-    """Phase 29.1: one line in a venue's activity log."""
+    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
+)
+from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION
+from sqlalchemy.orm import relationship
+from src.database import Base
 ```
 Replace with:
 ```python
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
+)
+from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
+from sqlalchemy.orm import relationship
+from src.database import Base
+```
 
-class AdminAudit(Base):
-    """Phase 29.2: one platform-admin action (user / venue / system)."""
-    __tablename__ = "admin_audit"
+**Edit 2.** Find:
+```python
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    shifts = relationship("Shift", back_populates="event", cascade="all, delete-orphan")
+
+class Shift(Base):
+```
+Replace with:
+```python
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="published")      # Phase 29.3: draft | published
+    published_at = Column(DateTime(timezone=True), nullable=True)          # Phase 29.3
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    shifts = relationship("Shift", back_populates="event", cascade="all, delete-orphan")
+
+
+class EventTemplate(Base):
+    """Phase 29.3: A venue's reusable event setup. Times are venue-local 'HH:MM' (end earlier = next day)."""
+    __tablename__ = "event_templates"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    action = Column(String(40), nullable=False)
-    target_type = Column(String(20), nullable=False)          # user | venue | system
-    target_id = Column(UUID(as_uuid=True), nullable=True)      # no FK: the target may be deleted
-    summary = Column(String(400), nullable=False)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String(120), nullable=False)
+    title = Column(String(255), nullable=False)
+    start_local = Column(String(5), nullable=False)
+    end_local = Column(String(5), nullable=False)
+    notes = Column(Text, nullable=True)
+    staff_notes = Column(Text, nullable=True)
+    location_id = Column(UUID(as_uuid=True), ForeignKey("venue_locations.id", ondelete="SET NULL"), nullable=True)
+    geofence_mode = Column(String(20), nullable=False, default="venue_default")
+    location_staff_notes = Column(Text, nullable=True)
+    positions = Column(JSONB, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-class VenueActivity(Base):
-    """Phase 29.1: one line in a venue's activity log."""
+class Shift(Base):
 ```
 
 ---
 
 ## A3. `backend/src/schemas.py` (EDITS)
-`UserResponse.temporary_password`, optional `UserCreateAdmin.password`, `UserUpdateAdmin.email`, and the new `Admin*` response models at the end.
+`EventCreate.publish` (default true, so older callers keep publishing), `status` on `EventDetail` and `VenueEventResponse`, `DuplicateEventRequest.as_draft`, and the template schemas at the end.
 
 **Edit 1.** Find:
 ```python
-    auth_source: Optional[str] = None     # "local" | "firebase" | "both"
-    has_password: bool = False
-
-    # For UI compatibility
+    event_key: str
+    event_id: Optional[UUID] = None
+    location_name: Optional[str] = None      # Phase 27: None = venue address
+    cancelled: bool = False
 ```
 Replace with:
 ```python
-    auth_source: Optional[str] = None     # "local" | "firebase" | "both"
-    has_password: bool = False
-    temporary_password: Optional[str] = None   # Phase 29.2: only on admin create, when generated
-
-    # For UI compatibility
+    event_key: str
+    event_id: Optional[UUID] = None
+    status: str = "published"                # Phase 29.3: draft | published
+    location_name: Optional[str] = None      # Phase 27: None = venue address
+    cancelled: bool = False
 ```
 
 **Edit 2.** Find:
 ```python
-class UserCreateAdmin(BaseModel):
-    email: EmailStr
-    password: str
-    first_name: str
-    last_name: str
+    location_staff_notes: Optional[str] = None          # Phase 27: event-specific, confirmed staff only
+    positions: List[EventPositionInput]
+
+
 ```
 Replace with:
 ```python
-class UserCreateAdmin(BaseModel):
-    email: EmailStr
-    password: Optional[str] = None           # Phase 29.2: blank = generate a temporary password (returned once)
-    first_name: str
-    last_name: str
+    location_staff_notes: Optional[str] = None          # Phase 27: event-specific, confirmed staff only
+    positions: List[EventPositionInput]
+    publish: bool = True                     # Phase 29.3: False = save as a draft (workers can't see it)
+
+
 ```
 
 **Edit 3.** Find:
 ```python
-    role: Optional[str] = None
-    is_active: Optional[bool] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
+    cancelled: bool = False
+    cancel_reason: Optional[str] = None
+    positions: List[EventDetailPosition]
+
 ```
 Replace with:
 ```python
-    role: Optional[str] = None
-    is_active: Optional[bool] = None
-    email: Optional[EmailStr] = None         # Phase 29.2
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
+    cancelled: bool = False
+    cancel_reason: Optional[str] = None
+    status: str = "published"                           # Phase 29.3: draft | published
+    published_at: Optional[datetime] = None             # Phase 29.3
+    positions: List[EventDetailPosition]
+
 ```
 
 **Edit 4.** Find:
 ```python
-    worker_id: Optional[UUID] = None
-    created_at: datetime
+class DuplicateEventRequest(BaseModel):
+    dates: List[date]
+
+
 ```
 Replace with:
 ```python
-    worker_id: Optional[UUID] = None
-    created_at: datetime
+class DuplicateEventRequest(BaseModel):
+    dates: List[date]
+    as_draft: bool = False                   # Phase 29.3: copies of a draft are always drafts
 
 
-# ------------------------------------------------------------------------------
-# Phase 29.2: Admin console
-# ------------------------------------------------------------------------------
-class AdminNameRef(BaseModel):
-    id: UUID
-    name: str
+```
 
-
-class AdminPersonRef(BaseModel):
-    user_id: UUID
-    name: str
-    email: Optional[str] = None
-
-
-class AdminMembership(BaseModel):
-    venue_id: UUID
-    venue_name: str
-    status: str                              # active | removed | blocked | worked
-    source: Optional[str] = None
-    positions: List[str] = []
-    notes: Optional[str] = None              # the venue's private note (admins see all)
-
-
-class AdminUserRow(BaseModel):
-    id: UUID
-    first_name: str = ""
-    last_name: str = ""
-    email: str
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
-    role: str
-    is_active: bool = True
-    auth_source: str = "local"               # local | firebase | both
-    has_password: bool = False
-    created_at: datetime
-    managed_venues: List[AdminNameRef] = []
-    memberships: List[AdminMembership] = []
-    shifts_worked: int = 0
-    upcoming: int = 0
-    aggregate_rating: float = 5.0
-    rating_count: int = 0
-    last_activity_at: Optional[datetime] = None
-    discoverable: str = "private"
-    always_admin: bool = False
-
-
-class AdminUserPage(BaseModel):
-    total: int
-    items: List[AdminUserRow]
-
-
-class AdminHistoryItem(BaseModel):
-    request_id: UUID
-    venue_id: UUID
-    venue_name: str
-    event_id: Optional[UUID] = None
-    title: str
-    role_type: str
-    start_time: datetime
-    end_time: datetime
-    status: str
-
-
-class AdminAuditItem(BaseModel):
-    id: UUID
-    actor_name: Optional[str] = None
-    action: str
-    target_type: str
-    target_id: Optional[UUID] = None
-    summary: str
-    created_at: datetime
-
-
-class AdminUserDetail(BaseModel):
-    user: AdminUserRow
-    reliability: Optional[WorkerReliability] = None
-    email_enabled: bool = True
-    sms_enabled: bool = False
-    history: List[AdminHistoryItem] = []
-    audit: List[AdminAuditItem] = []
-
-
-class AdminVenueRow(BaseModel):
-    id: UUID
-    name: str
-    address: str
-    timezone: str = "America/New_York"
-    created_at: datetime
-    managers: List[AdminPersonRef] = []
-    team_active: int = 0
-    upcoming_events: int = 0                 # next 30 days, not cancelled
-    open_spots_7d: int = 0
-    pending_requests: int = 0
-    approval_policy: str = "team_auto"
-    geofence_enabled: bool = False
-    positions_count: int = 0
-    locations_count: int = 0
-    last_activity_at: Optional[datetime] = None
-    warnings: List[str] = []
-
-
-class AdminAttention(BaseModel):
-    level: str                               # error | warn | info
-    text: str
-    kind: str = "system"                     # venue | users | system | deliveries
-    target_id: Optional[UUID] = None
-
-
-class AdminActivityItem(BaseModel):
-    id: UUID
-    venue_id: UUID
-    venue_name: str
-    kind: str
-    category: str
-    summary: str
-    actor_name: Optional[str] = None
-    event_id: Optional[UUID] = None
-    worker_id: Optional[UUID] = None
-    created_at: datetime
-
-
-class AdminOverview(BaseModel):
-    users_total: int = 0
-    workers: int = 0
-    managers: int = 0
-    admins: int = 0
-    deactivated: int = 0
-    new_users_7d: int = 0
-    venues: int = 0
-    events_next_7d: int = 0
-    spots_next_7d: int = 0
-    open_spots_next_7d: int = 0
-    fill_rate_next_7d: Optional[float] = None
-    urgent_open_spots_48h: int = 0
-    pending_requests: int = 0
-    stale_requests_24h: int = 0
-    pending_handoffs: int = 0
-    deliveries_sent_24h: int = 0
-    deliveries_failed_24h: int = 0
-    attention: List[AdminAttention] = []
-    recent_activity: List[AdminActivityItem] = []
-    recent_audit: List[AdminAuditItem] = []
-
-
-class AdminDeliveryStats(BaseModel):
-    pending: int = 0
-    sent_24h: int = 0
-    failed_24h: int = 0
-    failed_7d: int = 0
-    skipped_24h: int = 0
-
-
-class AdminSystem(BaseModel):
-    app_base_url: str = ""
-    app_base_url_ok: bool = False
-    email_provider: str = "console"
-    email_from: str = ""
-    email_ready: bool = False
-    sms_provider: str = "off"
-    sms_ready: bool = False
-    firebase: str = "off"                    # real | mock | off
-    self_registration: bool = True
-    always_admin_count: int = 0
-    worker_enabled: bool = True
-    worker_started_at: Optional[datetime] = None
-    worker_last_tick_at: Optional[datetime] = None
-    worker_last_ok: Optional[bool] = None
-    worker_last_error: Optional[str] = None
-    worker_heartbeat_at: Optional[datetime] = None   # from Redis (any backend process)
-    digest_hour: int = 9
-    deliveries: AdminDeliveryStats = AdminDeliveryStats()
-    table_counts: dict = {}
-
-
-class AdminDelivery(BaseModel):
-    id: UUID
-    channel: str
-    status: str
-    attempts: int = 0
-    last_error: Optional[str] = None
-    created_at: datetime
-    send_after: Optional[datetime] = None
-    user_id: UUID
-    user_name: str = ""
-    user_email: Optional[str] = None
-    title: str = ""
-
-
+**Edit 5.** Find:
+```python
 class AdminTestEmail(BaseModel):
     to: EmailStr
+```
+Replace with:
+```python
+class AdminTestEmail(BaseModel):
+    to: EmailStr
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.3: Event templates
+# ------------------------------------------------------------------------------
+class EventTemplatePosition(BaseModel):
+    role_type: str
+    capacity: int = 1
+    hourly_rate: float
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    role_notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    approval_mode: str = "venue_default"
+
+
+class EventTemplateInput(BaseModel):
+    name: str                                # what managers pick from ("Friday Jazz")
+    title: str                               # the event name it fills in
+    start_local: str                         # 'HH:MM' venue time
+    end_local: str                           # 'HH:MM'; earlier than start = ends the next day
+    notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    location_id: Optional[UUID] = None       # a saved venue location (None = venue address)
+    geofence_mode: str = "venue_default"
+    location_staff_notes: Optional[str] = None
+    positions: List[EventTemplatePosition]
+
+
+class EventTemplateResponse(BaseModel):
+    id: UUID
+    venue_id: UUID
+    name: str
+    title: str
+    start_local: str
+    end_local: str
+    overnight: bool = False                  # end_local is on the next day
+    notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    location: Optional[VenueLocationResponse] = None
+    geofence_mode: str = "venue_default"
+    location_staff_notes: Optional[str] = None
+    positions: List[EventTemplatePosition]
+    created_by_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SaveAsTemplateRequest(BaseModel):
+    name: str
 ```
 
 ---
 
 # PART B: Backend
 
-## B1. NEW FILE `backend/src/services/admin_audit.py`
+## B1. `backend/src/services/shift_events.py` (EDITS)
+Drafts on create/edit/duplicate, plus `publish_event`, `unpublish_event` and `discard_draft` at the end.
 
+**Edit 1.** Find:
 ```python
-"""
-Phase 29.2: Platform admin audit log.
+from sqlalchemy.ext.asyncio import AsyncSession
 
-record() opens its own session, commits and NEVER raises: call it AFTER the admin action committed.
-Actions: user_created, user_updated, user_role, user_status, user_password, user_deleted,
-         venue_created, venue_deleted, delivery_retry, test_email
-"""
-import logging
-from typing import Optional
+from src.models import ShiftEvent, Shift, ShiftRequest, Venue, User, VenueLocation
+from src.schemas import (
+    EventCreate, EventUpdate, EventPositionInput, EventDetail, EventDetailPosition,
+```
+Replace with:
+```python
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.database import AsyncSessionLocal
-from src.models import AdminAudit
+from src.models import ShiftEvent, Shift, ShiftRequest, ShiftOffer, Venue, User, VenueLocation
+from src.schemas import (
+    EventCreate, EventUpdate, EventPositionInput, EventDetail, EventDetailPosition,
+```
 
-logger = logging.getLogger("shiftboard.admin_audit")
+**Edit 2.** Find:
+```python
+PENDING_STATUSES = ("pending", "pending_manager_approval")
+ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
 
 
-async def record(actor_id, action: str, summary: str, *, target_type: str = "system", target_id=None) -> None:
+```
+Replace with:
+```python
+PENDING_STATUSES = ("pending", "pending_manager_approval")
+ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
+# Phase 29.3: a draft event's positions carry shift status DRAFT, so every worker-facing query that
+# only looks at OPEN positions (listings, directory, offers, new-shift alerts) skips them.
+DRAFT = "draft"
+PUBLISHED = "published"
+
+
+```
+
+**Edit 3.** Find:
+```python
+        _validate_position(p)
+    mode = validate_geofence_mode(data.geofence_mode)
     try:
-        async with AsyncSessionLocal() as db:
-            db.add(AdminAudit(
-                actor_user_id=actor_id, action=action, target_type=target_type,
-                target_id=target_id, summary=(summary or "")[:400],
-            ))
-            await db.commit()
-    except Exception:
-        logger.exception(f"admin audit '{action}' failed")
+        # Phase 27: where is it? (a typed-in new location is saved to the venue's list here)
+```
+Replace with:
+```python
+        _validate_position(p)
+    mode = validate_geofence_mode(data.geofence_mode)
+    is_draft = not getattr(data, "publish", True)          # Phase 29.3
+    try:
+        # Phase 27: where is it? (a typed-in new location is saved to the venue's list here)
+```
+
+**Edit 4.** Find:
+```python
+            geofence_mode=mode,
+            location_staff_notes=_clean(data.location_staff_notes),
+        )
+        db.add(event)
+        await db.flush()
+        for p in data.positions:
+            s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0, status="OPEN")
+            _apply_position(s, p, event)
+            db.add(s)
+```
+Replace with:
+```python
+            geofence_mode=mode,
+            location_staff_notes=_clean(data.location_staff_notes),
+            status=DRAFT if is_draft else PUBLISHED,                                   # Phase 29.3
+            published_at=None if is_draft else datetime.now(timezone.utc),
+        )
+        db.add(event)
+        await db.flush()
+        for p in data.positions:
+            s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0,
+                      status="DRAFT" if is_draft else "OPEN")
+            _apply_position(s, p, event)
+            db.add(s)
+```
+
+**Edit 5.** Find:
+```python
+                )
+
+    try:
+        # Phase 26.2: work out what changed so booked workers are told
+```
+Replace with:
+```python
+                )
+
+    is_draft = (event.status or PUBLISHED) == DRAFT      # Phase 29.3: nobody to tell about draft edits
+    try:
+        # Phase 26.2: work out what changed so booked workers are told
+```
+
+**Edit 6.** Find:
+```python
+        event.notes = _clean(data.notes)
+        event.staff_notes = _clean(data.staff_notes)
+        if changes:
+            event.info_updated_at = datetime.now(timezone.utc)
+            event.info_change = "; ".join(changes)
+```
+Replace with:
+```python
+        event.notes = _clean(data.notes)
+        event.staff_notes = _clean(data.staff_notes)
+        if changes and not is_draft:
+            event.info_updated_at = datetime.now(timezone.utc)
+            event.info_change = "; ".join(changes)
+```
+
+**Edit 7.** Find:
+```python
+            if p.shift_id:
+                s = by_id[p.shift_id]
+                _apply_position(s, p, event, track_changes=True)
+                if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
+                    s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
+            else:
+                s = Shift(
+                    venue_id=event.venue_id, event_id=event.id,
+                    created_by_user_id=event.created_by_user_id, spots_filled=0, status="OPEN",
+                )
+                _apply_position(s, p, event)
+```
+Replace with:
+```python
+            if p.shift_id:
+                s = by_id[p.shift_id]
+                _apply_position(s, p, event, track_changes=not is_draft)
+                if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
+                    s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
+            else:
+                s = Shift(
+                    venue_id=event.venue_id, event_id=event.id,
+                    created_by_user_id=event.created_by_user_id, spots_filled=0,
+                    status="DRAFT" if is_draft else "OPEN",
+                )
+                _apply_position(s, p, event)
+```
+
+**Edit 8.** Find:
+```python
+        cancelled=event.cancelled_at is not None,
+        cancel_reason=event.cancel_reason,
+        positions=[
+            EventDetailPosition(
+```
+Replace with:
+```python
+        cancelled=event.cancelled_at is not None,
+        cancel_reason=event.cancel_reason,
+        status=event.status or PUBLISHED,
+        published_at=event.published_at,
+        positions=[
+            EventDetailPosition(
+```
+
+**Edit 9.** Find:
+```python
 
 
-def person(u) -> str:
-    if u is None:
-        return "someone"
-    name = f"{u.first_name or ''} {u.last_name or ''}".strip()
-    return f"{name} ({u.email})" if name else (u.email or "someone")
+async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date]) -> List[ShiftEvent]:
+    """Copy an event to each date, keeping the same local start time in the venue's timezone."""
+    unique_dates = sorted(set(dates or []))
+    if not unique_dates:
+```
+Replace with:
+```python
+
+
+async def duplicate_event(
+    db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date], as_draft: bool = False,
+) -> List[ShiftEvent]:
+    """Copy an event to each date, keeping the same local start time in the venue's timezone.
+    Phase 29.3: copies are drafts when as_draft is set or the source is a draft."""
+    as_draft = as_draft or (event.status or PUBLISHED) == DRAFT
+    unique_dates = sorted(set(dates or []))
+    if not unique_dates:
+```
+
+**Edit 10.** Find:
+```python
+            location_staff_notes=event.location_staff_notes,
+            positions=positions,
+        ), allow_archived_location=True)
+        created.append(ev)
+    return created
+```
+Replace with:
+```python
+            location_staff_notes=event.location_staff_notes,
+            positions=positions,
+            publish=not as_draft,
+        ), allow_archived_location=True)
+        created.append(ev)
+    return created
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.3: Draft / publish
+# ------------------------------------------------------------------------------
+BLOCKING_REQUEST_STATUSES = ACTIVE_REQUEST_STATUSES + ("checked_in", "completed")
+
+
+async def publish_event(db: AsyncSession, event: ShiftEvent) -> None:
+    """Draft -> live. Positions become OPEN; the caller tells the team (new_event_posted)."""
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="This event was cancelled.")
+    if (event.status or PUBLISHED) != DRAFT:
+        raise HTTPException(status_code=400, detail="This event is already published.")
+    now = datetime.now(timezone.utc)
+    if _as_utc(event.start_time) <= now:
+        raise HTTPException(status_code=400, detail="This draft's start time has passed. Change the date, then publish.")
+    shifts = (await db.execute(
+        select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+    )).scalars().all()
+    if not shifts:
+        raise HTTPException(status_code=400, detail="Add at least one position before publishing.")
+    try:
+        for s in shifts:
+            s.status = "FILLED" if (s.spots_filled or 0) >= (s.capacity or 1) else "OPEN"
+        event.status = PUBLISHED
+        event.published_at = now
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to publish: {str(e)}")
+
+
+async def unpublish_event(db: AsyncSession, event: ShiftEvent) -> None:
+    """Live -> draft. Only while nobody has requested, been booked or been offered a spot."""
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="This event was cancelled.")
+    if (event.status or PUBLISHED) == DRAFT:
+        raise HTTPException(status_code=400, detail="This event is already a draft.")
+    shift_ids = (await db.execute(select(Shift.id).where(Shift.event_id == event.id))).scalars().all()
+    if shift_ids:
+        people = await db.scalar(
+            select(func.count(ShiftRequest.id)).where(
+                ShiftRequest.shift_id.in_(shift_ids),
+                func.lower(ShiftRequest.status).in_(BLOCKING_REQUEST_STATUSES),
+            )
+        )
+        if people:
+            raise HTTPException(
+                status_code=400,
+                detail="People have already requested or been booked on this event, so it can't go back to a draft. Edit it, or cancel it instead.",
+            )
+        offers = await db.scalar(
+            select(func.count(ShiftOffer.id)).where(ShiftOffer.shift_id.in_(shift_ids), ShiftOffer.status == "pending")
+        )
+        if offers:
+            raise HTTPException(status_code=400, detail="Withdraw the open offers on this event first.")
+    try:
+        await db.execute(
+            update(Shift)
+            .where(Shift.event_id == event.id, func.upper(Shift.status).in_(("OPEN", "FILLED")))
+            .values(status="DRAFT")
+            .execution_options(synchronize_session=False)
+        )
+        event.status = DRAFT
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to move it back to drafts: {str(e)}")
+
+
+async def discard_draft(db: AsyncSession, event: ShiftEvent) -> None:
+    """Delete a draft outright (its positions cascade). Published events are cancelled, never deleted."""
+    if (event.status or PUBLISHED) != DRAFT:
+        raise HTTPException(status_code=400, detail="Only drafts can be deleted. Cancel a published event instead.")
+    try:
+        await db.execute(delete(ShiftEvent).where(ShiftEvent.id == event.id))
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete the draft: {str(e)}")
 ```
 
 ---
 
-## B2. NEW FILE `backend/src/routers/admin_console.py`
-All endpoints require a platform admin (`require_admin`) and share the `/api/admin` prefix with `routers/admin.py`. No paths overlap.
-
-| Method | URL | Purpose |
-|---|---|---|
-| GET | `/api/admin/overview` | counts, "needs attention", recent activity + audit |
-| GET | `/api/admin/venues/summary` | one health row per venue |
-| GET | `/api/admin/directory?q=&role=&status=&auth=&venue_id=&limit=50&offset=0` | `{total, items}` people, paged |
-| GET | `/api/admin/users/{user_id}/detail` | one person: venues, history, reliability, settings, audit |
-| GET | `/api/admin/activity?venue_id=&category=&before=&limit=40` | activity across venues |
-| GET | `/api/admin/audit?target_type=&target_id=&before=&limit=40` | admin audit log |
-| GET | `/api/admin/system` | config, worker health, delivery stats, table counts |
-| GET | `/api/admin/deliveries?status=failed&limit=50` | notification deliveries |
-| POST | `/api/admin/deliveries/{delivery_id}/retry` | failed → pending (400 otherwise) |
-| POST | `/api/admin/deliveries/retry-failed` | all failed in the last 7 days |
-| POST | `/api/admin/test-email` | `{to}`; 502 if sending fails |
+## B2. NEW FILE `backend/src/services/event_templates.py`
 
 ```python
 """
-Phase 29.2: Admin console (platform admins only).
+Phase 29.3: Event templates - a venue's reusable event setups (name, times, where, notes, positions).
 
-  GET  /api/admin/overview                     numbers, "needs attention", recent activity + admin log
-  GET  /api/admin/venues/summary               one row per venue with health warnings
-  GET  /api/admin/directory?q=&role=&status=&auth=&venue_id=&limit=&offset=   users, server-side paged
-  GET  /api/admin/users/{user_id}/detail       one user: memberships, history, audit
-  GET  /api/admin/activity?venue_id=&category=&before=&limit=   every venue's activity log
-  GET  /api/admin/audit?target_type=&target_id=&before=&limit=  admin actions
-  GET  /api/admin/system                       configuration + background worker + delivery health
-  GET  /api/admin/deliveries?status=failed&limit=
-  POST /api/admin/deliveries/{delivery_id}/retry
-  POST /api/admin/deliveries/retry-failed
-  POST /api/admin/test-email                   {to}
+Times are venue-local 'HH:MM' strings. An end earlier than (or equal to) the start means the event ends
+the next day. Templates never create anything by themselves: the "Post a shift" form fills itself in
+from one, and the manager picks the date.
 """
-from collections import defaultdict
-from datetime import datetime, timezone, timedelta
+import re
+from datetime import timezone
 from typing import Dict, List, Optional
-from uuid import UUID
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, or_, and_, update
+from fastapi import HTTPException
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config import settings
-from src.database import get_db
-from src.models import (
-    User, Venue, VenueManager, VenueWhitelist, VenuePosition, VenueLocation, Shift, ShiftEvent, ShiftRequest,
-    ShiftTransfer, TimeEntry, VenueActivity, AdminAudit, Notification, NotificationDelivery, NotificationPreference,
+from src.models import EventTemplate, ShiftEvent, Shift, Venue, User, VenueLocation
+from src.schemas import EventTemplateInput, EventTemplatePosition, EventTemplateResponse, EventPositionInput
+from src.services.shift_events import _validate_position, _clean
+from src.services.locations import (
+    validate_geofence_mode, check_geofence_possible, usage_counts, to_response as location_response,
 )
-from src.schemas import (
-    AdminOverview, AdminAttention, AdminActivityItem, AdminAuditItem, AdminVenueRow, AdminPersonRef,
-    AdminUserRow, AdminUserPage, AdminUserDetail, AdminHistoryItem, AdminMembership, AdminNameRef,
-    AdminSystem, AdminDeliveryStats, AdminDelivery, AdminTestEmail, WorkerReliability,
-)
-from src.auth import require_admin, normalize_role
-from src.serializers import auth_source_for
-from src.services.always_admin import is_always_admin_email, get_always_admin_emails
-from src.services.reliability import compute_reliability
-from src.services.messaging import email_available, sms_available, send_email, render_email
-from src.services.activity import CATEGORIES
-from src.services import admin_audit
 
-router = APIRouter(prefix="/api/admin", tags=["Admin console"])
-
-WORKED = ("approved", "confirmed", "checked_in", "completed", "transferred")
-FINISHED = ("approved", "confirmed", "checked_in", "completed")
-BOOKED = ("approved", "confirmed", "checked_in")
-PENDING = ("pending", "pending_manager_approval")
+MAX_TEMPLATES_PER_VENUE = 50
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
-def _name(u: Optional[User]) -> str:
+def _name(u: Optional[User]) -> Optional[str]:
     if u is None:
-        return ""
-    return f"{u.first_name or ''} {u.last_name or ''}".strip() or (u.email or "")
+        return None
+    return f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
 
 
-async def _names(db: AsyncSession, ids) -> Dict[UUID, str]:
-    ids = {i for i in ids if i}
-    if not ids:
-        return {}
-    return {u.id: _name(u) for u in (await db.execute(select(User).where(User.id.in_(ids)))).scalars().all()}
+def _norm_time(value: str, label: str) -> str:
+    v = (value or "").strip()
+    if len(v) == 4 and v[1] == ":":
+        v = "0" + v                                   # '9:30' -> '09:30'
+    if not TIME_RE.match(v):
+        raise HTTPException(status_code=400, detail=f"{label} must be a time like 18:00.")
+    return v
 
 
-def _base_url_ok() -> bool:
-    url = (settings.APP_BASE_URL or "").strip()
-    return bool(url) and "localhost" not in url and "127.0.0.1" not in url
-
-
-# ---------------------------------------------------------------------------------------------
-# Shared builders
-# ---------------------------------------------------------------------------------------------
-async def _audit_items(db: AsyncSession, q) -> List[AdminAuditItem]:
-    rows = (await db.execute(q)).scalars().all()
-    names = await _names(db, [r.actor_user_id for r in rows])
-    return [
-        AdminAuditItem(id=r.id, actor_name=names.get(r.actor_user_id), action=r.action, target_type=r.target_type,
-                       target_id=r.target_id, summary=r.summary, created_at=r.created_at)
-        for r in rows
-    ]
-
-
-async def _activity_items(db: AsyncSession, q) -> List[AdminActivityItem]:
-    rows = (await db.execute(q)).all()
-    names = await _names(db, [a.actor_user_id for a, _ in rows])
-    return [
-        AdminActivityItem(
-            id=a.id, venue_id=a.venue_id, venue_name=vname, kind=a.kind, category=a.category, summary=a.summary,
-            actor_name=names.get(a.actor_user_id), event_id=a.event_id, worker_id=a.worker_id, created_at=a.created_at,
-        )
-        for a, vname in rows
-    ]
-
-
-async def _user_rows(db: AsyncSession, users: List[User]) -> List[AdminUserRow]:
-    if not users:
-        return []
-    ids = [u.id for u in users]
-    now = datetime.now(timezone.utc)
-
-    managed = defaultdict(list)
-    for uid, vid, vname in (await db.execute(
-        select(VenueManager.user_id, Venue.id, Venue.name).join(Venue, Venue.id == VenueManager.venue_id)
-        .where(VenueManager.user_id.in_(ids)).order_by(Venue.name)
-    )).all():
-        managed[uid].append(AdminNameRef(id=vid, name=vname))
-
-    members = defaultdict(dict)
-    for wl, vname in (await db.execute(
-        select(VenueWhitelist, Venue.name).join(Venue, Venue.id == VenueWhitelist.venue_id)
-        .where(VenueWhitelist.worker_id.in_(ids))
-    )).all():
-        members[wl.worker_id][wl.venue_id] = AdminMembership(
-            venue_id=wl.venue_id, venue_name=vname, status=wl.status or "active", source=wl.source,
-            positions=list(wl.positions or []), notes=wl.notes,
-        )
-    for wid, vid, vname in (await db.execute(
-        select(ShiftRequest.worker_id, Venue.id, Venue.name).distinct()
-        .join(Shift, Shift.id == ShiftRequest.shift_id).join(Venue, Venue.id == Shift.venue_id)
-        .where(ShiftRequest.worker_id.in_(ids), func.lower(ShiftRequest.status).in_(WORKED))
-    )).all():
-        if vid not in members[wid]:
-            members[wid][vid] = AdminMembership(venue_id=vid, venue_name=vname, status="worked", source="worked")
-
-    worked = dict((await db.execute(
-        select(ShiftRequest.worker_id, func.count(ShiftRequest.id)).join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(ShiftRequest.worker_id.in_(ids), Shift.end_time < now, func.lower(ShiftRequest.status).in_(FINISHED))
-        .group_by(ShiftRequest.worker_id)
-    )).all())
-    upcoming = dict((await db.execute(
-        select(ShiftRequest.worker_id, func.count(ShiftRequest.id)).join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(ShiftRequest.worker_id.in_(ids), Shift.end_time >= now, func.lower(ShiftRequest.status).in_(BOOKED))
-        .group_by(ShiftRequest.worker_id)
-    )).all())
-    last = dict((await db.execute(
-        select(ShiftRequest.worker_id, func.max(ShiftRequest.created_at))
-        .where(ShiftRequest.worker_id.in_(ids)).group_by(ShiftRequest.worker_id)
-    )).all())
-
+def _position_dicts(positions: List[EventTemplatePosition]) -> List[dict]:
+    if not positions:
+        raise HTTPException(status_code=400, detail="Add at least one position.")
     out = []
-    for u in users:
-        out.append(AdminUserRow(
-            id=u.id, first_name=u.first_name or "", last_name=u.last_name or "", email=u.email, phone=u.phone,
-            avatar_url=u.avatar_url, role=normalize_role(u.role), is_active=bool(u.is_active),
-            auth_source=auth_source_for(u), has_password=bool(u.hashed_password), created_at=u.created_at,
-            managed_venues=managed.get(u.id, []),
-            memberships=sorted(members.get(u.id, {}).values(), key=lambda m: m.venue_name.lower()),
-            shifts_worked=int(worked.get(u.id, 0)), upcoming=int(upcoming.get(u.id, 0)),
-            aggregate_rating=float(u.aggregate_rating or 0.0), rating_count=int(u.rating_count or 0),
-            last_activity_at=last.get(u.id), discoverable=getattr(u, "discoverable", None) or "private",
-            always_admin=is_always_admin_email(u.email),
+    for p in positions:
+        _validate_position(EventPositionInput(**p.model_dump()))
+        rate = round(float(p.hourly_rate), 2)
+        rate_max = round(float(p.hourly_rate_max), 2) if p.hourly_rate_max is not None and p.hourly_rate_max > p.hourly_rate else None
+        out.append({
+            "role_type": p.role_type.strip()[:100],
+            "capacity": int(p.capacity),
+            "hourly_rate": rate,
+            "hourly_rate_max": rate_max,
+            "hide_rate": bool(p.hide_rate),
+            "tips_eligible": bool(p.tips_eligible),
+            "tip_pool": bool(p.tips_eligible and p.tip_pool),
+            "role_notes": _clean(p.role_notes),
+            "staff_notes": _clean(p.staff_notes),
+            "approval_mode": (p.approval_mode or "venue_default").lower(),
+        })
+    return out
+
+
+async def _location_for(db: AsyncSession, venue: Venue, location_id, keep_id=None) -> Optional[VenueLocation]:
+    """A saved, non-archived location of this venue (an archived one may stay on a template that already has it)."""
+    if not location_id:
+        return None
+    loc = await db.scalar(select(VenueLocation).where(VenueLocation.id == location_id))
+    if loc is None or loc.venue_id != venue.id:
+        raise HTTPException(status_code=400, detail="That location doesn't belong to this venue.")
+    if loc.is_archived and location_id != keep_id:
+        raise HTTPException(status_code=400, detail=f"“{loc.name}” is archived. Bring it back under Venue Settings → Locations first.")
+    return loc
+
+
+async def _check_name(db: AsyncSession, venue_id, name: str, exclude_id=None) -> str:
+    clean = (name or "").strip()[:120]
+    if not clean:
+        raise HTTPException(status_code=400, detail="Give the template a name.")
+    q = select(EventTemplate.id).where(EventTemplate.venue_id == venue_id, func.lower(EventTemplate.name) == clean.lower())
+    if exclude_id is not None:
+        q = q.where(EventTemplate.id != exclude_id)
+    if await db.scalar(q):
+        raise HTTPException(status_code=400, detail=f"You already have a template called “{clean}”.")
+    return clean
+
+
+def _apply(tpl: EventTemplate, data: EventTemplateInput, name: str, location: Optional[VenueLocation], mode: str) -> None:
+    title = (data.title or "").strip()[:255]
+    if not title:
+        raise HTTPException(status_code=400, detail="Give the event a name.")
+    start = _norm_time(data.start_local, "Start time")
+    end = _norm_time(data.end_local, "End time")
+    if start == end:
+        raise HTTPException(status_code=400, detail="The end time can't be the same as the start time.")
+    tpl.name = name
+    tpl.title = title
+    tpl.start_local = start
+    tpl.end_local = end
+    tpl.notes = _clean(data.notes)
+    tpl.staff_notes = _clean(data.staff_notes)
+    tpl.location_id = location.id if location is not None else None
+    tpl.geofence_mode = mode
+    tpl.location_staff_notes = _clean(data.location_staff_notes)
+    tpl.positions = _position_dicts(data.positions)
+
+
+async def to_responses(db: AsyncSession, templates: List[EventTemplate]) -> List[EventTemplateResponse]:
+    loc_ids = [t.location_id for t in templates if t.location_id]
+    locations: Dict = {
+        l.id: l for l in (await db.execute(select(VenueLocation).where(VenueLocation.id.in_(loc_ids)))).scalars().all()
+    } if loc_ids else {}
+    counts = await usage_counts(db, list(locations.keys())) if locations else {}
+    user_ids = {t.created_by_user_id for t in templates if t.created_by_user_id}
+    users = {
+        u.id: u for u in (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+    } if user_ids else {}
+    out = []
+    for t in templates:
+        loc = locations.get(t.location_id)
+        out.append(EventTemplateResponse(
+            id=t.id, venue_id=t.venue_id, name=t.name, title=t.title,
+            start_local=t.start_local, end_local=t.end_local, overnight=t.end_local <= t.start_local,
+            notes=t.notes, staff_notes=t.staff_notes,
+            location=location_response(loc, counts) if loc is not None else None,
+            geofence_mode=t.geofence_mode or "venue_default", location_staff_notes=t.location_staff_notes,
+            positions=[EventTemplatePosition(**p) for p in (t.positions or [])],
+            created_by_name=_name(users.get(t.created_by_user_id)),
+            created_at=t.created_at, updated_at=t.updated_at,
         ))
     return out
 
 
-# ---------------------------------------------------------------------------------------------
-# Overview
-# ---------------------------------------------------------------------------------------------
-@router.get("/overview", response_model=AdminOverview)
-async def overview(current_user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def list_templates(db: AsyncSession, venue_id) -> List[EventTemplateResponse]:
+    rows = (await db.execute(
+        select(EventTemplate).where(EventTemplate.venue_id == venue_id).order_by(func.lower(EventTemplate.name))
+    )).scalars().all()
+    return await to_responses(db, list(rows))
+
+
+async def create_template(db: AsyncSession, venue: Venue, user: User, data: EventTemplateInput) -> EventTemplate:
+    count = await db.scalar(select(func.count(EventTemplate.id)).where(EventTemplate.venue_id == venue.id)) or 0
+    if count >= MAX_TEMPLATES_PER_VENUE:
+        raise HTTPException(status_code=400, detail=f"A venue can have up to {MAX_TEMPLATES_PER_VENUE} templates. Delete one you no longer use.")
+    name = await _check_name(db, venue.id, data.name)
+    mode = validate_geofence_mode(data.geofence_mode)
+    location = await _location_for(db, venue, data.location_id)
+    check_geofence_possible(mode, venue, location)
+    tpl = EventTemplate(venue_id=venue.id, created_by_user_id=user.id)
+    _apply(tpl, data, name, location, mode)
+    try:
+        db.add(tpl)
+        await db.commit()
+        await db.refresh(tpl)
+        return tpl
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save the template: {str(e)}")
+
+
+async def update_template(db: AsyncSession, venue: Venue, tpl: EventTemplate, data: EventTemplateInput) -> EventTemplate:
+    name = await _check_name(db, venue.id, data.name, exclude_id=tpl.id)
+    mode = validate_geofence_mode(data.geofence_mode)
+    location = await _location_for(db, venue, data.location_id, keep_id=tpl.location_id)
+    check_geofence_possible(mode, venue, location)
+    _apply(tpl, data, name, location, mode)
+    try:
+        await db.commit()
+        await db.refresh(tpl)
+        return tpl
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save the template: {str(e)}")
+
+
+async def delete_template(db: AsyncSession, tpl: EventTemplate) -> None:
+    try:
+        await db.execute(delete(EventTemplate).where(EventTemplate.id == tpl.id))
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete the template: {str(e)}")
+
+
+async def template_from_event(db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, name: str) -> EventTemplate:
+    """Save an existing event's setup (times in venue time, where, notes, open positions) as a template."""
+    shifts = (await db.execute(
+        select(Shift)
+        .where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+        .order_by(Shift.created_at.asc())
+    )).scalars().all()
+    if not shifts:
+        raise HTTPException(status_code=400, detail="Nothing to save: every position is cancelled.")
+    tz = ZoneInfo(venue.timezone or "America/New_York")
+    start = event.start_time if event.start_time.tzinfo else event.start_time.replace(tzinfo=timezone.utc)
+    end = event.end_time if event.end_time.tzinfo else event.end_time.replace(tzinfo=timezone.utc)
+    location = await db.scalar(select(VenueLocation).where(VenueLocation.id == event.location_id)) if event.location_id else None
+    data = EventTemplateInput(
+        name=name,
+        title=event.title,
+        start_local=start.astimezone(tz).strftime("%H:%M"),
+        end_local=end.astimezone(tz).strftime("%H:%M"),
+        notes=event.notes,
+        staff_notes=event.staff_notes,
+        location_id=location.id if location is not None and not location.is_archived else None,
+        geofence_mode=event.geofence_mode or "venue_default",
+        location_staff_notes=event.location_staff_notes,
+        positions=[
+            EventTemplatePosition(
+                role_type=s.role_type, capacity=s.capacity or 1, hourly_rate=float(s.hourly_rate),
+                hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
+                hide_rate=bool(s.hide_rate), tips_eligible=bool(s.tips_eligible), tip_pool=bool(s.tip_pool),
+                role_notes=s.description, staff_notes=s.staff_notes, approval_mode=s.approval_mode or "venue_default",
+            )
+            for s in shifts
+        ],
+    )
+    return await create_template(db, venue, user, data)
+```
+
+---
+
+## B3. NEW FILE `backend/src/routers/event_templates.py`
+Manager of the venue or platform admin (`can_manage_venue`).
+
+| Method | URL | Purpose |
+|---|---|---|
+| GET | `/api/venues/{venue_id}/event-templates` | list (sorted by name) |
+| POST | `/api/venues/{venue_id}/event-templates` | create → 201 |
+| PUT | `/api/venues/{venue_id}/event-templates/{template_id}` | replace |
+| DELETE | `/api/venues/{venue_id}/event-templates/{template_id}` | → 204 |
+| POST | `/api/events/{event_id}/save-as-template` | `{name}` → 201 |
+
+```python
+"""
+Phase 29.3: Event templates (the venue's reusable event setups). Venue managers of the venue, or platform admins.
+
+  GET    /api/venues/{venue_id}/event-templates
+  POST   /api/venues/{venue_id}/event-templates                  EventTemplateInput -> 201
+  PUT    /api/venues/{venue_id}/event-templates/{template_id}    EventTemplateInput
+  DELETE /api/venues/{venue_id}/event-templates/{template_id}    -> 204
+  POST   /api/events/{event_id}/save-as-template                 {name} -> 201
+"""
+from typing import List
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.database import get_db
+from src.models import User, Venue, ShiftEvent, EventTemplate
+from src.schemas import EventTemplateInput, EventTemplateResponse, SaveAsTemplateRequest
+from src.auth import require_manager_or_admin
+from src.services.venue_public import can_manage_venue
+from src.services.event_templates import (
+    list_templates, create_template, update_template, delete_template, template_from_event, to_responses,
+)
+from src.services import activity
+
+router = APIRouter(tags=["Event templates"])
+
+
+async def _venue(db: AsyncSession, venue_id: UUID, user: User) -> Venue:
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if venue is None:
+        raise HTTPException(status_code=404, detail="Venue not found.")
+    if not await can_manage_venue(db, user, venue.id):
+        raise HTTPException(status_code=403, detail="You don't manage this venue.")
+    return venue
+
+
+async def _template(db: AsyncSession, venue: Venue, template_id: UUID) -> EventTemplate:
+    tpl = await db.scalar(select(EventTemplate).where(EventTemplate.id == template_id, EventTemplate.venue_id == venue.id))
+    if tpl is None:
+        raise HTTPException(status_code=404, detail="Template not found.")
+    return tpl
+
+
+@router.get("/api/venues/{venue_id}/event-templates", response_model=List[EventTemplateResponse])
+async def get_templates(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    venue = await _venue(db, venue_id, current_user)
+    return await list_templates(db, venue.id)
+
+
+@router.post("/api/venues/{venue_id}/event-templates", response_model=EventTemplateResponse, status_code=status.HTTP_201_CREATED)
+async def post_template(
+    venue_id: UUID,
+    data: EventTemplateInput,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    venue = await _venue(db, venue_id, current_user)
+    tpl = await create_template(db, venue, current_user, data)
+    out = (await to_responses(db, [tpl]))[0]
+    await activity.for_venue("template_saved", venue.id, current_user.id, f"Created the event template “{tpl.name}”")
+    return out
+
+
+@router.put("/api/venues/{venue_id}/event-templates/{template_id}", response_model=EventTemplateResponse)
+async def put_template(
+    venue_id: UUID,
+    template_id: UUID,
+    data: EventTemplateInput,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    venue = await _venue(db, venue_id, current_user)
+    tpl = await update_template(db, venue, await _template(db, venue, template_id), data)
+    out = (await to_responses(db, [tpl]))[0]
+    await activity.for_venue("template_saved", venue.id, current_user.id, f"Edited the event template “{tpl.name}”")
+    return out
+
+
+@router.delete("/api/venues/{venue_id}/event-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_template(
+    venue_id: UUID,
+    template_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    venue = await _venue(db, venue_id, current_user)
+    tpl = await _template(db, venue, template_id)
+    name = tpl.name
+    await delete_template(db, tpl)
+    await activity.for_venue("template_deleted", venue.id, current_user.id, f"Deleted the event template “{name}”")
+
+
+@router.post("/api/events/{event_id}/save-as-template", response_model=EventTemplateResponse, status_code=status.HTTP_201_CREATED)
+async def save_event_as_template(
+    event_id: UUID,
+    body: SaveAsTemplateRequest,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    event = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == event_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    venue = await _venue(db, event.venue_id, current_user)
+    tpl = await template_from_event(db, event, venue, current_user, body.name)
+    out = (await to_responses(db, [tpl]))[0]
+    await activity.for_venue("template_saved", venue.id, current_user.id,
+                             f"Saved “{event.title}” as the event template “{tpl.name}”")
+    return out
+```
+
+---
+
+## B4. `backend/src/routers/events.py` (EDITS)
+Drafts stay quiet on create/duplicate. New endpoints:
+
+| Method | URL | Purpose |
+|---|---|---|
+| POST | `/api/events/{event_id}/publish` | draft → live; tells the team; 400 if already live, cancelled or in the past |
+| POST | `/api/events/{event_id}/unpublish` | live → draft; 400 if anyone requested/was booked or an offer is open |
+| DELETE | `/api/events/{event_id}` | delete a **draft** → 204; 400 for published events |
+
+**Edit 1.** Find:
+```python
+from src.services.shift_events import (
+    create_event_with_positions, update_event, build_event_detail, cancel_shifts, duplicate_event,
+)
+from src.services.timesheets import build_timesheet
+from src.services import notify_events
+from src.services import activity
+from datetime import datetime, timezone
+
+```
+Replace with:
+```python
+from src.services.shift_events import (
+    create_event_with_positions, update_event, build_event_detail, cancel_shifts, duplicate_event,
+    publish_event, unpublish_event, discard_draft, DRAFT,
+)
+from src.services.timesheets import build_timesheet
+from src.services import notify_events
+from src.services import activity
+from src.services.activity import short_when
+from datetime import datetime, timezone
+
+```
+
+**Edit 2.** Find:
+```python
+    event = await create_event_with_positions(db, venue, current_user, data)
+    detail = await build_event_detail(db, event)
+    await notify_events.new_event_posted(event.id)          # Phase 28: tell the venue's team
+    await activity.for_event("event_created", event.id, current_user.id)   # Phase 29.1
+```
+Replace with:
+```python
+    event = await create_event_with_positions(db, venue, current_user, data)
+    detail = await build_event_detail(db, event)
+    if event.status == DRAFT:                               # Phase 29.3: drafts stay quiet
+        await activity.for_event("event_drafted", event.id, current_user.id)
+        return detail
+    await notify_events.new_event_posted(event.id)          # Phase 28: tell the venue's team
+    await activity.for_event("event_created", event.id, current_user.id)   # Phase 29.1
+```
+
+**Edit 3.** Find:
+```python
+    event = await _load_managed_event(db, event_id, current_user)
+    venue = await _venue_for(db, event.venue_id)
+    created = await duplicate_event(db, event, venue, current_user, body.dates)
+    for ev in created:
+        await notify_events.new_event_posted(ev.id)         # Phase 28
+    if created:
+        await activity.for_event("event_duplicated", event_id, current_user.id,
+                                 f"{len(created)} {'copy' if len(created) == 1 else 'copies'}")   # Phase 29.1
+    return DuplicateEventResult(created_event_ids=[e.id for e in created], count=len(created))
+
+
+```
+Replace with:
+```python
+    event = await _load_managed_event(db, event_id, current_user)
+    venue = await _venue_for(db, event.venue_id)
+    created = await duplicate_event(db, event, venue, current_user, body.dates, as_draft=body.as_draft)
+    drafts = sum(1 for ev in created if ev.status == DRAFT)
+    for ev in created:
+        if ev.status != DRAFT:
+            await notify_events.new_event_posted(ev.id)     # Phase 28 (drafts stay quiet, Phase 29.3)
+    if created:
+        await activity.for_event("event_duplicated", event_id, current_user.id,
+                                 f"{len(created)} {'copy' if len(created) == 1 else 'copies'}"
+                                 + (" as drafts" if drafts else ""))   # Phase 29.1
+    return DuplicateEventResult(created_event_ids=[e.id for e in created], count=len(created))
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.3: Draft / publish
+# ------------------------------------------------------------------------------
+@router.post("/{event_id}/publish", response_model=EventDetail)
+async def publish(
+    event_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Make a draft live: workers can see and request it, and the venue's team is told."""
+    event = await _load_managed_event(db, event_id, current_user)
+    await publish_event(db, event)
+    await db.refresh(event)
+    detail = await build_event_detail(db, event)
+    await notify_events.new_event_posted(event.id)
+    await activity.for_event("event_published", event.id, current_user.id)
+    return detail
+
+
+@router.post("/{event_id}/unpublish", response_model=EventDetail)
+async def unpublish(
+    event_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Take a live event back to drafts (only while nobody has requested, been booked or been offered it)."""
+    event = await _load_managed_event(db, event_id, current_user)
+    await unpublish_event(db, event)
+    await db.refresh(event)
+    detail = await build_event_detail(db, event)
+    await activity.for_event("event_unpublished", event.id, current_user.id)
+    return detail
+
+
+@router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_draft(
+    event_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a draft. Published events can only be cancelled."""
+    event = await _load_managed_event(db, event_id, current_user)
+    venue = await _venue_for(db, event.venue_id)
+    what = f"{event.title} ({short_when(event.start_time, venue)})"
+    venue_id = event.venue_id
+    await discard_draft(db, event)
+    await activity.for_venue("event_discarded", venue_id, current_user.id, f"Deleted the draft {what}")
+
+
+```
+
+---
+
+## B5. `backend/src/routers/venues.py` (EDITS)
+`GET /api/venues/{id}/events?scope=drafts`, and each event carries `status`.
+
+**Edit 1.** Find:
+```python
+async def get_venue_events(
+    venue_id: UUID,
+    scope: str = Query("upcoming", pattern="^(upcoming|past|all)$"),
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
+    Shift row per role; rows sharing (title, start_time, end_time) are one event.
+```
+Replace with:
+```python
+async def get_venue_events(
+    venue_id: UUID,
+    scope: str = Query("upcoming", pattern="^(upcoming|past|all|drafts)$"),
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 29.3: scope=drafts lists only draft events (any date, soonest first).
+    Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
+    Shift row per role; rows sharing (title, start_time, end_time) are one event.
+```
+
+**Edit 2.** Find:
+```python
+    elif scope == "past":
+        q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
+    else:
+        q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
+```
+Replace with:
+```python
+    elif scope == "past":
+        q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
+    elif scope == "drafts":
+        q = q.where(func.upper(Shift.status) == "DRAFT").order_by(Shift.start_time.asc(), Shift.role_type.asc())
+    else:
+        q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
+```
+
+**Edit 3.** Find:
+```python
+                "event_key": key,
+                "event_id": s.event_id,
+                "title": s.title or "Shift",
+                "start_time": s.start_time,
+```
+Replace with:
+```python
+                "event_key": key,
+                "event_id": s.event_id,
+                "status": (event_objs[s.event_id].status or "published") if s.event_id in event_objs else "published",   # Phase 29.3
+                "title": s.title or "Shift",
+                "start_time": s.start_time,
+```
+
+---
+
+## B6. `backend/src/services/listings.py` (EDIT)
+Workers never get drafts (list or single event).
+
+**Edit 1.** Find:
+```python
     now = datetime.now(timezone.utc)
-    role_counts = defaultdict(int)
-    deactivated = 0
-    for role, active, n in (await db.execute(
-        select(func.lower(User.role), User.is_active, func.count(User.id)).group_by(func.lower(User.role), User.is_active)
-    )).all():
-        role_counts[normalize_role(role)] += n
-        if not active:
-            deactivated += n
-    new_7d = int(await db.scalar(select(func.count(User.id)).where(User.created_at >= now - timedelta(days=7))) or 0)
+
+    q = select(ShiftEvent)
+    if event_id is not None:
+        q = q.where(ShiftEvent.id == event_id)
+```
+Replace with:
+```python
+    now = datetime.now(timezone.utc)
+
+    q = select(ShiftEvent).where(ShiftEvent.status != "draft")   # Phase 29.3: drafts are manager-only
+    if event_id is not None:
+        q = q.where(ShiftEvent.id == event_id)
+```
+
+---
+
+## B7. `backend/src/services/venue_public.py` (EDITS)
+Directory stats and the public venue page skip drafts.
+
+**Edit 1.** Find:
+```python
+            ).label("open_spots"),
+            func.min(Shift.start_time).filter(Shift.start_time >= now).label("next_start"),
+        ).group_by(Shift.venue_id)
+    )).all()
+    stats = {r.venue_id: r for r in stats_rows}
+```
+Replace with:
+```python
+            ).label("open_spots"),
+            func.min(Shift.start_time).filter(Shift.start_time >= now).label("next_start"),
+        ).where(func.upper(Shift.status) != "DRAFT").group_by(Shift.venue_id)      # Phase 29.3: drafts are hidden
+    )).all()
+    stats = {r.venue_id: r for r in stats_rows}
+```
+
+**Edit 2.** Find:
+```python
+            func.count(distinct(func.concat(Shift.title, "|", Shift.start_time, "|", Shift.end_time))),
+            func.coalesce(func.sum(Shift.capacity), 0),
+        ).where(Shift.venue_id == venue.id, Shift.start_time >= since, Shift.start_time < now)
+    )).one()
+
+```
+Replace with:
+```python
+            func.count(distinct(func.concat(Shift.title, "|", Shift.start_time, "|", Shift.end_time))),
+            func.coalesce(func.sum(Shift.capacity), 0),
+        ).where(Shift.venue_id == venue.id, Shift.start_time >= since, Shift.start_time < now,
+                func.upper(Shift.status) != "DRAFT")      # Phase 29.3
+    )).one()
+
+```
+
+**Edit 3.** Find:
+```python
+async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
+    now = datetime.now(timezone.utc)
+    q = select(Shift).where(Shift.venue_id == venue.id)
+    if scope == "past":
+        q = q.where(
+```
+Replace with:
+```python
+async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
+    now = datetime.now(timezone.utc)
+    q = select(Shift).where(Shift.venue_id == venue.id, func.upper(Shift.status) != "DRAFT")   # Phase 29.3
+    if scope == "past":
+        q = q.where(
+```
+
+---
+
+## B8. `backend/src/services/booking.py` (EDIT)
+
+**Edit 1.** Find:
+```python
+        if shift_status == "CANCELLED":
+            raise HTTPException(status_code=400, detail="This position was cancelled.")
+        if as_utc(shift.start_time) <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="This shift has already started.")
+```
+Replace with:
+```python
+        if shift_status == "CANCELLED":
+            raise HTTPException(status_code=400, detail="This position was cancelled.")
+        if shift_status == "DRAFT":                                                   # Phase 29.3
+            raise HTTPException(status_code=400, detail="This event isn't open for requests.")
+        if as_utc(shift.start_time) <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="This shift has already started.")
+```
+
+---
+
+## B9. `backend/src/services/staffing.py` (EDITS)
+Assign and offers refuse drafts.
+
+**Edit 1.** Find:
+```python
+    if (shift.status or "").upper() == "CANCELLED":
+        raise HTTPException(status_code=400, detail="This position was cancelled.")
+    if as_utc(shift.end_time) <= now:
+        raise HTTPException(status_code=400, detail="This shift is already over.")
+```
+Replace with:
+```python
+    if (shift.status or "").upper() == "CANCELLED":
+        raise HTTPException(status_code=400, detail="This position was cancelled.")
+    if (shift.status or "").upper() == "DRAFT":                                        # Phase 29.3
+        raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before booking people.")
+    if as_utc(shift.end_time) <= now:
+        raise HTTPException(status_code=400, detail="This shift is already over.")
+```
+
+**Edit 2.** Find:
+```python
+        if (shift.status or "").upper() == "CANCELLED":
+            raise HTTPException(status_code=400, detail="This position was cancelled.")
+        if shift.event_id:
+            ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id))
+```
+Replace with:
+```python
+        if (shift.status or "").upper() == "CANCELLED":
+            raise HTTPException(status_code=400, detail="This position was cancelled.")
+        if (shift.status or "").upper() == "DRAFT":                                    # Phase 29.3
+            raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before sending offers.")
+        if shift.event_id:
+            ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id))
+```
+
+---
+
+## B10. `backend/src/services/activity.py` (EDITS)
+
+**Edit 1.** Find:
+```python
+    "position_cancelled": "changes",
+    "event_duplicated": "changes",
+    "venue_settings": "changes",
+    "not_clocked_in": "alerts",
+```
+Replace with:
+```python
+    "position_cancelled": "changes",
+    "event_duplicated": "changes",
+    "event_drafted": "changes",          # Phase 29.3
+    "event_published": "changes",
+    "event_unpublished": "changes",
+    "event_discarded": "changes",
+    "template_saved": "changes",
+    "template_deleted": "changes",
+    "venue_settings": "changes",
+    "not_clocked_in": "alerts",
+```
+
+**Edit 2.** Find:
+```python
+        "position_cancelled": f"Cancelled a position in {what}",
+        "event_duplicated": f"Copied {what}",
+    }.get(kind, what)
+    if extra:
+```
+Replace with:
+```python
+        "position_cancelled": f"Cancelled a position in {what}",
+        "event_duplicated": f"Copied {what}",
+        "event_drafted": f"Saved a draft: {what}",                 # Phase 29.3
+        "event_published": f"Published {what}",
+        "event_unpublished": f"Moved {what} back to drafts",
+    }.get(kind, what)
+    if extra:
+```
+
+---
+
+## B11. `backend/src/routers/admin_console.py` (EDITS)
+Overview and venue numbers ignore drafts.
+
+**Edit 1.** Find:
+```python
     venues = (await db.execute(select(Venue).order_by(Venue.name))).scalars().all()
 
     live = and_(func.upper(Shift.status) != "CANCELLED", Shift.start_time >= now)
@@ -704,95 +1378,22 @@ async def overview(current_user: User = Depends(require_admin), db: AsyncSession
             ShiftEvent.cancelled_at.is_(None), ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=7))
     ) or 0)
     cap, filled = (await db.execute(
-        select(func.coalesce(func.sum(Shift.capacity), 0), func.coalesce(func.sum(Shift.spots_filled), 0))
-        .where(live, Shift.start_time < now + timedelta(days=7))
-    )).one()
-    cap, filled = int(cap or 0), int(filled or 0)
-    urgent_by_venue = dict((await db.execute(
-        select(Shift.venue_id, func.sum(Shift.capacity - Shift.spots_filled))
-        .where(live, Shift.start_time < now + timedelta(hours=48), Shift.spots_filled < Shift.capacity)
-        .group_by(Shift.venue_id)
-    )).all())
-    pending = int(await db.scalar(
-        select(func.count(ShiftRequest.id)).join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(func.lower(ShiftRequest.status).in_(PENDING), Shift.end_time > now, func.upper(Shift.status) != "CANCELLED")
-    ) or 0)
-    stale_by_venue = dict((await db.execute(
-        select(Shift.venue_id, func.count(ShiftRequest.id)).join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(func.lower(ShiftRequest.status).in_(PENDING), Shift.end_time > now,
-               func.upper(Shift.status) != "CANCELLED", ShiftRequest.created_at < now - timedelta(hours=24))
-        .group_by(Shift.venue_id)
-    )).all())
-    handoffs = int(await db.scalar(
-        select(func.count(ShiftTransfer.id)).where(func.lower(ShiftTransfer.status) == "pending_manager_approval")
-    ) or 0)
-    sent_24h = int(await db.scalar(select(func.count(NotificationDelivery.id)).where(
-        NotificationDelivery.status == "sent", NotificationDelivery.sent_at >= now - timedelta(hours=24))) or 0)
-    failed_24h = int(await db.scalar(select(func.count(NotificationDelivery.id)).where(
-        NotificationDelivery.status == "failed", NotificationDelivery.created_at >= now - timedelta(hours=24))) or 0)
-
-    mgr_counts = dict((await db.execute(
-        select(VenueManager.venue_id, func.count(VenueManager.user_id)).group_by(VenueManager.venue_id)
-    )).all())
-    vname = {v.id: v.name for v in venues}
-
-    attention: List[AdminAttention] = []
-    if failed_24h:
-        attention.append(AdminAttention(level="error", kind="deliveries",
-                                        text=f"{failed_24h} email/text notification{'s' if failed_24h != 1 else ''} failed in the last 24 h."))
-    for v in venues:
-        if not mgr_counts.get(v.id):
-            attention.append(AdminAttention(level="warn", kind="venue", target_id=v.id,
-                                            text=f"{v.name} has no manager. Only platform admins can run it."))
-    for vid, n in sorted(urgent_by_venue.items(), key=lambda x: -int(x[1] or 0)):
-        if n:
-            attention.append(AdminAttention(level="warn", kind="venue", target_id=vid,
-                                            text=f"{vname.get(vid, 'A venue')}: {int(n)} open spot{'s' if n != 1 else ''} on shifts starting in the next 48 h."))
-    for vid, n in stale_by_venue.items():
-        attention.append(AdminAttention(level="warn", kind="venue", target_id=vid,
-                                        text=f"{vname.get(vid, 'A venue')}: {n} request{'s' if n != 1 else ''} waiting over 24 h."))
-    if not _base_url_ok():
-        attention.append(AdminAttention(level="warn", kind="system",
-                                        text="APP_BASE_URL isn't set to your public address, so links in emails point at localhost."))
-    if not email_available():
-        attention.append(AdminAttention(level="info", kind="system",
-                                        text="Email is in console mode: notification emails are only written to the backend log."))
-
-    recent = await _activity_items(db, (
-        select(VenueActivity, Venue.name).join(Venue, Venue.id == VenueActivity.venue_id)
-        .order_by(VenueActivity.created_at.desc()).limit(12)
-    ))
-    audit = await _audit_items(db, select(AdminAudit).order_by(AdminAudit.created_at.desc()).limit(6))
-
-    return AdminOverview(
-        users_total=sum(role_counts.values()), workers=role_counts.get("worker", 0),
-        managers=role_counts.get("venue_manager", 0), admins=role_counts.get("platform_admin", 0),
-        deactivated=deactivated, new_users_7d=new_7d, venues=len(venues), events_next_7d=events_7d,
-        spots_next_7d=cap, open_spots_next_7d=max(0, cap - filled),
-        fill_rate_next_7d=round(100.0 * filled / cap, 1) if cap else None,
-        urgent_open_spots_48h=int(sum(int(n or 0) for n in urgent_by_venue.values())),
-        pending_requests=pending, stale_requests_24h=int(sum(stale_by_venue.values())), pending_handoffs=handoffs,
-        deliveries_sent_24h=sent_24h, deliveries_failed_24h=failed_24h,
-        attention=attention, recent_activity=recent, recent_audit=audit,
-    )
-
-
-# ---------------------------------------------------------------------------------------------
-# Venues
-# ---------------------------------------------------------------------------------------------
-@router.get("/venues/summary", response_model=List[AdminVenueRow])
-async def venues_summary(current_user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    now = datetime.now(timezone.utc)
+```
+Replace with:
+```python
     venues = (await db.execute(select(Venue).order_by(Venue.name))).scalars().all()
-    managers = defaultdict(list)
-    for vid, u in (await db.execute(
-        select(VenueManager.venue_id, User).join(User, User.id == VenueManager.user_id).order_by(User.first_name)
-    )).all():
-        managers[vid].append(AdminPersonRef(user_id=u.id, name=_name(u), email=u.email))
-    team = dict((await db.execute(
-        select(VenueWhitelist.venue_id, func.count(VenueWhitelist.id)).where(VenueWhitelist.status == "active")
-        .group_by(VenueWhitelist.venue_id)
-    )).all())
+
+    live = and_(func.upper(Shift.status).notin_(("CANCELLED", "DRAFT")), Shift.start_time >= now)   # Phase 29.3: not drafts
+    events_7d = int(await db.scalar(
+        select(func.count(ShiftEvent.id)).where(
+            ShiftEvent.cancelled_at.is_(None), ShiftEvent.status != "draft",
+            ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=7))
+    ) or 0)
+    cap, filled = (await db.execute(
+```
+
+**Edit 2.** Find:
+```python
     events = dict((await db.execute(
         select(ShiftEvent.venue_id, func.count(ShiftEvent.id)).where(
             ShiftEvent.cancelled_at.is_(None), ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=30))
@@ -803,704 +1404,55 @@ async def venues_summary(current_user: User = Depends(require_admin), db: AsyncS
             func.upper(Shift.status) != "CANCELLED", Shift.start_time >= now, Shift.start_time < now + timedelta(days=7),
             Shift.spots_filled < Shift.capacity)
         .group_by(Shift.venue_id)
+```
+Replace with:
+```python
+    events = dict((await db.execute(
+        select(ShiftEvent.venue_id, func.count(ShiftEvent.id)).where(
+            ShiftEvent.cancelled_at.is_(None), ShiftEvent.status != "draft",
+            ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=30))
+        .group_by(ShiftEvent.venue_id)
     )).all())
-    pend = dict((await db.execute(
-        select(Shift.venue_id, func.count(ShiftRequest.id)).join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(func.lower(ShiftRequest.status).in_(PENDING), Shift.end_time > now, func.upper(Shift.status) != "CANCELLED")
+    open7 = dict((await db.execute(
+        select(Shift.venue_id, func.sum(Shift.capacity - Shift.spots_filled)).where(
+            func.upper(Shift.status).notin_(("CANCELLED", "DRAFT")), Shift.start_time >= now, Shift.start_time < now + timedelta(days=7),
+            Shift.spots_filled < Shift.capacity)
         .group_by(Shift.venue_id)
-    )).all())
-    positions = dict((await db.execute(
-        select(VenuePosition.venue_id, func.count(VenuePosition.id)).where(VenuePosition.is_active == True)
-        .group_by(VenuePosition.venue_id)
-    )).all())
-    locations = dict((await db.execute(
-        select(VenueLocation.venue_id, func.count(VenueLocation.id)).where(VenueLocation.is_archived == False)
-        .group_by(VenueLocation.venue_id)
-    )).all())
-    last = dict((await db.execute(
-        select(VenueActivity.venue_id, func.max(VenueActivity.created_at)).group_by(VenueActivity.venue_id)
-    )).all())
-
-    rows = []
-    for v in venues:
-        warnings = []
-        if not managers.get(v.id):
-            warnings.append("No manager")
-        if not positions.get(v.id):
-            warnings.append("No positions set up")
-        if not team.get(v.id):
-            warnings.append("No team yet")
-        rows.append(AdminVenueRow(
-            id=v.id, name=v.name, address=v.address, timezone=v.timezone or "America/New_York", created_at=v.created_at,
-            managers=managers.get(v.id, []), team_active=int(team.get(v.id, 0)), upcoming_events=int(events.get(v.id, 0)),
-            open_spots_7d=int(open7.get(v.id) or 0), pending_requests=int(pend.get(v.id, 0)),
-            approval_policy=v.approval_policy or "team_auto", geofence_enabled=bool(v.geofence_enabled),
-            positions_count=int(positions.get(v.id, 0)), locations_count=int(locations.get(v.id, 0)),
-            last_activity_at=last.get(v.id), warnings=warnings,
-        ))
-    return rows
-
-
-# ---------------------------------------------------------------------------------------------
-# Users
-# ---------------------------------------------------------------------------------------------
-@router.get("/directory", response_model=AdminUserPage)
-async def directory(
-    q: str = Query("", max_length=100),
-    role: str = Query("all", pattern="^(all|worker|venue_manager|platform_admin)$"),
-    status: str = Query("all", pattern="^(all|active|inactive)$"),
-    auth: str = Query("all", pattern="^(all|local|firebase|both)$"),
-    venue_id: Optional[UUID] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    conds = []
-    term = (q or "").strip().lower()
-    if term:
-        like = f"%{term}%"
-        conds.append(or_(
-            func.lower(func.concat(User.first_name, " ", User.last_name)).like(like),
-            func.lower(User.email).like(like),
-            func.coalesce(User.phone, "").like(like),
-        ))
-    if role != "all":
-        roles = ("platform_admin", "super_admin") if role == "platform_admin" else (role,)
-        conds.append(func.lower(User.role).in_(roles))
-    if status == "active":
-        conds.append(User.is_active == True)
-    elif status == "inactive":
-        conds.append(User.is_active == False)
-    if auth == "local":
-        conds += [User.hashed_password.isnot(None), User.firebase_uid.is_(None)]
-    elif auth == "firebase":
-        conds += [User.firebase_uid.isnot(None), User.hashed_password.is_(None)]
-    elif auth == "both":
-        conds += [User.firebase_uid.isnot(None), User.hashed_password.isnot(None)]
-    if venue_id is not None:
-        conds.append(or_(
-            User.id.in_(select(VenueManager.user_id).where(VenueManager.venue_id == venue_id)),
-            User.id.in_(select(VenueWhitelist.worker_id).where(VenueWhitelist.venue_id == venue_id)),
-            User.id.in_(select(ShiftRequest.worker_id).join(Shift, Shift.id == ShiftRequest.shift_id).where(Shift.venue_id == venue_id)),
-        ))
-    total = int(await db.scalar(select(func.count(User.id)).where(*conds)) or 0)
-    users = (await db.execute(
-        select(User).where(*conds).order_by(User.created_at.desc(), User.email).offset(offset).limit(limit)
-    )).scalars().all()
-    return AdminUserPage(total=total, items=await _user_rows(db, list(users)))
-
-
-@router.get("/users/{user_id}/detail", response_model=AdminUserDetail)
-async def user_detail(user_id: UUID, current_user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    user = await db.scalar(select(User).where(User.id == user_id))
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found.")
-    row = (await _user_rows(db, [user]))[0]
-    rel = (await compute_reliability(db, [user.id])).get(user.id)
-    prefs = await db.scalar(select(NotificationPreference).where(NotificationPreference.user_id == user.id))
-    hist = (await db.execute(
-        select(ShiftRequest, Shift, Venue.name).join(Shift, Shift.id == ShiftRequest.shift_id).join(Venue, Venue.id == Shift.venue_id)
-        .where(ShiftRequest.worker_id == user.id).order_by(Shift.start_time.desc()).limit(20)
-    )).all()
-    event_ids = {s.event_id for _, s, _ in hist if s.event_id}
-    titles = {e.id: e.title for e in (await db.execute(select(ShiftEvent).where(ShiftEvent.id.in_(event_ids)))).scalars().all()} if event_ids else {}
-    history = [
-        AdminHistoryItem(
-            request_id=r.id, venue_id=s.venue_id, venue_name=vn, event_id=s.event_id,
-            title=titles.get(s.event_id) or s.title or "Shift", role_type=s.role_type or "Worker",
-            start_time=s.start_time, end_time=s.end_time, status=(r.status or "").lower(),
-        )
-        for r, s, vn in hist
-    ]
-    audit = await _audit_items(db, (
-        select(AdminAudit).where(AdminAudit.target_type == "user", AdminAudit.target_id == user.id)
-        .order_by(AdminAudit.created_at.desc()).limit(15)
-    ))
-    return AdminUserDetail(
-        user=row,
-        reliability=WorkerReliability(worker_id=user.id, **rel) if rel else None,
-        email_enabled=bool(prefs.email_enabled) if prefs else True,
-        sms_enabled=bool(prefs.sms_enabled) if prefs else False,
-        history=history, audit=audit,
-    )
-
-
-# ---------------------------------------------------------------------------------------------
-# Activity + audit
-# ---------------------------------------------------------------------------------------------
-@router.get("/activity", response_model=List[AdminActivityItem])
-async def all_activity(
-    venue_id: Optional[UUID] = Query(None),
-    category: Optional[str] = Query(None),
-    before: Optional[datetime] = Query(None),
-    limit: int = Query(40, ge=1, le=200),
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    if category and category not in CATEGORIES:
-        raise HTTPException(status_code=400, detail=f"Category must be one of: {', '.join(CATEGORIES)}.")
-    q = select(VenueActivity, Venue.name).join(Venue, Venue.id == VenueActivity.venue_id)
-    if venue_id is not None:
-        q = q.where(VenueActivity.venue_id == venue_id)
-    if category:
-        q = q.where(VenueActivity.category == category)
-    if before is not None:
-        q = q.where(VenueActivity.created_at < before)
-    return await _activity_items(db, q.order_by(VenueActivity.created_at.desc()).limit(limit))
-
-
-@router.get("/audit", response_model=List[AdminAuditItem])
-async def audit_log(
-    target_type: Optional[str] = Query(None, pattern="^(user|venue|system)$"),
-    target_id: Optional[UUID] = Query(None),
-    before: Optional[datetime] = Query(None),
-    limit: int = Query(40, ge=1, le=200),
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    q = select(AdminAudit)
-    if target_type:
-        q = q.where(AdminAudit.target_type == target_type)
-    if target_id is not None:
-        q = q.where(AdminAudit.target_id == target_id)
-    if before is not None:
-        q = q.where(AdminAudit.created_at < before)
-    return await _audit_items(db, q.order_by(AdminAudit.created_at.desc()).limit(limit))
-
-
-# ---------------------------------------------------------------------------------------------
-# System
-# ---------------------------------------------------------------------------------------------
-async def _delivery_stats(db: AsyncSession) -> AdminDeliveryStats:
-    now = datetime.now(timezone.utc)
-
-    async def count(*conds):
-        return int(await db.scalar(select(func.count(NotificationDelivery.id)).where(*conds)) or 0)
-
-    return AdminDeliveryStats(
-        pending=await count(NotificationDelivery.status == "pending"),
-        sent_24h=await count(NotificationDelivery.status == "sent", NotificationDelivery.sent_at >= now - timedelta(hours=24)),
-        failed_24h=await count(NotificationDelivery.status == "failed", NotificationDelivery.created_at >= now - timedelta(hours=24)),
-        failed_7d=await count(NotificationDelivery.status == "failed", NotificationDelivery.created_at >= now - timedelta(days=7)),
-        skipped_24h=await count(NotificationDelivery.status == "skipped", NotificationDelivery.created_at >= now - timedelta(hours=24)),
-    )
-
-
-@router.get("/system", response_model=AdminSystem)
-async def system_status(current_user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    from src.services.notification_worker import WORKER_STATE, HEARTBEAT_KEY
-    firebase = "off"
-    try:
-        import src.services.firebase as firebase_service
-        if settings.USE_MOCK_FIREBASE:
-            firebase = "mock"
-        elif firebase_service.load_firebase_web_config() is not None:
-            firebase = "real"
-    except Exception:
-        firebase = "off"
-
-    heartbeat = None
-    try:
-        import redis.asyncio as aioredis
-        client = aioredis.from_url(settings.REDIS_URL, socket_timeout=2)
-        raw = await client.get(HEARTBEAT_KEY)
-        await client.aclose()
-        if raw:
-            heartbeat = datetime.fromisoformat(raw.decode() if isinstance(raw, bytes) else raw)
-    except Exception:
-        heartbeat = None
-
-    counts = {}
-    for label, model in (
-        ("users", User), ("venues", Venue), ("events", ShiftEvent), ("shifts", Shift), ("requests", ShiftRequest),
-        ("time_entries", TimeEntry), ("notifications", Notification), ("venue_activity", VenueActivity),
-    ):
-        counts[label] = int(await db.scalar(select(func.count()).select_from(model)) or 0)
-
-    return AdminSystem(
-        app_base_url=settings.APP_BASE_URL or "", app_base_url_ok=_base_url_ok(),
-        email_provider=(settings.EMAIL_PROVIDER or "console").lower(), email_from=settings.EMAIL_FROM or "",
-        email_ready=email_available(), sms_provider=(settings.SMS_PROVIDER or "off").lower(), sms_ready=sms_available(),
-        firebase=firebase, self_registration=bool(settings.ALLOW_SELF_REGISTRATION),
-        always_admin_count=len(get_always_admin_emails()),
-        worker_enabled=bool(settings.NOTIFICATIONS_WORKER_ENABLED),
-        worker_started_at=WORKER_STATE.get("started_at"), worker_last_tick_at=WORKER_STATE.get("last_tick_at"),
-        worker_last_ok=WORKER_STATE.get("last_ok"), worker_last_error=WORKER_STATE.get("last_error"),
-        worker_heartbeat_at=heartbeat, digest_hour=int(settings.NOTIFICATIONS_DIGEST_HOUR),
-        deliveries=await _delivery_stats(db), table_counts=counts,
-    )
-
-
-@router.get("/deliveries", response_model=List[AdminDelivery])
-async def deliveries(
-    status: str = Query("failed", pattern="^(failed|pending|sent|skipped)$"),
-    limit: int = Query(50, ge=1, le=200),
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    rows = (await db.execute(
-        select(NotificationDelivery, Notification.title, User)
-        .join(Notification, Notification.id == NotificationDelivery.notification_id)
-        .join(User, User.id == NotificationDelivery.user_id)
-        .where(NotificationDelivery.status == status)
-        .order_by(NotificationDelivery.created_at.desc()).limit(limit)
-    )).all()
-    return [
-        AdminDelivery(
-            id=d.id, channel=d.channel, status=d.status, attempts=d.attempts or 0, last_error=d.last_error,
-            created_at=d.created_at, send_after=d.send_after, user_id=u.id, user_name=_name(u), user_email=u.email,
-            title=title or "",
-        )
-        for d, title, u in rows
-    ]
-
-
-@router.post("/deliveries/{delivery_id}/retry")
-async def retry_delivery(delivery_id: UUID, current_user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    d = await db.scalar(select(NotificationDelivery).where(NotificationDelivery.id == delivery_id))
-    if d is None:
-        raise HTTPException(status_code=404, detail="Delivery not found.")
-    if d.status != "failed":
-        raise HTTPException(status_code=400, detail="Only failed deliveries can be retried.")
-    try:
-        d.status = "pending"
-        d.attempts = 0
-        d.last_error = None
-        d.send_after = datetime.now(timezone.utc)
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not queue the retry: {e}")
-    await admin_audit.record(current_user.id, "delivery_retry", f"Retried a failed {d.channel} delivery", target_type="system")
-    return {"detail": "Queued. It goes out on the next worker tick (within a minute)."}
-
-
-@router.post("/deliveries/retry-failed")
-async def retry_all_failed(current_user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    now = datetime.now(timezone.utc)
-    try:
-        res = await db.execute(
-            update(NotificationDelivery)
-            .where(NotificationDelivery.status == "failed", NotificationDelivery.created_at >= now - timedelta(days=7))
-            .values(status="pending", attempts=0, last_error=None, send_after=now)
-        )
-        n = int(res.rowcount or 0)
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not queue the retries: {e}")
-    if n:
-        await admin_audit.record(current_user.id, "delivery_retry", f"Retried {n} failed deliveries", target_type="system")
-    return {"detail": f"Queued {n} failed deliver{'y' if n == 1 else 'ies'} from the last 7 days.", "count": n}
-
-
-@router.post("/test-email")
-async def test_email(body: AdminTestEmail, current_user: User = Depends(require_admin)):
-    to = str(body.to).strip()
-    title = "ShiftBoard test email"
-    text, html_body = render_email(title, f"Sent by {_name(current_user)} from the admin System page. If you can read this, email works.", "/", "/")
-    ok, err = await send_email(to, title, text, html_body)
-    await admin_audit.record(current_user.id, "test_email", f"Sent a test email to {to}: {'ok' if ok else 'failed'}", target_type="system")
-    if not ok:
-        raise HTTPException(status_code=502, detail=f"Sending failed: {err}")
-    note = "" if email_available() else " (console mode: it was only written to the backend log)"
-    return {"detail": f"Sent to {to}{note}."}
 ```
 
 ---
 
-## B3. `backend/src/routers/admin.py` (EDITS)
-Temp-password create, editable email, blank phone clears it, and an audit line after each commit.
-
-**Edit 1.** Find:
-```python
-from src.serializers import auth_source_for
-from src.services.always_admin import is_always_admin_email
-
-router = APIRouter(prefix="/api/admin", tags=["Admin"])
-```
-Replace with:
-```python
-from src.serializers import auth_source_for
-from src.services.always_admin import is_always_admin_email
-from src.services import admin_audit
-
-router = APIRouter(prefix="/api/admin", tags=["Admin"])
-```
-
-**Edit 2.** Find:
-```python
-            )
-
-        # 2. Hash password
-        hashed = get_password_hash(user_in.password)
-
-        # 3. Create user
-```
-Replace with:
-```python
-            )
-
-        # 2. Hash password (Phase 29.2: blank = generate a temporary one, returned once)
-        generated_pw = None
-        raw_pw = (user_in.password or "").strip()
-        if not raw_pw:
-            generated_pw = _generate_temp_password()
-            raw_pw = generated_pw
-        elif len(raw_pw) < 8:
-            raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
-        hashed = get_password_hash(raw_pw)
-
-        # 3. Create user
-```
-
-**Edit 3.** Find:
-```python
-
-    await db.refresh(new_user)
-    return _build_user_response(new_user, venue_ids, venue_names)
-
-@router.patch("/users/{user_id}", response_model=UserResponse)
-```
-Replace with:
-```python
-
-    await db.refresh(new_user)
-    resp = _build_user_response(new_user, venue_ids, venue_names)
-    resp.temporary_password = generated_pw
-    await admin_audit.record(
-        current_user.id, "user_created",
-        f"Created {role_clean.replace('_', ' ')} {admin_audit.person(new_user)}"
-        + (f" for {', '.join(venue_names)}" if venue_names else ""),
-        target_type="user", target_id=new_user.id,
-    )
-    return resp
-
-@router.patch("/users/{user_id}", response_model=UserResponse)
-```
-
-**Edit 4.** Find:
-```python
-
-        old_role = normalize_role(user.role)
-        new_role = normalize_role(user_update.role) if user_update.role is not None else old_role
-        if new_role not in VALID_ROLES:
-```
-Replace with:
-```python
-
-        old_role = normalize_role(user.role)
-        old_active = bool(user.is_active)
-        old_email = user.email
-        new_role = normalize_role(user_update.role) if user_update.role is not None else old_role
-        if new_role not in VALID_ROLES:
-```
-
-**Edit 5.** Find:
-```python
-            user.last_name = user_update.last_name.strip()
-        if user_update.phone is not None:
-            user.phone = user_update.phone.strip()
-
-        if rebuild_venues:
-```
-Replace with:
-```python
-            user.last_name = user_update.last_name.strip()
-        if user_update.phone is not None:
-            user.phone = user_update.phone.strip() or None      # Phase 29.2: blank clears it
-        if user_update.email is not None:                     # Phase 29.2
-            new_email = str(user_update.email).strip().lower()
-            if new_email != (user.email or "").lower():
-                if is_always_admin_email(user.email):
-                    raise HTTPException(status_code=400, detail="This account is listed in ALWAYS_ADMIN_EMAILS; its email can't be changed here.")
-                taken = await db.scalar(select(User.id).where(func.lower(User.email) == new_email, User.id != user.id))
-                if taken:
-                    raise HTTPException(status_code=400, detail=f"Another account already uses {new_email}.")
-                user.email = new_email
-
-        if rebuild_venues:
-```
-
-**Edit 6.** Find:
-```python
-
-    await db.refresh(user)
-
-    # Build affiliations
-```
-Replace with:
-```python
-
-    await db.refresh(user)
-
-    # Phase 29.2: audit what changed
-    changes = []
-    if role_changed:
-        changes.append(f"role {old_role.replace('_', ' ')} → {new_role.replace('_', ' ')}")
-    if user_update.is_active is not None and bool(user_update.is_active) != old_active:
-        changes.append("reactivated" if user_update.is_active else "deactivated")
-    if (user.email or "") != (old_email or ""):
-        changes.append(f"email {old_email} → {user.email}")
-    if rebuild_venues and not role_changed:
-        changes.append("venues updated")
-    if any(v is not None for v in (user_update.first_name, user_update.last_name, user_update.phone)):
-        changes.append("profile edited")
-    if changes:
-        action = "user_role" if role_changed else ("user_status" if user_update.is_active is not None and bool(user_update.is_active) != old_active else "user_updated")
-        await admin_audit.record(current_user.id, action, f"{admin_audit.person(user)}: {', '.join(changes)}",
-                                 target_type="user", target_id=user.id)
-
-    # Build affiliations
-```
-
-**Edit 7.** Find:
-```python
-        raise HTTPException(status_code=500, detail=f"Failed to reset password: {str(e)}")
-
-    return AdminPasswordResetResponse(
-        user_id=user.id,
-```
-Replace with:
-```python
-        raise HTTPException(status_code=500, detail=f"Failed to reset password: {str(e)}")
-
-    await admin_audit.record(current_user.id, "user_password",
-                             f"Reset the password for {admin_audit.person(user)}", target_type="user", target_id=user.id)   # Phase 29.2
-    return AdminPasswordResetResponse(
-        user_id=user.id,
-```
-
-**Edit 8.** Find:
-```python
-
-        # Core delete — do NOT use db.delete(user) (lazy-load -> MissingGreenlet)
-        await db.execute(delete(User).where(User.id == user_id))
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
-    return None
-
-```
-Replace with:
-```python
-
-        # Core delete — do NOT use db.delete(user) (lazy-load -> MissingGreenlet)
-        who = admin_audit.person(user)                    # Phase 29.2 (read before delete)
-        await db.execute(delete(User).where(User.id == user_id))
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
-    await admin_audit.record(current_user.id, "user_deleted", f"Deleted {who}", target_type="user", target_id=user_id)
-    return None
-
-```
-
----
-
-## B4. `backend/src/routers/venues.py` (EDITS)
-Venue create is audited; **delete** needs `confirm_name`, protects payroll history, and deletes with a `delete(Venue)` statement so the database cascades run. Do not switch it to `db.delete(venue)`: that loads relationships and fails with MissingGreenlet.
-
-**Edit 1.** Find:
-```python
-from src.services.locations import load_locations
-from src.services import activity
-
-router = APIRouter(prefix="/api/venues", tags=["Venues"])
-```
-Replace with:
-```python
-from src.services.locations import load_locations
-from src.services import activity
-from src.services import admin_audit
-
-router = APIRouter(prefix="/api/venues", tags=["Venues"])
-```
-
-**Edit 2.** Find:
-```python
-        raise HTTPException(status_code=500, detail=f"Failed to create venue: {str(e)}")
-
-    return venue
-
-```
-Replace with:
-```python
-        raise HTTPException(status_code=500, detail=f"Failed to create venue: {str(e)}")
-
-    await admin_audit.record(current_user.id, "venue_created", f"Created venue {venue.name}",
-                             target_type="venue", target_id=venue.id)   # Phase 29.2
-    return venue
-
-```
-
-**Edit 3.** Find:
-```python
-async def delete_venue(
-    venue_id: UUID,
-    current_user: User = Depends(require_super_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Delete a venue (Super Admin only)"""
-    result = await db.execute(select(Venue).where(Venue.id == venue_id))
-    venue = result.scalar_one_or_none()
-    if not venue:
-        raise HTTPException(status_code=404, detail="Venue not found")
-
-    await db.delete(venue)
-    await db.commit()
-
-@router.get("/{venue_id}/export-hours")
-```
-Replace with:
-```python
-async def delete_venue(
-    venue_id: UUID,
-    confirm_name: str = Query("", description="Phase 29.2: must equal the venue's name"),
-    delete_history: bool = Query(False, description="Phase 29.2: also allowed when the venue has time entries (payroll)"),
-    current_user: User = Depends(require_super_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Delete a venue (Super Admin only). Everything at the venue goes with it (events, shifts,
-    bookings, time entries, invites, activity) through ON DELETE CASCADE.
-    Phase 29.2 safety: the caller must type the venue name, and a venue with payroll history
-    (time entries) needs delete_history=true.
-    """
-    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
-    if not venue:
-        raise HTTPException(status_code=404, detail="Venue not found")
-    name = venue.name
-    if (confirm_name or "").strip().lower() != (name or "").strip().lower():
-        raise HTTPException(status_code=400, detail=f"Type the venue name exactly ({name}) to delete it.")
-    te_count = int(await db.scalar(
-        select(func.count(TimeEntry.id)).join(Shift, Shift.id == TimeEntry.shift_id).where(Shift.venue_id == venue_id)
-    ) or 0)
-    if te_count and not delete_history:
-        raise HTTPException(
-            status_code=409,
-            detail=f"{name} has {te_count} time entries (payroll history). Download its payroll CSV first, then confirm deleting the history too.",
-        )
-    try:
-        # Core delete with DB cascades. Do NOT use db.delete(venue) (lazy-loads relationships -> MissingGreenlet).
-        await db.execute(delete(Venue).where(Venue.id == venue_id))
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete venue: {str(e)}")
-    await admin_audit.record(current_user.id, "venue_deleted",
-                             f"Deleted venue {name}" + (f" and {te_count} time entries" if te_count else ""),
-                             target_type="venue", target_id=venue_id)
-
-@router.get("/{venue_id}/export-hours")
-```
-
----
-
-## B5. `backend/src/services/notification_worker.py` (EDITS)
-`WORKER_STATE` + a Redis heartbeat after each tick. The tick logic itself is unchanged.
-
-**Edit 1.** Find:
-```python
-
-
-async def _acquire_lock():
-    """Returns (redis_client or None, got_lock: bool)."""
-```
-Replace with:
-```python
-
-
-# Phase 29.2: health for the admin System page (this process) + a Redis heartbeat (any process)
-WORKER_STATE = {"started_at": None, "last_tick_at": None, "last_ok": None, "last_error": None, "ticks": 0}
-HEARTBEAT_KEY = "shiftboard:notification-worker:last-tick"
-
-
-async def _acquire_lock():
-    """Returns (redis_client or None, got_lock: bool)."""
-```
-
-**Edit 2.** Find:
-```python
-async def notification_worker_loop() -> None:
-    logger.info("Notification worker started.")
-    await asyncio.sleep(10)   # let startup/seed finish
-    while True:
-```
-Replace with:
-```python
-async def notification_worker_loop() -> None:
-    logger.info("Notification worker started.")
-    WORKER_STATE["started_at"] = datetime.now(timezone.utc)
-    await asyncio.sleep(10)   # let startup/seed finish
-    while True:
-```
-
-**Edit 3.** Find:
-```python
-            if got:
-                await run_tick()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("notification worker tick failed")
-        finally:
-```
-Replace with:
-```python
-            if got:
-                await run_tick()
-                now = datetime.now(timezone.utc)
-                WORKER_STATE.update(last_tick_at=now, last_ok=True, last_error=None, ticks=WORKER_STATE["ticks"] + 1)
-                if client is not None:
-                    try:
-                        await client.set(HEARTBEAT_KEY, now.isoformat(), ex=3600)
-                    except Exception:
-                        pass
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            WORKER_STATE.update(last_tick_at=datetime.now(timezone.utc), last_ok=False, last_error=str(e)[:300])
-            logger.exception("notification worker tick failed")
-        finally:
-```
-
----
-
-## B6. `backend/src/main.py` (EDITS)
+## B12. `backend/src/main.py` (EDITS)
 Router import + `include_router` only. **Do not touch the CORS block.**
 
 **Edit 1.** Find:
 ```python
-from src.routers.staffing import router as staffing_router
-from src.routers.activity import router as activity_router
-from src.services.notification_worker import notification_worker_loop
-
-```
-Replace with:
-```python
-from src.routers.staffing import router as staffing_router
 from src.routers.activity import router as activity_router
 from src.routers.admin_console import router as admin_console_router
 from src.services.notification_worker import notification_worker_loop
 
 ```
+Replace with:
+```python
+from src.routers.activity import router as activity_router
+from src.routers.admin_console import router as admin_console_router
+from src.routers.event_templates import router as event_templates_router
+from src.services.notification_worker import notification_worker_loop
+
+```
 
 **Edit 2.** Find:
 ```python
-app.include_router(staffing_router)
 app.include_router(activity_router)
+app.include_router(admin_console_router)
 
 
 ```
 Replace with:
 ```python
-app.include_router(staffing_router)
 app.include_router(activity_router)
 app.include_router(admin_console_router)
+app.include_router(event_templates_router)
 
 
 ```
@@ -1509,183 +1461,1121 @@ app.include_router(admin_console_router)
 
 # PART C: Frontend
 
-All new admin components live in a new folder: `frontend/src/components/admin/`.
-
-## C1. NEW FILE `frontend/src/components/admin/adminUi.jsx`
-Shared styles, badges, `Drawer` (uses `useModalLayer`, so Esc closes only the top layer), `TypeToConfirm`, `CopyButton`, and `openVenueAsManager()`.
+## C1. `frontend/src/components/ShiftEventFormModal.jsx` (FULL FILE REPLACEMENT)
+Adds `mode="template"`, the template picker, draft/publish buttons and start→end syncing. Everything else (positions, pay, notes, location, approval) is unchanged.
 
 ```jsx
-import React, { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { X, KeyRound, Flame, AlertTriangle, Check, AlertCircle } from 'lucide-react';
-import ModalShell from '../ModalShell';
-import { useModalLayer } from '../modalLayer';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock, MapPin, AlertTriangle, LayoutTemplate, Send, Save } from 'lucide-react';
+import api from '../api/client';
+import ModalShell from './ModalShell';
+import { payText } from './PayLabel';
+import EventLocationPicker from './EventLocationPicker';
+import { draftToPayload } from './LocationFields';
+import { zonedLocalToUtcIso, utcToZonedLocalInput } from '../utils/venueTime';
 
-/** Phase 29.2: Small shared pieces for the admin console. */
+const CUSTOM = '__custom__';
 
-export const card = 'bg-slate-900 border border-slate-800 rounded-2xl shadow-xl';
-export const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500';
-export const selectCls =
-  'px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500';
-export const btnGhost =
-  'px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50';
-export const btnPrimary =
-  'px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50';
-export const btnDanger =
-  'px-3 py-1.5 rounded-lg bg-rose-600/15 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-600/30 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50';
-
-export const ROLE_LABEL = { worker: 'Worker', venue_manager: 'Venue manager', platform_admin: 'Platform admin' };
-const ROLE_CLS = {
-  worker: 'bg-teal-500/10 text-teal-300 border-teal-500/30',
-  venue_manager: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
-  platform_admin: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
-};
-export const POLICY_LABEL = {
-  team_auto: 'Team books instantly',
-  manual: 'Manager approves all',
-  everyone_auto: 'Anyone books instantly',
+const APPROVAL_OPTIONS = [
+  { value: 'venue_default', label: 'Venue default' },
+  { value: 'auto', label: 'Instant booking' },
+  { value: 'manual', label: 'Needs my approval' },
+];
+const POLICY_TEXT = {
+  team_auto: 'your team is booked instantly, everyone else needs approval',
+  manual: 'you approve every request',
+  everyone_auto: 'anyone who picks it up is booked instantly',
 };
 
-export function personName(p) {
-  return `${p?.first_name || ''} ${p?.last_name || ''}`.trim() || p?.email || 'Unknown';
+const inputCls =
+  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
+
+function tipsText(p) {
+  if (!p?.tips_eligible) return '';
+  return p.tip_pool ? 'pooled tips' : 'tips';
 }
 
-export function ago(value) {
-  if (!value) return 'never';
-  const s = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
-  if (s < 60) return 'just now';
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
-  return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+function optionLabel(p) {
+  const parts = [payText(p.default_rate, p.default_rate_max)];
+  const t = tipsText(p);
+  if (t) parts.push(t);
+  if (p.hide_rate) parts.push('pay hidden');
+  return `${p.name} — ${parts.filter(Boolean).join(' · ')}`;
 }
 
-export function fmtDateTime(value) {
-  if (!value) return '—';
-  return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+function defaultsFor(pos) {
+  return {
+    hourly_rate: pos ? Number(pos.default_rate).toFixed(2) : '25.00',
+    hourly_rate_max: pos?.default_rate_max != null ? Number(pos.default_rate_max).toFixed(2) : '',
+    hide_rate: !!pos?.hide_rate,
+    tips_eligible: !!pos?.tips_eligible,
+    tip_pool: !!pos?.tip_pool,
+  };
 }
 
-export function RoleBadge({ role }) {
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap ${ROLE_CLS[role] || ROLE_CLS.worker}`}>
-      {ROLE_LABEL[role] || role}
-    </span>
-  );
+// Phase 29.3: plain 'YYYY-MM-DDTHH:MM' arithmetic (no timezone involved)
+function shiftLocal(localValue, ms) {
+  const [d, t] = localValue.split('T');
+  const [y, m, day] = d.split('-').map(Number);
+  const [hh, mm] = (t || '00:00').split(':').map(Number);
+  const out = new Date(Date.UTC(y, m - 1, day, hh, mm) + ms);
+  return out.toISOString().slice(0, 16);
+}
+function localMs(localValue) {
+  const [d, t] = localValue.split('T');
+  const [y, m, day] = d.split('-').map(Number);
+  const [hh, mm] = (t || '00:00').split(':').map(Number);
+  return Date.UTC(y, m - 1, day, hh, mm);
 }
 
-export function AuthBadge({ source }) {
-  if (source === 'firebase') {
-    return (
-      <span title="Signs in with Firebase (Google, email link…)" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30">
-        <Flame className="w-3 h-3" /> Firebase
-      </span>
-    );
-  }
-  if (source === 'both') {
-    return (
-      <span title="Has a ShiftBoard password and is linked to Firebase" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
-        <KeyRound className="w-3 h-3" /> Password + <Flame className="w-3 h-3 text-amber-300" />
-      </span>
-    );
-  }
-  return (
-    <span title="Signs in with a ShiftBoard password" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-700/40 text-slate-300 border border-slate-600/50">
-      <KeyRound className="w-3 h-3" /> Password
-    </span>
-  );
+let rowSeq = 0;
+function rowFromPosition(p, withIds = false) {
+  rowSeq += 1;
+  return {
+    key: withIds && p.shift_id ? p.shift_id : `tpl-${rowSeq}`,
+    shift_id: withIds ? p.shift_id || null : null,
+    role_type: p.role_type,
+    custom: false,
+    capacity: p.capacity,
+    hourly_rate: Number(p.hourly_rate).toFixed(2),
+    hourly_rate_max: p.hourly_rate_max != null ? Number(p.hourly_rate_max).toFixed(2) : '',
+    hide_rate: !!p.hide_rate,
+    tips_eligible: !!p.tips_eligible,
+    tip_pool: !!p.tip_pool,
+    role_notes: p.role_notes || '',
+    staff_notes: p.staff_notes || '',
+    approval_mode: p.approval_mode || 'venue_default',
+    booked: withIds ? p.assigned_count || 0 : 0,
+    pending: withIds ? p.pending_count || 0 : 0,
+    showNotes: !!(p.role_notes || p.staff_notes),
+  };
 }
 
-export function StatTile({ label, value, sub, tone = 'text-white', onClick }) {
-  const Tag = onClick ? 'button' : 'div';
-  return (
-    <Tag type={onClick ? 'button' : undefined} onClick={onClick}
-      className={`text-left p-4 rounded-2xl bg-slate-900 border border-slate-800 ${onClick ? 'hover:border-slate-600 transition' : ''}`}>
-      <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">{label}</div>
-      <div className={`text-2xl font-black mt-1 ${tone}`}>{value}</div>
-      {sub && <div className="text-xs text-slate-500 mt-1">{sub}</div>}
-    </Tag>
-  );
-}
-
-export function SectionTitle({ icon: Icon, title, right, tone = 'text-indigo-400' }) {
-  return (
-    <div className="flex items-center justify-between gap-2 mb-3">
-      <div className="flex items-center gap-2 min-w-0">
-        {Icon && <Icon className={`w-4 h-4 flex-shrink-0 ${tone}`} />}
-        <h2 className="text-sm font-bold text-white truncate">{title}</h2>
-      </div>
-      {right}
-    </div>
-  );
-}
-
-/** A dismissable success/error banner. */
-export function Flash({ flash, onClose }) {
-  useEffect(() => {
-    if (!flash || flash.type === 'error') return undefined;
-    const t = setTimeout(onClose, 6000);
-    return () => clearTimeout(t);
-  }, [flash, onClose]);
-  if (!flash) return null;
-  const ok = flash.type !== 'error';
-  return (
-    <div className={`p-3 rounded-xl border flex items-start justify-between gap-3 text-sm ${
-      ok ? 'bg-emerald-950/80 border-emerald-700 text-emerald-200' : 'bg-rose-950/80 border-rose-700 text-rose-200'}`}>
-      <span className="flex items-start gap-2">
-        {ok ? <Check className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-        {flash.message}
-      </span>
-      <button type="button" onClick={onClose} className="text-xs underline flex-shrink-0">Dismiss</button>
-    </div>
-  );
-}
-
-/** A right-hand side panel (Esc and backdrop close it). */
-export function Drawer({ title, subtitle, onClose, children, footer }) {
-  useModalLayer(onClose);
-  return createPortal(
-    <div className="fixed inset-0 z-[55] flex justify-end">
-      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-slate-950/70" />
-      <aside role="dialog" aria-modal="true"
-        className="relative w-full max-w-2xl h-full bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col">
-        <div className="px-5 py-4 border-b border-slate-800 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="text-lg font-bold text-white truncate">{title}</h3>
-            {subtitle && <div className="text-xs text-slate-400 mt-0.5">{subtitle}</div>}
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 flex-shrink-0">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-5">{children}</div>
-        {footer && <div className="px-5 py-3 border-t border-slate-800 flex flex-wrap justify-end gap-2">{footer}</div>}
-      </aside>
-    </div>,
-    document.body,
-  );
+function blankRow(pos) {
+  rowSeq += 1;
+  return {
+    key: `new-${rowSeq}`,
+    shift_id: null,
+    role_type: pos?.name || '',
+    custom: !pos,
+    capacity: 1,
+    ...defaultsFor(pos),
+    role_notes: '',
+    staff_notes: '',
+    approval_mode: 'venue_default',
+    booked: 0,
+    pending: 0,
+    showNotes: false,
+  };
 }
 
 /**
- * Confirm a dangerous action by typing a word (usually the name).
- * onConfirm(extra) may throw; the error is shown. `children` renders extra options above the input.
+ * Post / edit an event (Phase 25.2+), and Phase 29.3:
+ *   mode 'create'   : "Start from a template" picker; Save as draft or Publish. templateId preselects one.
+ *   mode 'edit'     : a draft shows Save draft + Save & publish; a published event shows Save changes.
+ *   mode 'template' : edit or create an event template (template = existing one, or null for new).
+ *                     Times are just start/end clock times; onSaved(savedTemplate).
+ * onSaved(result) gets the saved event (EventDetail, with .status) or template.
  */
-export function TypeToConfirm({ title, message, word, confirmLabel = 'Delete', onConfirm, onClose, children }) {
-  const [typed, setTyped] = useState('');
+export default function ShiftEventFormModal({
+  mode = 'create', venue, positions = null, eventId = null, templateId = null, template = null, onClose, onSaved,
+}) {
+  const tz = venue?.timezone;
+  const isEdit = mode === 'edit' && !!eventId;
+  const isTemplate = mode === 'template';
+  const isCreate = !isEdit && !isTemplate;
+
+  // ---- Positions: use the prop if given, otherwise load them for this venue ----
+  const [fetchedPositions, setFetchedPositions] = useState(null);
+  const hasPropPositions = Array.isArray(positions) && positions.length > 0;
+  useEffect(() => {
+    if (hasPropPositions || !venue?.id) return;
+    let active = true;
+    api
+      .get(`/venues/${venue.id}/positions`)
+      .then((res) => active && setFetchedPositions(res.data || []))
+      .catch(() => active && setFetchedPositions([]));
+    return () => {
+      active = false;
+    };
+  }, [hasPropPositions, venue?.id]);
+
+  const activePositions = useMemo(() => {
+    const src = hasPropPositions ? positions : fetchedPositions || [];
+    return src.filter((p) => p.is_active !== false);
+  }, [hasPropPositions, positions, fetchedPositions]);
+  const positionsLoading = !hasPropPositions && fetchedPositions === null;
+  const findPos = (name) => activePositions.find((p) => p.name === name);
+
+  const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const match = typed.trim().toLowerCase() === (word || '').trim().toLowerCase();
+  const [title, setTitle] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [notes, setNotes] = useState('');
+  const [staffNotes, setStaffNotes] = useState(''); // Phase 26.2: confirmed staff only
+  // Phase 27: where, clock-in location check, event-specific location notes (confirmed staff only)
+  const [where, setWhere] = useState({ kind: 'venue' });
+  const [geofenceMode, setGeofenceMode] = useState('venue_default');
+  const [locStaffOn, setLocStaffOn] = useState(false);
+  const [locStaffNotes, setLocStaffNotes] = useState('');
+  const [rows, setRows] = useState(() => (isEdit ? [] : isTemplate && template ? template.positions.map((p) => rowFromPosition(p)) : [blankRow(null)]));
+  const [touched, setTouched] = useState(isTemplate && !!template);
+  // Phase 29.3
+  const [eventStatus, setEventStatus] = useState('published');   // edit mode: the event's status
+  const [templates, setTemplates] = useState([]);                  // create mode: the venue's templates
+  const [pickedTemplate, setPickedTemplate] = useState('');
+  const [templateNote, setTemplateNote] = useState('');
+  const [pickerKey, setPickerKey] = useState(0);                   // remounts the location picker after a template fills it
+  const [tplName, setTplName] = useState(template?.name || '');
+  const [tplStart, setTplStart] = useState(template?.start_local || '18:00');
+  const [tplEnd, setTplEnd] = useState(template?.end_local || '23:00');
+
+  // Phase 29.3: template mode starts from the template's own values
+  useEffect(() => {
+    if (!isTemplate || !template) return;
+    setTitle(template.title || '');
+    setNotes(template.notes || '');
+    setStaffNotes(template.staff_notes || '');
+    setWhere(template.location && !template.location.is_archived ? { kind: 'saved', location: template.location } : { kind: 'venue' });
+    setGeofenceMode(template.geofence_mode || 'venue_default');
+    setLocStaffNotes(template.location_staff_notes || '');
+    setLocStaffOn(!!template.location_staff_notes);
+    if (template.location?.is_archived) setTemplateNote(`“${template.location.name}” is archived, so this template now uses the venue address.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Phase 29.3: the venue's templates, for "Start from a template" (create mode)
+  useEffect(() => {
+    if (!isCreate || !venue?.id) return undefined;
+    let active = true;
+    api
+      .get(`/venues/${venue.id}/event-templates`)
+      .then((res) => {
+        if (!active) return;
+        const list = res.data || [];
+        setTemplates(list);
+        const pre = templateId && list.find((t) => t.id === templateId);
+        if (pre) applyTemplate(pre);
+      })
+      .catch(() => active && setTemplates([]));
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreate, venue?.id, templateId]);
+
+  const applyTemplate = (tpl) => {
+    setPickedTemplate(tpl.id);
+    setTouched(true);
+    setTitle(tpl.title || '');
+    setNotes(tpl.notes || '');
+    setStaffNotes(tpl.staff_notes || '');
+    setGeofenceMode(tpl.geofence_mode || 'venue_default');
+    setLocStaffNotes(tpl.location_staff_notes || '');
+    setLocStaffOn(!!tpl.location_staff_notes);
+    const archived = tpl.location && tpl.location.is_archived;
+    setWhere(tpl.location && !archived ? { kind: 'saved', location: tpl.location } : { kind: 'venue' });
+    setPickerKey((k) => k + 1);
+    setRows(tpl.positions.length ? tpl.positions.map((p) => rowFromPosition(p)) : [blankRow(null)]);
+    // Keep the date already picked (or tomorrow), use the template's clock times
+    const day = start ? start.slice(0, 10) : utcToZonedLocalInput(new Date(Date.now() + 86400000).toISOString(), tz).slice(0, 10);
+    const s = `${day}T${tpl.start_local}`;
+    const e = tpl.overnight ? `${shiftLocal(`${day}T00:00`, 86400000).slice(0, 10)}T${tpl.end_local}` : `${day}T${tpl.end_local}`;
+    setStart(s);
+    setEnd(e);
+    setTemplateNote(
+      `Filled in from “${tpl.name}”. Check the date` +
+      (archived ? `. Its location “${tpl.location.name}” is archived, so the venue address is used.` : '.')
+    );
+  };
+
+  // Phase 29.3: moving the start keeps the event's length (so changing the date moves the end too)
+  const changeStart = (value) => {
+    if (start && end && value && value.length >= 16) {
+      const dur = localMs(end) - localMs(start);
+      if (dur > 0) setEnd(shiftLocal(value, dur));
+    }
+    setStart(value);
+  };
+
+  // Auto-fill the first empty row once the venue's positions arrive (create mode only)
+  useEffect(() => {
+    if (isEdit || touched || activePositions.length === 0) return;
+    setRows((rs) => (rs.length === 1 && !rs[0].role_type ? [blankRow(activePositions[0])] : rs));
+  }, [isEdit, touched, activePositions]);
+
+  useEffect(() => {
+    if (!isEdit) return;
+    setLoading(true);
+    api
+      .get(`/events/${eventId}`)
+      .then((res) => {
+        const ev = res.data;
+        setEventStatus(ev.status || 'published');    // Phase 29.3
+        setTitle(ev.title || '');
+        setStart(utcToZonedLocalInput(ev.start_time, tz));
+        setEnd(utcToZonedLocalInput(ev.end_time, tz));
+        setNotes(ev.notes || '');
+        setStaffNotes(ev.staff_notes || '');
+        setWhere(ev.location ? { kind: 'saved', location: ev.location } : { kind: 'venue' });
+        setGeofenceMode(ev.geofence_mode || 'venue_default');
+        setLocStaffNotes(ev.location_staff_notes || '');
+        setLocStaffOn(!!ev.location_staff_notes);
+        setRows(
+          (ev.positions || []).map((p) => ({
+            key: p.shift_id,
+            shift_id: p.shift_id,
+            role_type: p.role_type,
+            custom: false,
+            capacity: p.capacity,
+            hourly_rate: Number(p.hourly_rate).toFixed(2),
+            hourly_rate_max: p.hourly_rate_max != null ? Number(p.hourly_rate_max).toFixed(2) : '',
+            hide_rate: !!p.hide_rate,
+            tips_eligible: !!p.tips_eligible,
+            tip_pool: !!p.tip_pool,
+            role_notes: p.role_notes || '',
+            staff_notes: p.staff_notes || '',
+            approval_mode: p.approval_mode || 'venue_default',
+            booked: p.assigned_count || 0,
+            pending: p.pending_count || 0,
+            showNotes: !!(p.role_notes || p.staff_notes),
+          }))
+        );
+      })
+      .catch((err) => setError(err.response?.data?.detail || 'Could not load this event.'))
+      .finally(() => setLoading(false));
+  }, [isEdit, eventId, tz]);
+
+  const updateRow = (key, patch) => {
+    setTouched(true);
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  };
+
+  const pickPosition = (key, value) => {
+    if (value === CUSTOM) {
+      updateRow(key, { custom: true, role_type: '' });
+      return;
+    }
+    const pos = findPos(value);
+    updateRow(key, { custom: false, role_type: value, ...(pos ? defaultsFor(pos) : {}) });
+  };
+
+  const resetToDefault = (key, name) => {
+    const pos = findPos(name);
+    if (pos) updateRow(key, defaultsFor(pos));
+  };
+
+  const addRow = () => {
+    setTouched(true);
+    const used = new Set(rows.map((r) => r.role_type));
+    const next = activePositions.find((p) => !used.has(p.name)) || activePositions[0] || null;
+    setRows((rs) => [...rs, blankRow(next)]);
+  };
+
+  const removeRow = (key) => {
+    setTouched(true);
+    setRows((rs) => rs.filter((r) => r.key !== key));
+  };
+
+  const eventApproval = useMemo(() => {
+    const modes = new Set(rows.map((r) => r.approval_mode));
+    return modes.size === 1 ? [...modes][0] : 'mixed';
+  }, [rows]);
+
+  const setAllApproval = (value) => {
+    if (value === 'mixed') return;
+    setTouched(true);
+    setRows((rs) => rs.map((r) => ({ ...r, approval_mode: value })));
+  };
+
+  const anyBooked = rows.some((r) => (r.booked || 0) + (r.pending || 0) > 0);
+
+  // Phase 27: effective clock-in location check for this event
+  const venueGeoOn = !!venue?.geofence_enabled;
+  const geoOn = geofenceMode === 'on' || (geofenceMode === 'venue_default' && venueGeoOn);
+
+  /** publish: create -> publish now (false = draft); edit of a draft -> also publish after saving. */
+  const handleSubmit = async (publish = true) => {
+    setError('');
+    if (isTemplate && !tplName.trim()) return setError('Give the template a name.');
+    if (!title.trim()) return setError('Give the event a name.');
+    let startIso = null;
+    let endIso = null;
+    if (isTemplate) {
+      if (!tplStart || !tplEnd) return setError('Pick a start and end time.');
+      if (tplStart === tplEnd) return setError("The end time can't be the same as the start time.");
+    } else {
+      if (!start || !end) return setError('Pick a start and end time.');
+      startIso = zonedLocalToUtcIso(start, tz);
+      endIso = zonedLocalToUtcIso(end, tz);
+      if (new Date(endIso) <= new Date(startIso)) return setError('End time must be after the start time.');
+    }
+    if (rows.length === 0) return setError('Add at least one position.');
+
+    const payloadPositions = [];
+    for (const r of rows) {
+      const name = (r.role_type || '').trim();
+      const lo = parseFloat(r.hourly_rate);
+      const hi = r.hourly_rate_max === '' ? null : parseFloat(r.hourly_rate_max);
+      const cap = parseInt(r.capacity, 10) || 1;
+      if (!name) return setError('Pick a position for every row.');
+      if (!lo || lo <= 0) return setError(`${name}: pay must be more than $0.`);
+      if (hi !== null && (Number.isNaN(hi) || hi < lo)) return setError(`${name}: the top of the pay range can't be lower than the bottom.`);
+      if (cap < (r.booked || 0)) return setError(`${name}: ${r.booked} people are already booked, so it needs at least ${r.booked} spots.`);
+      payloadPositions.push({
+        shift_id: r.shift_id || undefined,
+        role_type: name,
+        capacity: cap,
+        hourly_rate: lo,
+        hourly_rate_max: hi !== null && hi > lo ? hi : null,
+        hide_rate: !!r.hide_rate,
+        tips_eligible: !!r.tips_eligible,
+        tip_pool: r.tips_eligible ? !!r.tip_pool : false,
+        role_notes: (r.role_notes || '').trim() || null,
+        staff_notes: (r.staff_notes || '').trim() || null,
+        approval_mode: r.approval_mode,
+      });
+    }
+
+    // Phase 27: where + location check
+    let locationFields = { location_id: null, new_location: null };
+    if (where.kind === 'saved') {
+      locationFields = { location_id: where.location.id, new_location: null };
+    } else if (where.kind === 'new') {
+      const { payload, error: locError } = draftToPayload(where.draft);
+      if (locError) return setError(`Where: ${locError}`);
+      locationFields = { location_id: null, new_location: payload };
+    }
+    const place = where.kind === 'saved' ? where.location : where.kind === 'new' ? locationFields.new_location : null;
+    if (geoOn && place && (place.lat === null || place.lat === undefined)) {
+      return setError('The clock-in location check is on, but this location has no map pin. Add a pin, or turn the check off for this event.');
+    }
+
+    const body = {
+      title: title.trim(),
+      start_time: startIso,
+      end_time: endIso,
+      notes: notes.trim() || null,
+      staff_notes: staffNotes.trim() || null,
+      ...locationFields,
+      geofence_mode: geofenceMode,
+      location_staff_notes: locStaffOn ? locStaffNotes.trim() || null : null,
+      positions: payloadPositions,
+    };
+
+    setSaving(true);
+    try {
+      if (isTemplate) {
+        // Phase 29.3: a typed-in new location is saved to the venue's list first
+        let locationId = locationFields.location_id;
+        if (locationFields.new_location) {
+          const loc = await api.post(`/venues/${venue.id}/locations`, locationFields.new_location);
+          locationId = loc.data.id;
+        }
+        const tplBody = {
+          name: tplName.trim(),
+          title: body.title,
+          start_local: tplStart,
+          end_local: tplEnd,
+          notes: body.notes,
+          staff_notes: body.staff_notes,
+          location_id: locationId,
+          geofence_mode: body.geofence_mode,
+          location_staff_notes: body.location_staff_notes,
+          positions: payloadPositions.map(({ shift_id: _omit, ...p }) => p),
+        };
+        const res = template
+          ? await api.put(`/venues/${venue.id}/event-templates/${template.id}`, tplBody)
+          : await api.post(`/venues/${venue.id}/event-templates`, tplBody);
+        onSaved && onSaved(res.data);
+        return;
+      }
+      let res;
+      let published = false;
+      if (isEdit) {
+        res = await api.put(`/events/${eventId}`, body);
+        if (publish && eventStatus === 'draft') {
+          res = await api.post(`/events/${eventId}/publish`);
+          published = true;
+        }
+      } else {
+        res = await api.post('/events', { ...body, venue_id: venue.id, publish });
+        published = publish;
+      }
+      onSaved && onSaved(res.data, { published });
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Could not save.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isDraft = isEdit && eventStatus === 'draft';
+  const primaryCls = 'px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50 inline-flex items-center gap-1.5';
+  const secondaryCls = 'px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 text-sm font-semibold disabled:opacity-50 inline-flex items-center gap-1.5';
+  const footer = (
+    <>
+      <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700 mr-auto">
+        Cancel
+      </button>
+      {isTemplate ? (
+        <button type="button" onClick={() => handleSubmit(false)} disabled={saving} className={primaryCls}>
+          <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save template'}
+        </button>
+      ) : isEdit && !isDraft ? (
+        <button type="button" onClick={() => handleSubmit(false)} disabled={saving || loading} className={primaryCls}>
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+      ) : (
+        <>
+          <button type="button" onClick={() => handleSubmit(false)} disabled={saving || loading} className={secondaryCls}
+            title="Only managers can see a draft. Publish it when it's ready.">
+            <Save className="w-4 h-4" /> {isDraft ? 'Save draft' : 'Save as draft'}
+          </button>
+          <button type="button" onClick={() => handleSubmit(true)} disabled={saving || loading} className={primaryCls}
+            title="Workers can see and request it, and your team is told.">
+            <Send className="w-4 h-4" /> {saving ? 'Saving…' : isDraft ? 'Save & publish' : 'Publish'}
+          </button>
+        </>
+      )}
+    </>
+  );
+
+  const modalTitle = isTemplate
+    ? (template ? `Edit template: ${template.name}` : 'New event template')
+    : isDraft ? 'Edit draft' : isEdit ? 'Edit posted shift' : 'Post a shift';
+
+  return (
+    <ModalShell
+      title={modalTitle}
+      subtitle={venue?.name}
+      icon={<Calendar className="w-5 h-5 text-emerald-400" />}
+      onClose={onClose}
+      footer={footer}
+    >
+      {error && (
+        <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>
+      )}
+      {loading ? (
+        <p className="text-sm text-slate-500 py-10 text-center">Loading…</p>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Left: event details */}
+          <div className="lg:col-span-2 space-y-4">
+            {/* Phase 29.3: start from a template */}
+            {isCreate && templates.length > 0 && (
+              <div className="p-3 rounded-xl bg-indigo-500/5 border border-indigo-500/30 space-y-2">
+                <label className="flex items-center gap-1 text-xs font-semibold text-indigo-200">
+                  <LayoutTemplate className="w-3.5 h-3.5" /> Start from a template
+                </label>
+                <select
+                  value={pickedTemplate}
+                  onChange={(e) => {
+                    const tpl = templates.find((t) => t.id === e.target.value);
+                    if (tpl) applyTemplate(tpl);
+                  }}
+                  className={inputCls}
+                >
+                  <option value="" disabled>Choose a template…</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} · {t.start_local}–{t.end_local}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {isDraft && (
+              <p className="text-[11px] text-slate-300 bg-slate-800/60 border border-dashed border-slate-500 rounded-xl p-2.5">
+                This is a <strong>draft</strong>. Workers can't see it until you publish it.
+              </p>
+            )}
+            {templateNote && (
+              <p className="text-[11px] text-indigo-200 bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-2.5">{templateNote}</p>
+            )}
+            {isTemplate && (
+              <div>
+                <label className={labelCls}>Template name *</label>
+                <input value={tplName} onChange={(e) => setTplName(e.target.value)} className={inputCls} placeholder="Friday Jazz" />
+                <p className="text-[10px] text-slate-500 mt-1">What you'll pick from when posting. Workers never see it.</p>
+              </div>
+            )}
+            <div>
+              <label className={labelCls}>Event / shift name *</label>
+              <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="Friday Gala" />
+            </div>
+            {isTemplate ? (
+              <div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>Starts at ({tz || 'local'}) *</label>
+                    <input type="time" value={tplStart} onChange={(e) => setTplStart(e.target.value)} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Ends at *</label>
+                    <input type="time" value={tplEnd} onChange={(e) => setTplEnd(e.target.value)} className={inputCls} />
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {tplStart && tplEnd && tplEnd <= tplStart && tplEnd !== tplStart
+                    ? 'Ends the next day (overnight).'
+                    : 'You pick the date each time you post from this template.'}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
+                <div>
+                  <label className={labelCls}>Starts ({tz || 'local'} time) *</label>
+                  <input type="datetime-local" value={start} onChange={(e) => changeStart(e.target.value)} className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Ends ({tz || 'local'} time) *</label>
+                  <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className={inputCls} />
+                </div>
+              </div>
+            )}
+            {/* Phase 27: Where */}
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+              <label className="flex items-center gap-1 text-xs font-semibold text-slate-300">
+                <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Where
+              </label>
+              <EventLocationPicker key={pickerKey} venue={venue} value={where} onChange={setWhere} />
+
+              <div>
+                <label className={labelCls}>Clock-in location check</label>
+                <select value={geofenceMode} onChange={(e) => setGeofenceMode(e.target.value)} className={inputCls}>
+                  <option value="venue_default">Venue default ({venueGeoOn ? 'on' : 'off'})</option>
+                  <option value="on">On for this event</option>
+                  <option value="off">Off for this event</option>
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {geoOn
+                    ? 'Workers must be at the location to clock in. A little outside is allowed but flagged for you.'
+                    : 'Workers can clock in from anywhere during the clock-in window.'}
+                </p>
+                {geoOn && where.kind === 'saved' && where.location?.lat == null && (
+                  <p className="text-[11px] text-amber-300 mt-1 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" /> This location has no map pin yet. Use “Edit this location” to add one.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={locStaffOn}
+                    onChange={(e) => setLocStaffOn(e.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-500"
+                  />
+                  <Lock className="w-3 h-3 text-indigo-300" /> Add event-specific location notes (confirmed staff only)
+                </label>
+                {locStaffOn && (
+                  <textarea
+                    rows={2}
+                    value={locStaffNotes}
+                    onChange={(e) => setLocStaffNotes(e.target.value)}
+                    className={`${inputCls} mt-2`}
+                    placeholder="Only for this event and only booked staff see it. e.g. Gate code 2280 for Saturday, ask for Maria (planner) 555-0142."
+                  />
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className={labelCls}>Event notes</label>
+              <textarea
+                rows={3}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className={inputCls}
+                placeholder="Shown to everyone browsing this event. e.g. Load-in through the loading dock at 4pm."
+              />
+            </div>
+            <div>
+              <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
+                <Lock className="w-3 h-3 text-indigo-300" /> Notes for confirmed staff only
+              </label>
+              <textarea
+                rows={2}
+                value={staffNotes}
+                onChange={(e) => setStaffNotes(e.target.value)}
+                className={inputCls}
+                placeholder="Only people you've booked see this. e.g. Door code 4471, park in lot B, ask for Sam on arrival."
+              />
+              {isEdit && !isDraft && (
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Changing the time or any notes flags the shift as “Updated” for everyone booked until they read it.
+                </p>
+              )}
+            </div>
+            {venue?.default_shift_notes && (
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                  <FileText className="w-3.5 h-3.5" /> Venue notes (added automatically)
+                </div>
+                <p className="text-xs text-slate-300 whitespace-pre-line">{venue.default_shift_notes}</p>
+                <p className="text-[10px] text-slate-500 mt-1">Change these in Venue Settings.</p>
+              </div>
+            )}
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+              <label className={labelCls}>Approval for every position</label>
+              <select value={eventApproval} onChange={(e) => setAllApproval(e.target.value)} className={inputCls}>
+                {APPROVAL_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+                <option value="mixed" disabled>Mixed (set per position)</option>
+              </select>
+              <p className="text-[11px] text-slate-500 flex items-start gap-1">
+                <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                <span>
+                  Venue default means {POLICY_TEXT[venue?.approval_policy] || POLICY_TEXT.team_auto}. You can also set each position on the right.
+                </span>
+              </p>
+            </div>
+            {isEdit && anyBooked && (
+              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
+                People are already booked or waiting on this event. They'll see the new time and details.
+              </p>
+            )}
+          </div>
+
+          {/* Right: positions */}
+          <div className="lg:col-span-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <Users className="w-4 h-4 text-emerald-400" /> Positions
+              </h4>
+              <button
+                type="button"
+                onClick={addRow}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add position
+              </button>
+            </div>
+
+            {!positionsLoading && activePositions.length === 0 && (
+              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
+                This venue has no positions set up yet. Add them in Venue Settings → Positions & pay to get dropdowns with pay filled in. You can still type a position below.
+              </p>
+            )}
+
+            {rows.map((r) => {
+              const locked = (r.booked || 0) + (r.pending || 0) > 0;
+              const pos = findPos(r.role_type);
+              const inList = !!pos;
+              const showSelect = activePositions.length > 0 && !r.custom;
+              const def = pos ? defaultsFor(pos) : null;
+              const differsFromDefault =
+                def &&
+                (Number(def.hourly_rate) !== Number(r.hourly_rate) ||
+                  String(def.hourly_rate_max || '') !== String(r.hourly_rate_max || '') ||
+                  def.hide_rate !== r.hide_rate ||
+                  def.tips_eligible !== r.tips_eligible ||
+                  def.tip_pool !== r.tip_pool);
+
+              return (
+                <div key={r.key} className="p-3 rounded-xl border border-slate-700 bg-slate-800/40 space-y-3">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="flex-1 min-w-[12rem]">
+                      <label className={labelCls}>Position</label>
+                      {showSelect ? (
+                        <select
+                          value={inList ? r.role_type : r.role_type ? `__legacy__${r.role_type}` : ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v.startsWith('__legacy__')) return;
+                            pickPosition(r.key, v);
+                          }}
+                          className={inputCls}
+                        >
+                          {!r.role_type && <option value="" disabled>Choose a position…</option>}
+                          {!inList && r.role_type && (
+                            <option value={`__legacy__${r.role_type}`}>{r.role_type} (not in venue list)</option>
+                          )}
+                          {activePositions.map((p) => (
+                            <option key={p.id || p.name} value={p.name}>{optionLabel(p)}</option>
+                          ))}
+                          <option value={CUSTOM}>Other (type a name)…</option>
+                        </select>
+                      ) : (
+                        <div className="space-y-1">
+                          <input
+                            value={r.role_type}
+                            onChange={(e) => updateRow(r.key, { role_type: e.target.value })}
+                            className={inputCls}
+                            placeholder={positionsLoading ? 'Loading positions…' : 'e.g. Coat Check'}
+                            disabled={positionsLoading}
+                          />
+                          {activePositions.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => pickPosition(r.key, activePositions[0].name)}
+                              className="text-[11px] text-emerald-400 hover:text-emerald-300"
+                            >
+                              ← Pick from venue positions
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="w-20">
+                      <label className={labelCls}>Spots</label>
+                      <input
+                        type="number"
+                        min={Math.max(1, r.booked || 0)}
+                        value={r.capacity}
+                        onChange={(e) => updateRow(r.key, { capacity: e.target.value })}
+                        className={inputCls}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeRow(r.key)}
+                      disabled={locked || rows.length <= 1}
+                      title={locked ? 'People are booked or waiting on this position' : 'Remove position'}
+                      className="p-2.5 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-30 disabled:hover:bg-transparent"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {pos && (
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                      <span>
+                        Venue default: {payText(pos.default_rate, pos.default_rate_max)}
+                        {tipsText(pos) ? ` · ${tipsText(pos)}` : ''}
+                        {pos.hide_rate ? ' · pay hidden' : ''}
+                      </span>
+                      {differsFromDefault && (
+                        <button
+                          type="button"
+                          onClick={() => resetToDefault(r.key, r.role_type)}
+                          className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
+                        >
+                          <RotateCcw className="w-3 h-3" /> Reset to venue default
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {isEdit && (r.booked > 0 || r.pending > 0) && (
+                    <p className="text-[11px] text-slate-400">{r.booked} booked · {r.pending} waiting</p>
+                  )}
+
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="w-28">
+                      <label className={labelCls}>Pay from</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
+                        <input
+                          type="number" step="0.5" min="0"
+                          value={r.hourly_rate}
+                          onChange={(e) => updateRow(r.key, { hourly_rate: e.target.value })}
+                          className={`${inputCls} pl-6`}
+                        />
+                      </div>
+                    </div>
+                    <div className="w-28">
+                      <label className={labelCls}>to (optional)</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
+                        <input
+                          type="number" step="0.5" min="0"
+                          value={r.hourly_rate_max}
+                          onChange={(e) => updateRow(r.key, { hourly_rate_max: e.target.value })}
+                          className={`${inputCls} pl-6`}
+                          placeholder="—"
+                        />
+                      </div>
+                    </div>
+                    <span className="text-xs text-slate-400 pb-2.5">/hr</span>
+                    <label className="flex items-center gap-2 text-xs text-slate-300 pb-2.5 ml-auto">
+                      <input
+                        type="checkbox"
+                        checked={r.hide_rate}
+                        onChange={(e) => updateRow(r.key, { hide_rate: e.target.checked })}
+                        className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500"
+                      />
+                      <EyeOff className="w-3.5 h-3.5" /> Hide pay from workers
+                    </label>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4">
+                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={r.tips_eligible}
+                        onChange={(e) => updateRow(r.key, { tips_eligible: e.target.checked, tip_pool: e.target.checked ? r.tip_pool : false })}
+                        className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
+                      />
+                      Tips
+                    </label>
+                    {r.tips_eligible && (
+                      <label className="flex items-center gap-2 text-xs text-amber-300">
+                        <input
+                          type="checkbox"
+                          checked={r.tip_pool}
+                          onChange={(e) => updateRow(r.key, { tip_pool: e.target.checked })}
+                          className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
+                        />
+                        Tip pool
+                      </label>
+                    )}
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-xs text-slate-400">Approval</span>
+                      <select
+                        value={r.approval_mode}
+                        onChange={(e) => updateRow(r.key, { approval_mode: e.target.value })}
+                        className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                      >
+                        {APPROVAL_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {r.showNotes ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className={labelCls}>Notes for {r.role_type || 'this position'}</label>
+                        <textarea
+                          rows={2}
+                          value={r.role_notes}
+                          onChange={(e) => updateRow(r.key, { role_notes: e.target.value })}
+                          className={inputCls}
+                          placeholder="Everyone sees this. e.g. Bring a wine key. Black apron provided."
+                        />
+                      </div>
+                      <div>
+                        <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
+                          <Lock className="w-3 h-3 text-indigo-300" /> Confirmed {r.role_type || 'staff'} only
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={r.staff_notes}
+                          onChange={(e) => updateRow(r.key, { staff_notes: e.target.value })}
+                          className={inputCls}
+                          placeholder="Only booked people see this. e.g. POS login 2231, bar lead is Jess."
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => updateRow(r.key, { showNotes: true })}
+                      className="text-xs text-emerald-400 hover:text-emerald-300"
+                    >
+                      + Add notes for this position (public or staff-only)
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </ModalShell>
+  );
+}
+```
+
+---
+
+## C2. NEW FILE `frontend/src/components/EventTemplatesPanel.jsx`
+
+```jsx
+import React, { useEffect, useState } from 'react';
+import { LayoutTemplate, Plus, Pencil, Trash2, Send, MapPin, Clock, Users, Moon } from 'lucide-react';
+import api from '../api/client';
+import ShiftEventFormModal from './ShiftEventFormModal';
+import { payText } from './PayLabel';
+
+/**
+ * Phase 29.3: Venue Settings → Event templates.
+ * A venue's reusable event setups: times, where, notes and positions. "Use" opens Post a Shift filled in.
+ * Props: venue, onError(msg), onUseTemplate(template) (optional; hidden when not given, e.g. from the admin console)
+ */
+export default function EventTemplatesPanel({ venue, onError, onUseTemplate }) {
+  const [templates, setTemplates] = useState(null);
+  const [editing, setEditing] = useState(null);     // null | { template: obj | null }
+  const [confirmId, setConfirmId] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [flash, setFlash] = useState('');
+
+  const load = async () => {
+    try {
+      const res = await api.get(`/venues/${venue.id}/event-templates`);
+      setTemplates(res.data || []);
+    } catch (err) {
+      setTemplates([]);
+      onError(err.response?.data?.detail || 'Could not load templates.');
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venue.id]);
+
+  const remove = async (tpl) => {
+    setBusyId(tpl.id);
+    try {
+      await api.delete(`/venues/${venue.id}/event-templates/${tpl.id}`);
+      setConfirmId(null);
+      setFlash(`Deleted “${tpl.name}”.`);
+      load();
+    } catch (err) {
+      onError(err.response?.data?.detail || 'Could not delete the template.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+        <p className="text-xs text-slate-400 max-w-xl">
+          Save the events you run again and again: the name, times, where, notes and positions with pay. When you post a
+          shift, pick a template, choose the date, and publish (or save it as a draft). You can also save any posted event
+          as a template from its ⋯ menu.
+        </p>
+        <button type="button" onClick={() => setEditing({ template: null })}
+          className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 flex-shrink-0 self-start">
+          <Plus className="w-4 h-4" /> New template
+        </button>
+      </div>
+
+      {flash && (
+        <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-200 text-xs flex justify-between gap-2">
+          <span>{flash}</span>
+          <button type="button" onClick={() => setFlash('')} className="underline">Dismiss</button>
+        </div>
+      )}
+
+      {templates === null ? (
+        <p className="text-xs text-slate-500">Loading…</p>
+      ) : templates.length === 0 ? (
+        <div className="text-center py-10 rounded-xl border border-dashed border-slate-700 bg-slate-950/50">
+          <LayoutTemplate className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+          <p className="text-sm text-slate-300 font-semibold">No templates yet</p>
+          <p className="text-xs text-slate-500 mt-1">Create one here, or open a posted event's ⋯ menu and choose “Save as template”.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {templates.map((t) => {
+            const spots = t.positions.reduce((n, p) => n + (p.capacity || 0), 0);
+            return (
+              <div key={t.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold text-white truncate">{t.name}</div>
+                    {t.title !== t.name && <div className="text-[11px] text-slate-400 truncate">Posts as “{t.title}”</div>}
+                  </div>
+                  <LayoutTemplate className="w-4 h-4 text-indigo-300 flex-shrink-0" />
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400">
+                  <span className="inline-flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> {t.start_local}–{t.end_local}
+                    {t.overnight && <Moon className="w-3 h-3 text-indigo-300" title="Ends the next day" />}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="w-3 h-3" />
+                    {t.location ? (
+                      <span className={t.location.is_archived ? 'text-amber-300' : 'text-emerald-300'}>
+                        {t.location.name}{t.location.is_archived ? ' (archived)' : ''}
+                      </span>
+                    ) : 'Venue address'}
+                  </span>
+                  <span className="inline-flex items-center gap-1"><Users className="w-3 h-3" /> {spots} spot{spots === 1 ? '' : 's'}</span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {t.positions.map((p, i) => (
+                    <span key={`${p.role_type}-${i}`} className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-semibold">
+                      {p.capacity}× {p.role_type} · {payText(p.hourly_rate, p.hourly_rate_max)}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5 mt-auto pt-1">
+                  {onUseTemplate && (
+                    <button type="button" onClick={() => onUseTemplate(t)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1">
+                      <Send className="w-3 h-3" /> Use
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setEditing({ template: t })}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1">
+                    <Pencil className="w-3 h-3" /> Edit
+                  </button>
+                  {confirmId === t.id ? (
+                    <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-rose-200">
+                      Delete?
+                      <button type="button" disabled={busyId === t.id} onClick={() => remove(t)}
+                        className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold disabled:opacity-50">Yes</button>
+                      <button type="button" onClick={() => setConfirmId(null)}
+                        className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300">No</button>
+                    </span>
+                  ) : (
+                    <button type="button" onClick={() => setConfirmId(t.id)} title="Delete template"
+                      className="ml-auto p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && (
+        <ShiftEventFormModal
+          mode="template"
+          venue={venue}
+          template={editing.template}
+          onClose={() => setEditing(null)}
+          onSaved={(saved) => {
+            setEditing(null);
+            setFlash(`Saved “${saved.name}”.`);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## C3. NEW FILE `frontend/src/components/ConfirmDialog.jsx`
+
+```jsx
+import React, { useState } from 'react';
+import { AlertTriangle, HelpCircle } from 'lucide-react';
+import ModalShell from './ModalShell';
+
+/**
+ * Phase 29.3: A small yes/no dialog, optionally with one text field.
+ * onConfirm(value) may throw; the error is shown and the dialog stays open.
+ * input: { label, placeholder, initial, required } (optional)
+ */
+export default function ConfirmDialog({
+  title, message, confirmLabel = 'Confirm', danger = false, input = null, onConfirm, onClose,
+}) {
+  const [value, setValue] = useState(input?.initial || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   const submit = async () => {
-    if (!match) return;
-    setSaving(true);
     setError('');
+    if (input?.required && !value.trim()) return setError(`${input.label || 'This'} is required.`);
+    setSaving(true);
     try {
-      await onConfirm();
+      await onConfirm(value.trim());
       onClose();
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || 'Something went wrong.');
@@ -1697,1445 +2587,31 @@ export function TypeToConfirm({ title, message, word, confirmLabel = 'Delete', o
   return (
     <ModalShell
       title={title}
-      icon={<AlertTriangle className="w-5 h-5 text-rose-400" />}
+      icon={danger ? <AlertTriangle className="w-5 h-5 text-rose-400" /> : <HelpCircle className="w-5 h-5 text-emerald-400" />}
       onClose={onClose}
       maxWidth="max-w-md"
       footer={(
         <>
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">Go back</button>
-          <button type="button" onClick={submit} disabled={!match || saving}
-            className="px-5 py-2 rounded-xl text-sm font-bold bg-rose-600 hover:bg-rose-500 text-white disabled:opacity-40">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
+            Go back
+          </button>
+          <button type="button" onClick={submit} disabled={saving}
+            className={`px-5 py-2 rounded-xl text-sm font-bold disabled:opacity-50 ${danger ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'}`}>
             {saving ? 'Working…' : confirmLabel}
           </button>
         </>
       )}
     >
-      <div className="space-y-3">
-        {error && <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-sm">{error}</div>}
-        {message && <div className="text-sm text-slate-300">{message}</div>}
-        {children}
-        <label className="block text-xs text-slate-400">
-          Type <span className="font-bold text-white">{word}</span> to confirm
-          <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit()} className={`${inputCls} mt-1`} />
+      {error && <div className="mb-3 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>}
+      {message && <p className="text-sm text-slate-300">{message}</p>}
+      {input && (
+        <label className="block text-xs font-semibold text-slate-300 mt-3">
+          {input.label}
+          <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder={input.placeholder || ''}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500" />
         </label>
-      </div>
-    </ModalShell>
-  );
-}
-
-/** Copy-to-clipboard button that flips to "Copied". */
-export function CopyButton({ text, label = 'Copy' }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button type="button" className={btnGhost}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setDone(true);
-          setTimeout(() => setDone(false), 1500);
-        } catch {
-          /* clipboard blocked: the text is visible to copy by hand */
-        }
-      }}>
-      {done ? <Check className="w-3 h-3" /> : null}{done ? 'Copied' : label}
-    </button>
-  );
-}
-
-/** Switch the manager dashboard to a venue (platform admins) and go there. */
-export function openVenueAsManager(navigate, venueId) {
-  try {
-    localStorage.setItem('shiftboard_admin_venue_id', venueId);
-  } catch {
-    /* ignore */
-  }
-  window.dispatchEvent(new CustomEvent('admin_venue_changed', { detail: venueId }));
-  navigate(`/venue?venue=${venueId}`);
-}
-
-/** Tell the navbar's venue switcher to reload its list (after create/delete). */
-export function venuesChanged() {
-  window.dispatchEvent(new CustomEvent('admin_venues_changed'));
-}
-```
-
----
-
-## C2. NEW FILE `frontend/src/components/admin/AdminOverview.jsx`
-
-```jsx
-import React, { useEffect, useState } from 'react';
-import {
-  AlertTriangle, AlertOctagon, Info, ChevronRight, History, ShieldCheck, RefreshCw, CheckCircle2,
-} from 'lucide-react';
-import api from '../../api/client';
-import { card, StatTile, SectionTitle, ago, btnGhost } from './adminUi';
-
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-const LEVEL = {
-  error: [AlertOctagon, 'text-rose-400', 'border-rose-500/30 bg-rose-500/5'],
-  warn: [AlertTriangle, 'text-amber-400', 'border-amber-500/30 bg-amber-500/5'],
-  info: [Info, 'text-sky-400', 'border-sky-500/30 bg-sky-500/5'],
-};
-
-/**
- * Phase 29.2: Admin home. GET /admin/overview.
- * Props: refreshKey, onTab(tab), onOpenVenue(venueId), onOpenUser(userId)
- */
-export default function AdminOverview({ refreshKey = 0, onTab, onOpenVenue }) {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await api.get('/admin/overview');
-      setData(res.data);
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not load the overview.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, [refreshKey]);
-
-  if (error) return <p className="text-sm text-rose-300">{error}</p>;
-  if (!data) return <p className="text-sm text-slate-500 py-10 text-center">Loading…</p>;
-
-  const openAttention = (a) => {
-    if (a.kind === 'venue' && a.target_id) onOpenVenue(a.target_id);
-    else if (a.kind === 'deliveries' || a.kind === 'system') onTab('system');
-    else if (a.kind === 'users') onTab('users');
-  };
-
-  return (
-    <div className="space-y-6">
-      <section className={`${card} p-4`}>
-        <SectionTitle
-          icon={AlertTriangle}
-          tone="text-amber-400"
-          title="Needs attention"
-          right={(
-            <button type="button" onClick={load} disabled={loading} className={btnGhost}>
-              <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Refresh
-            </button>
-          )}
-        />
-        {data.attention.length === 0 ? (
-          <p className="text-sm text-emerald-300 flex items-center gap-2 py-2">
-            <CheckCircle2 className="w-4 h-4" /> Nothing needs you right now.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {data.attention.map((a, i) => {
-              const [Icon, tone, box] = LEVEL[a.level] || LEVEL.info;
-              return (
-                <li key={i}>
-                  <button type="button" onClick={() => openAttention(a)}
-                    className={`w-full text-left px-3 py-2 rounded-xl border flex items-center gap-2 hover:brightness-125 ${box}`}>
-                    <Icon className={`w-4 h-4 flex-shrink-0 ${tone}`} />
-                    <span className="text-sm text-slate-200 flex-1">{a.text}</span>
-                    <ChevronRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <StatTile
-          label="People"
-          value={data.users_total}
-          sub={`${plural(data.workers, 'worker')} · ${plural(data.managers, 'manager')} · ${plural(data.admins, 'admin')}`}
-          onClick={() => onTab('users')}
-        />
-        <StatTile
-          label="Venues"
-          value={data.venues}
-          sub={`${data.events_next_7d} event${data.events_next_7d === 1 ? '' : 's'} in the next 7 days`}
-          tone="text-emerald-400"
-          onClick={() => onTab('venues')}
-        />
-        <StatTile
-          label="Staffed, next 7 days"
-          value={data.fill_rate_next_7d == null ? '—' : `${Math.round(data.fill_rate_next_7d)}%`}
-          sub={data.spots_next_7d ? `${data.open_spots_next_7d} of ${data.spots_next_7d} spots still open` : 'No shifts posted'}
-          tone={data.fill_rate_next_7d == null ? 'text-slate-400' : data.fill_rate_next_7d >= 90 ? 'text-emerald-400' : data.fill_rate_next_7d >= 60 ? 'text-amber-400' : 'text-rose-400'}
-        />
-        <StatTile
-          label="Waiting on managers"
-          value={data.pending_requests + data.pending_handoffs}
-          sub={`${data.pending_requests} request${data.pending_requests === 1 ? '' : 's'} · ${data.pending_handoffs} hand-off${data.pending_handoffs === 1 ? '' : 's'}${data.stale_requests_24h ? ` · ${data.stale_requests_24h} over 24 h` : ''}`}
-          tone={data.stale_requests_24h ? 'text-amber-400' : 'text-white'}
-        />
-        <StatTile
-          label="Emails & texts, 24 h"
-          value={data.deliveries_sent_24h}
-          sub={data.deliveries_failed_24h ? `${data.deliveries_failed_24h} failed` : 'None failed'}
-          tone={data.deliveries_failed_24h ? 'text-rose-400' : 'text-white'}
-          onClick={() => onTab('system')}
-        />
-      </div>
-      {(data.deactivated > 0 || data.new_users_7d > 0) && (
-        <p className="text-xs text-slate-500 -mt-3">
-          {data.new_users_7d} new account{data.new_users_7d === 1 ? '' : 's'} this week
-          {data.deactivated > 0 && ` · ${data.deactivated} deactivated`}
-        </p>
       )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <section className={`${card} p-4 lg:col-span-2`}>
-          <SectionTitle
-            icon={History}
-            tone="text-amber-400"
-            title="Latest at venues"
-            right={<button type="button" onClick={() => onTab('activity')} className="text-xs text-indigo-300 hover:text-indigo-200">See all</button>}
-          />
-          {data.recent_activity.length === 0 ? (
-            <p className="text-xs text-slate-500 py-4 text-center">No venue activity yet.</p>
-          ) : (
-            <ol className="divide-y divide-slate-800">
-              {data.recent_activity.map((a) => (
-                <li key={a.id} className="py-2 text-xs">
-                  <div className="text-slate-200">{a.summary}</div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">
-                    <span className="text-emerald-300/80 font-semibold">{a.venue_name}</span>
-                    {a.actor_name ? ` · by ${a.actor_name}` : ''} · {ago(a.created_at)}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-
-        <section className={`${card} p-4`}>
-          <SectionTitle
-            icon={ShieldCheck}
-            title="Admin actions"
-            right={<button type="button" onClick={() => onTab('activity', { log: 'admin' })} className="text-xs text-indigo-300 hover:text-indigo-200">See all</button>}
-          />
-          {data.recent_audit.length === 0 ? (
-            <p className="text-xs text-slate-500 py-4 text-center">No admin changes recorded yet.</p>
-          ) : (
-            <ol className="divide-y divide-slate-800">
-              {data.recent_audit.map((a) => (
-                <li key={a.id} className="py-2 text-xs">
-                  <div className="text-slate-200">{a.summary}</div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">{ago(a.created_at)}{a.actor_name ? ` · ${a.actor_name}` : ''}</div>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-      </div>
-    </div>
-  );
-}
-```
-
----
-
-## C3. NEW FILE `frontend/src/components/admin/AdminVenues.jsx`
-Default export: the Venues tab. Named export `AdminVenueDrawer`. It reuses `VenueSettingsModal`, `TeamModal` and `ActivityFeed` unchanged.
-
-```jsx
-import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Building2, Plus, Search, ExternalLink, Settings, Users, AlertTriangle, MapPin, ShieldCheck, Trash2, UserCog,
-  CalendarDays, Clock, Crosshair,
-} from 'lucide-react';
-import api from '../../api/client';
-import VenueSettingsModal from '../VenueSettingsModal';
-import TeamModal from '../TeamModal';
-import ActivityFeed from '../ActivityFeed';
-import {
-  card, inputCls, btnGhost, btnPrimary, btnDanger, POLICY_LABEL, ago, Drawer, TypeToConfirm, openVenueAsManager,
-  venuesChanged,
-} from './adminUi';
-
-function Num({ value, warn = false }) {
-  return (
-    <span className={`font-mono font-bold ${value === 0 ? 'text-slate-600' : warn ? 'text-amber-300' : 'text-slate-100'}`}>{value}</span>
-  );
-}
-
-/**
- * Phase 29.2: Venues tab. GET /admin/venues/summary (+ /admin/venues for the full records the settings modal edits).
- * Props: refreshKey, onOpenVenue(id), onCreate(), onChanged()
- */
-export default function AdminVenues({ refreshKey = 0, onOpenVenue, onCreate }) {
-  const navigate = useNavigate();
-  const [rows, setRows] = useState(null);
-  const [q, setQ] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    api
-      .get('/admin/venues/summary')
-      .then((res) => active && setRows(res.data || []))
-      .catch((err) => active && setError(err.response?.data?.detail || 'Could not load venues.'));
-    return () => {
-      active = false;
-    };
-  }, [refreshKey]);
-
-  const shown = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    if (!rows) return [];
-    if (!t) return rows;
-    return rows.filter((v) =>
-      v.name.toLowerCase().includes(t) || (v.address || '').toLowerCase().includes(t)
-      || v.managers.some((m) => m.name.toLowerCase().includes(t) || (m.email || '').toLowerCase().includes(t)));
-  }, [rows, q]);
-
-  if (error) return <p className="text-sm text-rose-300">{error}</p>;
-  if (!rows) return <p className="text-sm text-slate-500 py-10 text-center">Loading…</p>;
-
-  return (
-    <section className={card}>
-      <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search venues, addresses or managers"
-            className={`${inputCls} pl-9`} />
-        </div>
-        <span className="text-xs text-slate-500 sm:ml-auto">{rows.length} venue{rows.length === 1 ? '' : 's'}</span>
-        <button type="button" onClick={onCreate} className={btnPrimary}>
-          <Plus className="w-4 h-4" /> New venue
-        </button>
-      </div>
-
-      {shown.length === 0 ? (
-        <p className="text-sm text-slate-500 py-12 text-center">{rows.length ? 'No venues match.' : 'No venues yet. Create the first one.'}</p>
-      ) : (
-        <>
-        <ul className="md:hidden divide-y divide-slate-800/60">
-          {shown.map((v) => (
-            <li key={v.id}>
-              <button type="button" onClick={() => onOpenVenue(v.id)} className="w-full text-left px-4 py-3 hover:bg-slate-800/30 space-y-1">
-                <span className="font-bold text-white flex items-center gap-2"><Building2 className="w-4 h-4 text-emerald-400" /> {v.name}</span>
-                <span className="block text-[11px] text-slate-500 truncate">{v.address}</span>
-                <span className="block text-[11px] text-slate-300">
-                  {v.managers.length ? v.managers.map((m) => m.name).join(', ') : 'No manager'} · {v.team_active} on team · {v.open_spots_7d} open this week · {v.pending_requests} waiting
-                </span>
-                {v.warnings.length > 0 && (
-                  <span className="flex flex-wrap gap-1">
-                    {v.warnings.map((w) => (
-                      <span key={w} className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-semibold">{w}</span>
-                    ))}
-                  </span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="hidden md:block overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-950/60 text-slate-400 uppercase tracking-wider text-[10px] border-b border-slate-800">
-              <tr>
-                <th className="py-2.5 px-4">Venue</th>
-                <th className="py-2.5 px-3">Managers</th>
-                <th className="py-2.5 px-3 text-center" title="Active team members">Team</th>
-                <th className="py-2.5 px-3 text-center" title="Events in the next 30 days">Events 30d</th>
-                <th className="py-2.5 px-3 text-center" title="Unfilled spots on shifts in the next 7 days">Open 7d</th>
-                <th className="py-2.5 px-3 text-center" title="Requests waiting for a manager">Waiting</th>
-                <th className="py-2.5 px-3">Booking</th>
-                <th className="py-2.5 px-3">Clock-in</th>
-                <th className="py-2.5 px-3">Last activity</th>
-                <th className="py-2.5 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {shown.map((v) => (
-                <tr key={v.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => onOpenVenue(v.id)}>
-                  <td className="py-3 px-4 min-w-[14rem]">
-                    <div className="font-bold text-white flex items-center gap-2">
-                      <Building2 className="w-4 h-4 text-emerald-400 flex-shrink-0" /> {v.name}
-                    </div>
-                    <div className="text-[11px] text-slate-500 truncate max-w-xs mt-0.5">{v.address}</div>
-                    {v.warnings.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {v.warnings.map((w) => (
-                          <span key={w} className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-semibold inline-flex items-center gap-1">
-                            <AlertTriangle className="w-2.5 h-2.5" /> {w}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-3">
-                    {v.managers.length === 0 ? <span className="text-slate-600">None</span> : (
-                      <div className="space-y-0.5">
-                        {v.managers.slice(0, 2).map((m) => <div key={m.user_id} className="text-slate-200 truncate max-w-[10rem]">{m.name}</div>)}
-                        {v.managers.length > 2 && <div className="text-slate-500">+{v.managers.length - 2} more</div>}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-3 text-center"><Num value={v.team_active} /></td>
-                  <td className="py-3 px-3 text-center"><Num value={v.upcoming_events} /></td>
-                  <td className="py-3 px-3 text-center"><Num value={v.open_spots_7d} warn /></td>
-                  <td className="py-3 px-3 text-center"><Num value={v.pending_requests} warn /></td>
-                  <td className="py-3 px-3 whitespace-nowrap">{POLICY_LABEL[v.approval_policy] || v.approval_policy}</td>
-                  <td className="py-3 px-3 whitespace-nowrap">
-                    {v.geofence_enabled
-                      ? <span className="text-emerald-300 inline-flex items-center gap-1"><Crosshair className="w-3 h-3" /> On site only</span>
-                      : <span className="text-slate-500">Anywhere</span>}
-                  </td>
-                  <td className="py-3 px-3 whitespace-nowrap text-slate-400">{ago(v.last_activity_at)}</td>
-                  <td className="py-3 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                    <button type="button" onClick={() => openVenueAsManager(navigate, v.id)} className={btnGhost} title="Open this venue's manager dashboard">
-                      <ExternalLink className="w-3 h-3" /> Dashboard
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function Fact({ icon: Icon, label, children }) {
-  return (
-    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold flex items-center gap-1">
-        {Icon && <Icon className="w-3 h-3" />} {label}
-      </div>
-      <div className="text-sm text-white font-semibold mt-0.5">{children}</div>
-    </div>
-  );
-}
-
-/**
- * Phase 29.2: Everything about one venue for an admin: health, managers, settings, team, activity,
- * admin changes, and a safe delete.
- * Props: venueId, onClose, onOpenUser(userId), onChanged(message?), onDeleted(message)
- */
-export function AdminVenueDrawer({ venueId, onClose, onOpenUser, onChanged, onDeleted }) {
-  const navigate = useNavigate();
-  const [row, setRow] = useState(null);
-  const [full, setFull] = useState(null);
-  const [positions, setPositions] = useState([]);
-  const [audit, setAudit] = useState([]);
-  const [error, setError] = useState('');
-  const [reload, setReload] = useState(0);
-  const [modal, setModal] = useState(null); // 'settings' | 'team' | 'delete'
-  const [deleteHistory, setDeleteHistory] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    Promise.all([
-      api.get('/admin/venues/summary'),
-      api.get('/admin/venues'),
-      api.get(`/venues/${venueId}/positions`).catch(() => ({ data: [] })),
-      api.get('/admin/audit', { params: { target_type: 'venue', target_id: venueId, limit: 10 } }).catch(() => ({ data: [] })),
-    ])
-      .then(([sum, all, pos, au]) => {
-        if (!active) return;
-        const r = (sum.data || []).find((v) => v.id === venueId);
-        if (!r) {
-          setError('This venue no longer exists.');
-          return;
-        }
-        setRow(r);
-        setFull((all.data || []).find((v) => v.id === venueId) || null);
-        setPositions(pos.data || []);
-        setAudit(au.data || []);
-      })
-      .catch((err) => active && setError(err.response?.data?.detail || 'Could not load this venue.'));
-    return () => {
-      active = false;
-    };
-  }, [venueId, reload]);
-
-  const doDelete = async () => {
-    await api.delete(`/venues/${venueId}`, { params: { confirm_name: row.name, delete_history: deleteHistory } });
-    venuesChanged();
-    try {
-      if (localStorage.getItem('shiftboard_admin_venue_id') === venueId) localStorage.removeItem('shiftboard_admin_venue_id');
-    } catch {
-      /* ignore */
-    }
-    onDeleted(`Deleted ${row.name}.`);
-  };
-
-  return (
-    <Drawer
-      title={row?.name || 'Venue'}
-      subtitle={row ? <span className="inline-flex items-center gap-1"><MapPin className="w-3 h-3" />{row.address}</span> : null}
-      onClose={onClose}
-      footer={row && (
-        <>
-          <button type="button" onClick={() => setModal('team')} className={btnGhost}><Users className="w-3 h-3" /> Team</button>
-          <button type="button" onClick={() => setModal('settings')} disabled={!full} className={btnGhost}><Settings className="w-3 h-3" /> Settings</button>
-          <button type="button" onClick={() => openVenueAsManager(navigate, venueId)} className={btnPrimary}>
-            <ExternalLink className="w-3.5 h-3.5" /> Open dashboard
-          </button>
-        </>
-      )}
-    >
-      {error && <p className="text-sm text-rose-300">{error}</p>}
-      {!row && !error && <p className="text-sm text-slate-500 py-8 text-center">Loading…</p>}
-      {row && (
-        <>
-          {row.warnings.length > 0 && (
-            <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 text-sm text-amber-200 flex gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-              <span>{row.warnings.join(' · ')}</span>
-            </div>
-          )}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <Fact icon={Users} label="Team">{row.team_active} active</Fact>
-            <Fact icon={CalendarDays} label="Events, 30 days">{row.upcoming_events}</Fact>
-            <Fact icon={AlertTriangle} label="Open spots, 7 days">{row.open_spots_7d}</Fact>
-            <Fact icon={Clock} label="Requests waiting">{row.pending_requests}</Fact>
-            <Fact label="Booking">{POLICY_LABEL[row.approval_policy] || row.approval_policy}</Fact>
-            <Fact icon={Crosshair} label="Clock-in">
-              {row.geofence_enabled ? `On site (${full?.geofence_radius_meters ?? '?'} m)` : 'Anywhere'}
-            </Fact>
-            <Fact label="Positions">{row.positions_count}</Fact>
-            <Fact label="Locations">{row.locations_count}</Fact>
-            <Fact label="Time zone">{row.timezone}</Fact>
-          </div>
-
-          <div>
-            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1">
-              <UserCog className="w-3 h-3" /> Managers
-            </div>
-            {row.managers.length === 0 ? (
-              <p className="text-xs text-slate-500">
-                No manager yet. Create one on the Users tab (role: Venue manager) or change someone's role there.
-              </p>
-            ) : (
-              <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden">
-                {row.managers.map((m) => (
-                  <button key={m.user_id} type="button" onClick={() => onOpenUser(m.user_id)}
-                    className="w-full text-left px-3 py-2 bg-slate-950 hover:bg-slate-800/60 flex items-center justify-between gap-2 text-xs">
-                    <span className="text-slate-100 font-semibold">{m.name}</span>
-                    <span className="text-slate-500 truncate">{m.email}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <ActivityFeed venueId={venueId} refreshKey={reload} onOpenWorker={onOpenUser} />
-
-          <div>
-            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3" /> Admin changes
-            </div>
-            {audit.length === 0 ? (
-              <p className="text-xs text-slate-500">None recorded.</p>
-            ) : (
-              <ul className="space-y-1 text-xs">
-                {audit.map((a) => (
-                  <li key={a.id} className="text-slate-300">
-                    {a.summary} <span className="text-slate-500">· {ago(a.created_at)}{a.actor_name ? ` · ${a.actor_name}` : ''}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/5">
-            <div className="text-sm font-bold text-rose-300">Delete this venue</div>
-            <p className="text-xs text-slate-400 mt-1">
-              Removes the venue with its events, shifts, team, invites and activity. People's accounts stay.
-              Created {new Date(row.created_at).toLocaleDateString()}.
-            </p>
-            <button type="button" onClick={() => setModal('delete')} className={`${btnDanger} mt-2`}>
-              <Trash2 className="w-3 h-3" /> Delete venue…
-            </button>
-          </div>
-        </>
-      )}
-
-      {modal === 'settings' && full && (
-        <VenueSettingsModal
-          mode="edit"
-          venue={full}
-          onClose={() => {
-            setModal(null);
-            setReload((n) => n + 1);
-          }}
-          onSaved={(saved) => {
-            setModal(null);
-            setReload((n) => n + 1);
-            venuesChanged();
-            onChanged(`Saved settings for ${saved.name}.`);
-          }}
-        />
-      )}
-      {modal === 'team' && (
-        <TeamModal
-          venue={full || { id: venueId, name: row?.name }}
-          positions={positions}
-          timeZone={row?.timezone}
-          onClose={() => {
-            setModal(null);
-            setReload((n) => n + 1);
-          }}
-          onChanged={() => setReload((n) => n + 1)}
-        />
-      )}
-      {modal === 'delete' && row && (
-        <TypeToConfirm
-          title={`Delete ${row.name}?`}
-          word={row.name}
-          confirmLabel="Delete venue"
-          message={(
-            <p>
-              This can't be undone. {row.upcoming_events > 0 && <b className="text-rose-300">{row.upcoming_events} upcoming event{row.upcoming_events === 1 ? '' : 's'} will be removed and booked people won't be told. </b>}
-              If people have clocked in here, you must also delete the payroll history (export time sheets first).
-            </p>
-          )}
-          onConfirm={doDelete}
-          onClose={() => {
-            setModal(null);
-            setDeleteHistory(false);
-          }}
-        >
-          <label className="flex items-start gap-2 text-xs text-slate-300">
-            <input type="checkbox" checked={deleteHistory} onChange={(e) => setDeleteHistory(e.target.checked)} className="mt-0.5" />
-            Also delete clock-ins and time sheets (payroll history) for this venue
-          </label>
-        </TypeToConfirm>
-      )}
-    </Drawer>
-  );
-}
-```
-
----
-
-## C4. NEW FILE `frontend/src/components/admin/AdminUsers.jsx`
-
-```jsx
-import React, { useEffect, useMemo, useState } from 'react';
-import { Search, UserPlus, ChevronLeft, ChevronRight, Star, Copy as CopyIcon } from 'lucide-react';
-import api from '../../api/client';
-import { Avatar } from '../WorkerProfilePanel';
-import { card, inputCls, selectCls, btnGhost, btnPrimary, RoleBadge, AuthBadge, ago, personName } from './adminUi';
-
-const PAGE = 25;
-const MEMBER_CLS = {
-  active: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
-  worked: 'bg-slate-800 text-slate-300 border-slate-700',
-  removed: 'bg-slate-800 text-slate-500 border-slate-700 line-through',
-  blocked: 'bg-rose-500/10 text-rose-300 border-rose-500/30',
-};
-const MEMBER_TITLE = {
-  active: 'On the team',
-  worked: 'Worked here (not on the team)',
-  removed: 'Removed from the team',
-  blocked: 'Blocked by the venue',
-};
-
-/** Venue chips for one person: what they manage, then the teams they're on / have worked for. */
-export function VenueChips({ row, max = 3 }) {
-  const chips = [
-    ...row.managed_venues.map((v) => ({ key: `m-${v.id}`, label: v.name, cls: 'bg-amber-500/10 text-amber-300 border-amber-500/30', title: 'Manages' })),
-    ...row.memberships.map((m) => ({ key: `w-${m.venue_id}`, label: m.venue_name, cls: MEMBER_CLS[m.status] || MEMBER_CLS.worked, title: MEMBER_TITLE[m.status] || m.status })),
-  ];
-  if (chips.length === 0) return <span className="text-[11px] text-slate-600">No venues yet</span>;
-  return (
-    <div className="flex flex-wrap gap-1 max-w-[16rem]">
-      {chips.slice(0, max).map((c) => (
-        <span key={c.key} title={c.title} className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold truncate max-w-[9rem] ${c.cls}`}>{c.label}</span>
-      ))}
-      {chips.length > max && <span className="text-[10px] text-slate-500 self-center">+{chips.length - max}</span>}
-    </div>
-  );
-}
-
-/**
- * Phase 29.2: Users tab. Server-side search, filters and paging: GET /admin/directory.
- * Props: refreshKey, venues ([{id, name}]), onOpenUser(id), onCreate()
- */
-export default function AdminUsers({ refreshKey = 0, venues = [], onOpenUser, onCreate }) {
-  const [q, setQ] = useState('');
-  const [debounced, setDebounced] = useState('');
-  const [role, setRole] = useState('all');
-  const [status, setStatus] = useState('all');
-  const [auth, setAuth] = useState('all');
-  const [venueId, setVenueId] = useState('');
-  const [page, setPage] = useState(0);
-  const [data, setData] = useState({ total: 0, items: [] });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(q.trim()), 300);
-    return () => clearTimeout(t);
-  }, [q]);
-
-  useEffect(() => {
-    setPage(0);
-  }, [debounced, role, status, auth, venueId]);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError('');
-    api
-      .get('/admin/directory', {
-        params: {
-          q: debounced || undefined, role, status, auth, venue_id: venueId || undefined, limit: PAGE, offset: page * PAGE,
-        },
-      })
-      .then((res) => active && setData(res.data))
-      .catch((err) => active && setError(err.response?.data?.detail || 'Could not load people.'))
-      .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
-  }, [debounced, role, status, auth, venueId, page, refreshKey]);
-
-  // Same full name as another account on this page (often a Firebase sign-up next to an admin-made account).
-  const dupes = useMemo(() => {
-    const seen = {};
-    data.items.forEach((u) => {
-      const k = personName(u).toLowerCase();
-      seen[k] = (seen[k] || 0) + 1;
-    });
-    return seen;
-  }, [data.items]);
-
-  const pages = Math.max(1, Math.ceil(data.total / PAGE));
-  const filtered = debounced || role !== 'all' || status !== 'all' || auth !== 'all' || venueId;
-
-  return (
-    <section className={card}>
-      <div className="p-4 border-b border-slate-800 space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, email or phone"
-              className={`${inputCls} pl-9`} />
-          </div>
-          <span className="text-xs text-slate-500 sm:ml-auto">{loading ? 'Loading…' : `${data.total} ${data.total === 1 ? 'person' : 'people'}`}</span>
-          <button type="button" onClick={onCreate} className={btnPrimary}>
-            <UserPlus className="w-4 h-4" /> New user
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap">
-          <select value={role} onChange={(e) => setRole(e.target.value)} className={selectCls} aria-label="Role">
-            <option value="all">All roles</option>
-            <option value="worker">Workers</option>
-            <option value="venue_manager">Venue managers</option>
-            <option value="platform_admin">Platform admins</option>
-          </select>
-          <select value={venueId} onChange={(e) => setVenueId(e.target.value)} className={selectCls} aria-label="Venue">
-            <option value="">All venues</option>
-            {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-          </select>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className={selectCls} aria-label="Status">
-            <option value="all">Active and deactivated</option>
-            <option value="active">Active only</option>
-            <option value="inactive">Deactivated only</option>
-          </select>
-          <select value={auth} onChange={(e) => setAuth(e.target.value)} className={selectCls} aria-label="Sign-in">
-            <option value="all">Any sign-in</option>
-            <option value="local">Password only</option>
-            <option value="firebase">Firebase only</option>
-            <option value="both">Password + Firebase</option>
-          </select>
-          {filtered && (
-            <button type="button" className={btnGhost}
-              onClick={() => { setQ(''); setRole('all'); setStatus('all'); setAuth('all'); setVenueId(''); }}>
-              Clear filters
-            </button>
-          )}
-        </div>
-      </div>
-
-      {error ? (
-        <p className="text-sm text-rose-300 p-6">{error}</p>
-      ) : data.items.length === 0 && !loading ? (
-        <p className="text-sm text-slate-500 py-12 text-center">{filtered ? 'Nobody matches these filters.' : 'No accounts yet.'}</p>
-      ) : (
-        <>
-        <ul className={`md:hidden divide-y divide-slate-800/60 ${loading ? 'opacity-60' : ''}`}>
-          {data.items.map((u) => (
-            <li key={u.id}>
-              <button type="button" onClick={() => onOpenUser(u.id)} className="w-full text-left px-4 py-3 flex gap-3 hover:bg-slate-800/30">
-                <Avatar person={u} size="w-9 h-9 text-xs" />
-                <span className="min-w-0 flex-1 space-y-1">
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className={`text-sm font-bold ${u.is_active ? 'text-white' : 'text-slate-500 line-through'}`}>{personName(u)}</span>
-                    <RoleBadge role={u.role} />
-                    {!u.is_active && <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[10px] font-semibold">Deactivated</span>}
-                    {dupes[personName(u).toLowerCase()] > 1 && <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-semibold">Same name</span>}
-                  </span>
-                  <span className="block text-[11px] text-slate-500 truncate">{u.email}</span>
-                  <VenueChips row={u} />
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="hidden md:block overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-950/60 text-slate-400 uppercase tracking-wider text-[10px] border-b border-slate-800">
-              <tr>
-                <th className="py-2.5 px-4">Person</th>
-                <th className="py-2.5 px-3">Role</th>
-                <th className="py-2.5 px-3">Venues</th>
-                <th className="py-2.5 px-3 text-center" title="Finished shifts · upcoming bookings">Shifts</th>
-                <th className="py-2.5 px-3">Rating</th>
-                <th className="py-2.5 px-3">Sign-in</th>
-                <th className="py-2.5 px-3">Last request</th>
-                <th className="py-2.5 px-3">Joined</th>
-              </tr>
-            </thead>
-            <tbody className={`divide-y divide-slate-800/60 ${loading ? 'opacity-60' : ''}`}>
-              {data.items.map((u) => (
-                <tr key={u.id} onClick={() => onOpenUser(u.id)} className="hover:bg-slate-800/30 cursor-pointer">
-                  <td className="py-2.5 px-4 min-w-[15rem]">
-                    <div className="flex items-center gap-2.5">
-                      <Avatar person={u} size="w-8 h-8 text-xs" />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`font-bold ${u.is_active ? 'text-white' : 'text-slate-500 line-through'}`}>{personName(u)}</span>
-                          {!u.is_active && <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[10px] font-semibold">Deactivated</span>}
-                          {dupes[personName(u).toLowerCase()] > 1 && (
-                            <span title="Another account on this page has the same name" className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-semibold inline-flex items-center gap-0.5">
-                              <CopyIcon className="w-2.5 h-2.5" /> Same name
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-500 truncate max-w-[16rem]">{u.email}{u.phone ? ` · ${u.phone}` : ''}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="py-2.5 px-3"><RoleBadge role={u.role} /></td>
-                  <td className="py-2.5 px-3"><VenueChips row={u} /></td>
-                  <td className="py-2.5 px-3 text-center font-mono">
-                    <span className={u.shifts_worked ? 'text-slate-100 font-bold' : 'text-slate-600'}>{u.shifts_worked}</span>
-                    {u.upcoming > 0 && <span className="text-emerald-300"> · {u.upcoming}</span>}
-                  </td>
-                  <td className="py-2.5 px-3 whitespace-nowrap">
-                    {u.rating_count > 0 ? (
-                      <span className="inline-flex items-center gap-1 text-slate-200">
-                        <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> {Number(u.aggregate_rating).toFixed(1)}
-                        <span className="text-slate-500">({u.rating_count})</span>
-                      </span>
-                    ) : <span className="text-slate-600">—</span>}
-                  </td>
-                  <td className="py-2.5 px-3"><AuthBadge source={u.auth_source} /></td>
-                  <td className="py-2.5 px-3 whitespace-nowrap text-slate-400">{u.last_activity_at ? ago(u.last_activity_at) : '—'}</td>
-                  <td className="py-2.5 px-3 whitespace-nowrap text-slate-400">{new Date(u.created_at).toLocaleDateString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        </>
-      )}
-
-      {data.total > PAGE && (
-        <div className="p-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-          <span>
-            {page * PAGE + 1}–{Math.min(data.total, (page + 1) * PAGE)} of {data.total}
-          </span>
-          <div className="flex items-center gap-2">
-            <button type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className={btnGhost}>
-              <ChevronLeft className="w-3 h-3" /> Previous
-            </button>
-            <span>Page {page + 1} of {pages}</span>
-            <button type="button" disabled={page + 1 >= pages} onClick={() => setPage((p) => p + 1)} className={btnGhost}>
-              Next <ChevronRight className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-```
-
----
-
-## C5. NEW FILE `frontend/src/components/admin/AdminUserDrawer.jsx`
-Reuses `ResetPasswordModal`, `ReliabilityBadge` and `Avatar` (from `WorkerProfilePanel.jsx`) unchanged.
-
-```jsx
-import React, { useEffect, useMemo, useState } from 'react';
-import {
-  Save, KeyRound, Power, Trash2, ShieldCheck, Building2, CalendarClock, Bell, Mail, Phone, Lock, StickyNote,
-} from 'lucide-react';
-import api from '../../api/client';
-import { useAuth } from '../../context/AuthContext';
-import ResetPasswordModal from '../ResetPasswordModal';
-import ReliabilityBadge from '../ReliabilityBadge';
-import { Avatar } from '../WorkerProfilePanel';
-import {
-  inputCls, selectCls, btnGhost, btnPrimary, btnDanger, RoleBadge, AuthBadge, ROLE_LABEL, ago, personName, Drawer,
-  TypeToConfirm,
-} from './adminUi';
-
-const HISTORY_LABEL = {
-  pending: ['Waiting', 'text-amber-300'],
-  pending_manager_approval: ['Waiting', 'text-amber-300'],
-  approved: ['Booked', 'text-emerald-300'],
-  confirmed: ['Booked', 'text-emerald-300'],
-  checked_in: ['Clocked in', 'text-sky-300'],
-  completed: ['Worked', 'text-slate-200'],
-  dropped: ['Dropped', 'text-rose-300'],
-  no_show: ['No-show', 'text-rose-300'],
-  removed: ['Removed', 'text-rose-300'],
-  rejected: ['Not selected', 'text-slate-500'],
-  withdrawn: ['Withdrew', 'text-slate-500'],
-  cancelled: ['Cancelled', 'text-slate-500'],
-  transferred: ['Handed off', 'text-slate-400'],
-};
-const MEMBER_LABEL = {
-  active: ['On team', 'text-emerald-300'],
-  worked: ['Worked here', 'text-slate-300'],
-  removed: ['Removed', 'text-slate-500'],
-  blocked: ['Blocked', 'text-rose-300'],
-};
-const DISCOVER_LABEL = {
-  private: 'Private (only venues they work with)',
-  venues: 'Findable by venue managers',
-  everyone: 'Findable by everyone',
-};
-
-function Label({ children }) {
-  return <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1">{children}</div>;
-}
-
-function initialVenueIds(u) {
-  if (!u) return [];
-  if (u.role === 'venue_manager') return u.managed_venues.map((v) => String(v.id));
-  if (u.role === 'worker') return u.memberships.filter((m) => m.status === 'active').map((m) => String(m.venue_id));
-  return [];
-}
-
-/**
- * Phase 29.2: One person, everything an admin can see and change.
- * GET /admin/users/{id}/detail · PATCH /admin/users/{id} · reset password · deactivate · delete.
- * Props: userId, venues ([{id, name}]), onClose, onChanged(message), onDeleted(message)
- */
-export default function AdminUserDrawer({ userId, venues = [], onClose, onChanged, onDeleted }) {
-  const { user: me } = useAuth();
-  const [data, setData] = useState(null);
-  const [error, setError] = useState('');
-  const [reload, setReload] = useState(0);
-  const [form, setForm] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState('');
-  const [modal, setModal] = useState(null); // 'reset' | 'delete'
-
-  useEffect(() => {
-    let active = true;
-    setError('');
-    api
-      .get(`/admin/users/${userId}/detail`)
-      .then((res) => {
-        if (!active) return;
-        setData(res.data);
-        const u = res.data.user;
-        setForm({
-          first_name: u.first_name, last_name: u.last_name, email: u.email, phone: u.phone || '', role: u.role,
-          venue_ids: initialVenueIds(u),
-        });
-      })
-      .catch((err) => active && setError(err.response?.data?.detail || 'Could not load this person.'));
-    return () => {
-      active = false;
-    };
-  }, [userId, reload]);
-
-  const u = data?.user;
-  const isMe = u && String(u.id) === String(me?.id);
-
-  const payload = useMemo(() => {
-    if (!u || !form) return {};
-    const p = {};
-    if (form.first_name.trim() !== u.first_name) p.first_name = form.first_name.trim();
-    if (form.last_name.trim() !== u.last_name) p.last_name = form.last_name.trim();
-    if (form.email.trim().toLowerCase() !== (u.email || '').toLowerCase()) p.email = form.email.trim();
-    if ((form.phone || '').trim() !== (u.phone || '')) p.phone = form.phone.trim();
-    if (form.role !== u.role) p.role = form.role;
-    const before = [...initialVenueIds(u)].sort().join(',');
-    const after = [...form.venue_ids].sort().join(',');
-    if (p.role || before !== after) p.venue_ids = form.role === 'platform_admin' ? [] : form.venue_ids;
-    return p;
-  }, [u, form]);
-  const dirty = Object.keys(payload).length > 0;
-
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const toggleVenue = (id) =>
-    setForm((f) => ({ ...f, venue_ids: f.venue_ids.includes(id) ? f.venue_ids.filter((x) => x !== id) : [...f.venue_ids, id] }));
-
-  const save = async () => {
-    setFormError('');
-    if (!form.first_name.trim() || !form.email.trim()) return setFormError('First name and email are required.');
-    if (form.role === 'venue_manager' && form.venue_ids.length === 0) return setFormError('Pick at least one venue for a venue manager.');
-    setSaving(true);
-    try {
-      await api.patch(`/admin/users/${userId}`, payload);
-      setReload((n) => n + 1);
-      onChanged(`Saved ${form.first_name.trim()} ${form.last_name.trim()}.${payload.role ? ' They see the new role next time they sign in or refresh.' : ''}`);
-    } catch (err) {
-      setFormError(err.response?.data?.detail || 'Could not save.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const toggleActive = async () => {
-    setFormError('');
-    try {
-      await api.patch(`/admin/users/${userId}`, { is_active: !u.is_active });
-      setReload((n) => n + 1);
-      onChanged(`${personName(u)} is now ${u.is_active ? 'deactivated and can no longer sign in' : 'active again'}.`);
-    } catch (err) {
-      setFormError(err.response?.data?.detail || 'Could not change the status.');
-    }
-  };
-
-  const doDelete = async () => {
-    await api.delete(`/admin/users/${userId}`);
-    onDeleted(`Deleted ${u.email}.`);
-  };
-
-  const venueLabel = form?.role === 'venue_manager' ? 'Manages' : form?.role === 'worker' ? "On these venues' teams" : null;
-
-  return (
-    <Drawer
-      title={u ? personName(u) : 'Person'}
-      subtitle={u && (
-        <span className="flex flex-wrap items-center gap-1.5 mt-1">
-          <RoleBadge role={u.role} />
-          <AuthBadge source={u.auth_source} />
-          {!u.is_active && <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[10px] font-semibold">Deactivated</span>}
-          {u.always_admin && <span title="Listed in ALWAYS_ADMIN_EMAILS" className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold inline-flex items-center gap-0.5"><Lock className="w-2.5 h-2.5" /> Always admin</span>}
-          {isMe && <span className="text-[10px] text-slate-500">(you)</span>}
-        </span>
-      )}
-      onClose={onClose}
-      footer={u && (
-        <button type="button" onClick={save} disabled={!dirty || saving} className={btnPrimary}>
-          <Save className="w-3.5 h-3.5" /> {saving ? 'Saving…' : dirty ? 'Save changes' : 'No changes'}
-        </button>
-      )}
-    >
-      {error && <p className="text-sm text-rose-300">{error}</p>}
-      {!u && !error && <p className="text-sm text-slate-500 py-8 text-center">Loading…</p>}
-      {u && form && (
-        <>
-          <div className="flex items-center gap-3">
-            <Avatar person={u} size="w-12 h-12 text-base" />
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 flex-1">
-              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Worked</div>
-                <div className="text-sm text-white font-semibold">{u.shifts_worked}</div>
-              </div>
-              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Upcoming</div>
-                <div className="text-sm text-white font-semibold">{u.upcoming}</div>
-              </div>
-              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Rating</div>
-                <div className="text-sm text-white font-semibold">{u.rating_count ? `${Number(u.aggregate_rating).toFixed(1)} (${u.rating_count})` : '—'}</div>
-              </div>
-              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Reliability</div>
-                <div className="text-sm text-white font-semibold"><ReliabilityBadge data={data.reliability} /></div>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <Label>Details</Label>
-            {formError && <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-sm">{formError}</div>}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="text-xs text-slate-400">First name
-                <input value={form.first_name} onChange={set('first_name')} className={`${inputCls} mt-1`} />
-              </label>
-              <label className="text-xs text-slate-400">Last name
-                <input value={form.last_name} onChange={set('last_name')} className={`${inputCls} mt-1`} />
-              </label>
-              <label className="text-xs text-slate-400">Email
-                <input type="email" value={form.email} onChange={set('email')} disabled={u.always_admin}
-                  className={`${inputCls} mt-1 disabled:opacity-50`} />
-                {u.auth_source !== 'local' && payload.email && (
-                  <span className="block text-[11px] text-amber-300 mt-1">They sign in with Firebase; this only changes where ShiftBoard emails go.</span>
-                )}
-              </label>
-              <label className="text-xs text-slate-400">Phone
-                <input value={form.phone} onChange={set('phone')} className={`${inputCls} mt-1`} placeholder="For texts" />
-              </label>
-              <label className="text-xs text-slate-400">Role
-                <select value={form.role} onChange={set('role')} disabled={isMe || u.always_admin} className={`${selectCls} w-full mt-1 disabled:opacity-50`}>
-                  {Object.entries(ROLE_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-                </select>
-                {(isMe || u.always_admin) && <span className="block text-[11px] text-slate-500 mt-1">{isMe ? "You can't change your own role." : 'Always-admin accounts stay admins.'}</span>}
-              </label>
-            </div>
-            {venueLabel && (
-              <div>
-                <div className="text-xs text-slate-400 mb-1">{venueLabel}</div>
-                {venues.length === 0 ? <p className="text-xs text-slate-500">No venues yet.</p> : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {venues.map((v) => {
-                      const on = form.venue_ids.includes(String(v.id));
-                      return (
-                        <button key={v.id} type="button" onClick={() => toggleVenue(String(v.id))}
-                          className={`px-2.5 py-1 rounded-lg border text-xs font-semibold ${on ? 'bg-indigo-500/20 border-indigo-500 text-indigo-200' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'}`}>
-                          {v.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {form.role === 'worker' && (
-                  <p className="text-[11px] text-slate-500 mt-1">Unticking removes them from that team. Team notes, positions and blocks set by managers are kept.</p>
-                )}
-                {payload.role && u.role !== form.role && (
-                  <p className="text-[11px] text-amber-300 mt-1">Changing the role replaces their venue links with the ones picked here.</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <Label><Building2 className="w-3 h-3" /> Venues</Label>
-            {u.managed_venues.length === 0 && u.memberships.length === 0 ? (
-              <p className="text-xs text-slate-500">Not connected to any venue.</p>
-            ) : (
-              <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden">
-                {u.managed_venues.map((v) => (
-                  <div key={`m-${v.id}`} className="px-3 py-2 bg-slate-950 flex items-center justify-between text-xs">
-                    <span className="text-slate-100 font-semibold">{v.name}</span>
-                    <span className="text-amber-300 font-semibold">Manager</span>
-                  </div>
-                ))}
-                {u.memberships.map((m) => {
-                  const [label, cls] = MEMBER_LABEL[m.status] || [m.status, 'text-slate-300'];
-                  return (
-                    <div key={`w-${m.venue_id}`} className="px-3 py-2 bg-slate-950 text-xs space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-100 font-semibold">{m.venue_name}</span>
-                        <span className={`font-semibold ${cls}`}>{label}</span>
-                      </div>
-                      {m.positions.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {m.positions.map((p) => <span key={p} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] font-bold uppercase">{p}</span>)}
-                        </div>
-                      )}
-                      {m.notes && (
-                        <div className="text-[11px] text-amber-100 flex gap-1"><StickyNote className="w-3 h-3 text-amber-300 flex-shrink-0 mt-0.5" /> {m.notes}</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <Label><CalendarClock className="w-3 h-3" /> Recent shifts</Label>
-            {data.history.length === 0 ? (
-              <p className="text-xs text-slate-500">No shift requests yet.</p>
-            ) : (
-              <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden">
-                {data.history.map((h) => {
-                  const [label, cls] = HISTORY_LABEL[h.status] || [h.status, 'text-slate-300'];
-                  return (
-                    <div key={h.request_id} className="px-3 py-2 bg-slate-950 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-                      <span className="text-slate-400 w-20 flex-shrink-0">{new Date(h.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
-                      <span className="flex-1 min-w-[10rem] text-slate-100">
-                        <span className="font-semibold">{h.role_type}</span> · {h.title}
-                        <span className="text-slate-500"> · {h.venue_name}</span>
-                      </span>
-                      <span className={`font-semibold ${cls}`}>{label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <Label><Bell className="w-3 h-3" /> Their settings</Label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2">
-                <Mail className="w-3.5 h-3.5 text-slate-400" /> Emails {data.email_enabled ? <b className="text-emerald-300">on</b> : <b className="text-slate-500">off</b>}
-              </div>
-              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2">
-                <Phone className="w-3.5 h-3.5 text-slate-400" /> Texts {data.sms_enabled ? <b className="text-emerald-300">on</b> : <b className="text-slate-500">off</b>}
-                {data.sms_enabled && !u.phone && <span className="text-amber-300">(no phone)</span>}
-              </div>
-              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                {DISCOVER_LABEL[u.discoverable] || u.discoverable}
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1">
-              Joined {new Date(u.created_at).toLocaleDateString()} · last request {u.last_activity_at ? ago(u.last_activity_at) : 'never'}
-            </p>
-          </div>
-
-          <div>
-            <Label><ShieldCheck className="w-3 h-3" /> Admin changes</Label>
-            {data.audit.length === 0 ? <p className="text-xs text-slate-500">None recorded.</p> : (
-              <ul className="space-y-1 text-xs">
-                {data.audit.map((a) => (
-                  <li key={a.id} className="text-slate-300">
-                    {a.summary} <span className="text-slate-500">· {ago(a.created_at)}{a.actor_name ? ` · ${a.actor_name}` : ''}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {!isMe && (
-            <div className="p-3 rounded-xl border border-slate-700 bg-slate-950 space-y-2">
-              <div className="text-sm font-bold text-white">Account</div>
-              <div className="flex flex-wrap gap-2">
-                {u.has_password ? (
-                  <button type="button" onClick={() => setModal('reset')} className={btnGhost}><KeyRound className="w-3 h-3" /> Reset password</button>
-                ) : (
-                  <span className="text-[11px] text-slate-500 self-center">Signs in with Firebase only, so there is no ShiftBoard password to reset.</span>
-                )}
-                {!u.always_admin && (
-                  <button type="button" onClick={toggleActive} className={u.is_active ? btnDanger : btnGhost}>
-                    <Power className="w-3 h-3" /> {u.is_active ? 'Deactivate' : 'Reactivate'}
-                  </button>
-                )}
-                {!u.always_admin && (
-                  <button type="button" onClick={() => setModal('delete')} className={btnDanger}><Trash2 className="w-3 h-3" /> Delete…</button>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-500">
-                Deactivating blocks sign-in and keeps their history. Delete is only allowed for people with no clock-ins.
-              </p>
-            </div>
-          )}
-        </>
-      )}
-
-      {modal === 'reset' && u && (
-        <ResetPasswordModal
-          user={u}
-          onClose={() => setModal(null)}
-          onDone={() => {
-            setReload((n) => n + 1);
-            onChanged(`Password reset for ${u.email}.`);
-          }}
-        />
-      )}
-      {modal === 'delete' && u && (
-        <TypeToConfirm
-          title={`Delete ${personName(u)}?`}
-          word={u.email}
-          confirmLabel="Delete account"
-          message={<p>This removes the account, their requests and team memberships. It can't be undone. If they've ever clocked in, deactivate them instead.</p>}
-          onConfirm={doDelete}
-          onClose={() => setModal(null)}
-        />
-      )}
-    </Drawer>
-  );
-}
-```
-
----
-
-## C6. NEW FILE `frontend/src/components/admin/AdminCreateUserModal.jsx`
-
-```jsx
-import React, { useState } from 'react';
-import { UserPlus, KeyRound, CheckCircle2 } from 'lucide-react';
-import api from '../../api/client';
-import ModalShell from '../ModalShell';
-import { inputCls, selectCls, btnGhost, ROLE_LABEL, CopyButton } from './adminUi';
-
-/**
- * Phase 29.2: Create an account. By default the server generates a temporary password and returns it once.
- * POST /admin/users {email, first_name, last_name, phone, role, venue_ids, password?}
- * Props: venues ([{id, name}]), onClose, onCreated(user) (called when the admin closes the result screen or opens the profile),
- *        onOpenUser(id)
- */
-export default function AdminCreateUserModal({ venues = [], onClose, onCreated, onOpenUser }) {
-  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', role: 'worker' });
-  const [venueIds, setVenueIds] = useState([]);
-  const [pwMode, setPwMode] = useState('generate'); // generate | custom
-  const [password, setPassword] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [created, setCreated] = useState(null);
-
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const toggle = (id) => setVenueIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
-
-  const submit = async (e) => {
-    e?.preventDefault();
-    setError('');
-    if (!form.first_name.trim() || !form.email.trim()) return setError('First name and email are required.');
-    if (form.role === 'venue_manager' && venueIds.length === 0) return setError('Pick at least one venue for a venue manager.');
-    if (pwMode === 'custom' && password.length < 8) return setError('Password must be at least 8 characters.');
-    setSaving(true);
-    try {
-      const res = await api.post('/admin/users', {
-        email: form.email.trim(),
-        first_name: form.first_name.trim(),
-        last_name: form.last_name.trim(),
-        phone: form.phone.trim() || undefined,
-        role: form.role,
-        venue_ids: form.role === 'platform_admin' ? [] : venueIds,
-        password: pwMode === 'custom' ? password : undefined,
-      });
-      setCreated(res.data);
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not create the account.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const finish = () => {
-    onCreated(created);
-    onClose();
-  };
-
-  if (created) {
-    const loginUrl = `${window.location.origin}/login`;
-    const share = created.temporary_password
-      ? `Your ShiftBoard account is ready.\nSign in at ${loginUrl}\nEmail: ${created.email}\nTemporary password: ${created.temporary_password}\nPlease change it after you sign in.`
-      : null;
-    return (
-      <ModalShell
-        title="Account created"
-        icon={<CheckCircle2 className="w-5 h-5 text-emerald-400" />}
-        onClose={finish}
-        maxWidth="max-w-md"
-        footer={(
-          <>
-            <button type="button" onClick={() => { finish(); onOpenUser(created.id); }} className={btnGhost}>Open profile</button>
-            <button type="button" onClick={finish} className="px-5 py-2 rounded-xl text-sm font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950">Done</button>
-          </>
-        )}
-      >
-        <div className="space-y-3 text-sm text-slate-300">
-          <p>
-            <b className="text-white">{created.first_name} {created.last_name}</b> ({created.email}) is set up as a {ROLE_LABEL[(created.role || '').toLowerCase()] || created.role}.
-          </p>
-          {created.temporary_password ? (
-            <>
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Temporary password (shown once)</div>
-                <div className="font-mono text-lg text-emerald-300 mt-1 break-all">{created.temporary_password}</div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <CopyButton text={created.temporary_password} label="Copy password" />
-                <CopyButton text={share} label="Copy sign-in message" />
-              </div>
-              <p className="text-xs text-slate-500">Send it to them yourself. ShiftBoard doesn't email passwords.</p>
-            </>
-          ) : (
-            <p className="text-xs text-slate-500">They sign in with the password you set.</p>
-          )}
-        </div>
-      </ModalShell>
-    );
-  }
-
-  const venueLabel = form.role === 'venue_manager' ? 'Manages (at least one)' : form.role === 'worker' ? "Add to these venues' teams (optional)" : null;
-
-  return (
-    <ModalShell
-      title="New user"
-      icon={<UserPlus className="w-5 h-5 text-indigo-400" />}
-      onClose={onClose}
-      maxWidth="max-w-lg"
-      footer={(
-        <>
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">Cancel</button>
-          <button type="button" onClick={submit} disabled={saving}
-            className="px-5 py-2 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50">
-            {saving ? 'Creating…' : 'Create account'}
-          </button>
-        </>
-      )}
-    >
-      <form onSubmit={submit} className="space-y-3">
-        {error && <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-sm">{error}</div>}
-        <div className="grid grid-cols-2 gap-3">
-          <label className="text-xs text-slate-400">First name
-            <input autoFocus value={form.first_name} onChange={set('first_name')} className={`${inputCls} mt-1`} />
-          </label>
-          <label className="text-xs text-slate-400">Last name
-            <input value={form.last_name} onChange={set('last_name')} className={`${inputCls} mt-1`} />
-          </label>
-        </div>
-        <label className="block text-xs text-slate-400">Email
-          <input type="email" value={form.email} onChange={set('email')} className={`${inputCls} mt-1`} />
-        </label>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="text-xs text-slate-400">Phone (optional)
-            <input value={form.phone} onChange={set('phone')} className={`${inputCls} mt-1`} />
-          </label>
-          <label className="text-xs text-slate-400">Role
-            <select value={form.role} onChange={set('role')} className={`${selectCls} w-full mt-1`}>
-              {Object.entries(ROLE_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </select>
-          </label>
-        </div>
-        {venueLabel && (
-          <div>
-            <div className="text-xs text-slate-400 mb-1">{venueLabel}</div>
-            {venues.length === 0 ? <p className="text-xs text-slate-500">No venues yet.</p> : (
-              <div className="flex flex-wrap gap-1.5">
-                {venues.map((v) => {
-                  const on = venueIds.includes(v.id);
-                  return (
-                    <button key={v.id} type="button" onClick={() => toggle(v.id)}
-                      className={`px-2.5 py-1 rounded-lg border text-xs font-semibold ${on ? 'bg-indigo-500/20 border-indigo-500 text-indigo-200' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'}`}>
-                      {v.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-        <div>
-          <div className="text-xs text-slate-400 mb-1 flex items-center gap-1"><KeyRound className="w-3 h-3" /> Password</div>
-          <div className="flex gap-2">
-            {[['generate', 'Generate a temporary one'], ['custom', 'Set one now']].map(([id, label]) => (
-              <button key={id} type="button" onClick={() => setPwMode(id)}
-                className={`px-2.5 py-1 rounded-lg border text-xs font-semibold ${pwMode === id ? 'bg-indigo-500/20 border-indigo-500 text-indigo-200' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {pwMode === 'custom' && (
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters"
-              className={`${inputCls} mt-2`} autoComplete="new-password" />
-          )}
-        </div>
-        <p className="text-[11px] text-slate-500">
-          Tip: to let someone sign up themselves and join a team, use the venue's Team → Invite instead.
-        </p>
-      </form>
     </ModalShell>
   );
 }
@@ -3143,674 +2619,715 @@ export default function AdminCreateUserModal({ venues = [], onClose, onCreated, 
 
 ---
 
-## C7. NEW FILE `frontend/src/components/admin/AdminActivity.jsx`
-
-```jsx
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  History, ShieldCheck, CalendarCheck, UserPlus, Users, PencilLine, AlertTriangle, ChevronRight, Building2, Server,
-  UserRound,
-} from 'lucide-react';
-import api from '../../api/client';
-import { card, selectCls, btnGhost, ago, fmtDateTime } from './adminUi';
-
-const CATS = [
-  { id: '', label: 'All' },
-  { id: 'bookings', label: 'Bookings' },
-  { id: 'staffing', label: 'Staffing' },
-  { id: 'team', label: 'Team' },
-  { id: 'changes', label: 'Changes' },
-  { id: 'alerts', label: 'Alerts' },
-];
-const CAT_ICON = {
-  bookings: [CalendarCheck, 'text-emerald-400'],
-  staffing: [UserPlus, 'text-indigo-300'],
-  team: [Users, 'text-sky-300'],
-  changes: [PencilLine, 'text-amber-300'],
-  alerts: [AlertTriangle, 'text-rose-400'],
-};
-const TARGETS = [
-  { id: '', label: 'All' },
-  { id: 'user', label: 'People' },
-  { id: 'venue', label: 'Venues' },
-  { id: 'system', label: 'System' },
-];
-const TARGET_ICON = { user: UserRound, venue: Building2, system: Server };
-const PAGE = 40;
-
-function Chips({ items, value, onChange }) {
-  return (
-    <div className="flex flex-wrap gap-1">
-      {items.map((f) => (
-        <button key={f.id || 'all'} type="button" onClick={() => onChange(f.id)}
-          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border whitespace-nowrap ${
-            value === f.id ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-          }`}>
-          {f.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Loads a newest-first list with "Load more" (before=<last created_at>). */
-function usePaged(url, params, refreshKey) {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [more, setMore] = useState(false);
-  const key = JSON.stringify(params);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    api
-      .get(url, { params: { ...params, limit: PAGE } })
-      .then((res) => {
-        if (!active) return;
-        setItems(res.data || []);
-        setMore((res.data || []).length === PAGE);
-      })
-      .catch(() => active && setItems([]))
-      .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
-  }, [url, key, refreshKey]);
-
-  const loadMore = async () => {
-    if (!items.length) return;
-    setLoading(true);
-    try {
-      const res = await api.get(url, { params: { ...params, limit: PAGE, before: items[items.length - 1].created_at } });
-      setItems((prev) => [...prev, ...(res.data || [])]);
-      setMore((res.data || []).length === PAGE);
-    } finally {
-      setLoading(false);
-    }
-  };
-  return { items, loading, more, loadMore };
-}
-
-/**
- * Phase 29.2: Activity tab. Venue activity across every venue (GET /admin/activity) or the admin change log (GET /admin/audit).
- * Props: refreshKey, venues ([{id, name}]), initialLog ('venues' | 'admin'), onOpenUser(id), onOpenVenue(id)
- */
-export default function AdminActivity({ refreshKey = 0, venues = [], initialLog = 'venues', onOpenUser, onOpenVenue }) {
-  const navigate = useNavigate();
-  const [log, setLog] = useState(initialLog);
-  const [venueId, setVenueId] = useState('');
-  const [cat, setCat] = useState('');
-  const [target, setTarget] = useState('');
-
-  useEffect(() => setLog(initialLog), [initialLog]);
-
-  const act = usePaged('/admin/activity', { venue_id: venueId || undefined, category: cat || undefined }, `${refreshKey}-${log}`);
-  const aud = usePaged('/admin/audit', { target_type: target || undefined }, `${refreshKey}-${log}`);
-  const list = log === 'venues' ? act : aud;
-  const venueIds = new Set(venues.map((v) => String(v.id)));
-
-  const openActivity = (a) => {
-    if (a.event_id) {
-      try {
-        localStorage.setItem('shiftboard_admin_venue_id', a.venue_id);
-      } catch {
-        /* ignore */
-      }
-      window.dispatchEvent(new CustomEvent('admin_venue_changed', { detail: a.venue_id }));
-      navigate(`/venue?venue=${a.venue_id}&event=${a.event_id}`);
-    } else if (a.worker_id) {
-      onOpenUser(a.worker_id);
-    } else {
-      onOpenVenue(a.venue_id);
-    }
-  };
-
-  const openAudit = (a) => {
-    if (a.target_type === 'user' && a.target_id && !a.action.endsWith('_deleted')) onOpenUser(a.target_id);
-    else if (a.target_type === 'venue' && a.target_id && venueIds.has(String(a.target_id))) onOpenVenue(a.target_id);
-  };
-
-  return (
-    <section className={`${card} p-4`}>
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
-        <div className="inline-flex rounded-xl bg-slate-950 border border-slate-800 p-1">
-          <button type="button" onClick={() => setLog('venues')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 ${log === 'venues' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'}`}>
-            <History className="w-3.5 h-3.5" /> Venue activity
-          </button>
-          <button type="button" onClick={() => setLog('admin')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 ${log === 'admin' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'}`}>
-            <ShieldCheck className="w-3.5 h-3.5" /> Admin changes
-          </button>
-        </div>
-        {log === 'venues' ? (
-          <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
-            <select value={venueId} onChange={(e) => setVenueId(e.target.value)} className={selectCls} aria-label="Venue">
-              <option value="">All venues</option>
-              {venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-            <Chips items={CATS} value={cat} onChange={setCat} />
-          </div>
-        ) : (
-          <div className="sm:ml-auto"><Chips items={TARGETS} value={target} onChange={setTarget} /></div>
-        )}
-      </div>
-
-      {list.loading && list.items.length === 0 ? (
-        <p className="text-sm text-slate-500 py-10 text-center">Loading…</p>
-      ) : list.items.length === 0 ? (
-        <p className="text-sm text-slate-500 py-10 text-center">
-          {log === 'venues' ? 'Nothing here yet.' : 'No admin changes recorded yet. Changes made from this console show up here.'}
-        </p>
-      ) : (
-        <ol className="divide-y divide-slate-800">
-          {log === 'venues'
-            ? list.items.map((a) => {
-              const [Icon, tone] = CAT_ICON[a.category] || CAT_ICON.changes;
-              return (
-                <li key={a.id}>
-                  <button type="button" onClick={() => openActivity(a)} className="w-full text-left py-2.5 px-1 flex gap-3 hover:bg-slate-800/40 rounded-lg">
-                    <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${tone}`} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm text-slate-200">{a.summary}</span>
-                      <span className="block text-[11px] text-slate-500 mt-0.5">
-                        <span className="text-emerald-300/80 font-semibold">{a.venue_name}</span>
-                        {a.actor_name ? ` · by ${a.actor_name}` : ''} · <span title={fmtDateTime(a.created_at)}>{ago(a.created_at)}</span>
-                      </span>
-                    </span>
-                    <ChevronRight className="w-4 h-4 text-slate-600 mt-0.5 flex-shrink-0" />
-                  </button>
-                </li>
-              );
-            })
-            : list.items.map((a) => {
-              const Icon = TARGET_ICON[a.target_type] || Server;
-              return (
-                <li key={a.id}>
-                  <button type="button" onClick={() => openAudit(a)} className="w-full text-left py-2.5 px-1 flex gap-3 hover:bg-slate-800/40 rounded-lg">
-                    <Icon className="w-4 h-4 mt-0.5 flex-shrink-0 text-indigo-300" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm text-slate-200">{a.summary}</span>
-                      <span className="block text-[11px] text-slate-500 mt-0.5">
-                        {a.actor_name || 'Unknown admin'} · {fmtDateTime(a.created_at)}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-        </ol>
-      )}
-      {list.more && (
-        <button type="button" onClick={list.loadMore} disabled={list.loading} className={`${btnGhost} w-full justify-center mt-3 py-2`}>
-          {list.loading ? 'Loading…' : 'Load more'}
-        </button>
-      )}
-    </section>
-  );
-}
-```
-
----
-
-## C8. NEW FILE `frontend/src/components/admin/AdminSystem.jsx`
-
-```jsx
-import React, { useEffect, useState } from 'react';
-import {
-  Settings2, CheckCircle2, AlertTriangle, XCircle, Activity, Mail, RefreshCw, Send, Database, RotateCcw,
-} from 'lucide-react';
-import api from '../../api/client';
-import { card, inputCls, btnGhost, btnPrimary, SectionTitle, ago, fmtDateTime } from './adminUi';
-
-function Row({ state, label, children }) {
-  const [Icon, tone] = state === 'ok' ? [CheckCircle2, 'text-emerald-400'] : state === 'bad' ? [XCircle, 'text-rose-400'] : [AlertTriangle, 'text-amber-400'];
-  return (
-    <div className="py-2.5 flex items-start gap-3">
-      <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${tone}`} />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm text-white font-semibold">{label}</div>
-        <div className="text-xs text-slate-400 mt-0.5 break-words">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Phase 29.2: System tab. GET /admin/system, GET /admin/deliveries, retry, test email.
- * Props: refreshKey, onFlash({type, message})
- */
-export default function AdminSystem({ refreshKey = 0, onFlash }) {
-  const [sys, setSys] = useState(null);
-  const [failed, setFailed] = useState([]);
-  const [error, setError] = useState('');
-  const [reload, setReload] = useState(0);
-  const [busy, setBusy] = useState('');
-  const [to, setTo] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    setError('');
-    Promise.all([api.get('/admin/system'), api.get('/admin/deliveries', { params: { status: 'failed', limit: 25 } })])
-      .then(([s, d]) => {
-        if (!active) return;
-        setSys(s.data);
-        setFailed(d.data || []);
-      })
-      .catch((err) => active && setError(err.response?.data?.detail || 'Could not load system status.'));
-    return () => {
-      active = false;
-    };
-  }, [refreshKey, reload]);
-
-  const run = async (key, fn) => {
-    setBusy(key);
-    try {
-      const res = await fn();
-      onFlash({ type: 'success', message: res.data?.detail || 'Done.' });
-      setReload((n) => n + 1);
-    } catch (err) {
-      onFlash({ type: 'error', message: err.response?.data?.detail || 'That did not work.' });
-    } finally {
-      setBusy('');
-    }
-  };
-
-  if (error) return <p className="text-sm text-rose-300">{error}</p>;
-  if (!sys) return <p className="text-sm text-slate-500 py-10 text-center">Loading…</p>;
-
-  const beat = sys.worker_heartbeat_at ? new Date(sys.worker_heartbeat_at) : null;
-  const beatFresh = beat && Date.now() - beat.getTime() < 3 * 60 * 1000;
-  const workerState = !sys.worker_enabled ? 'warn' : beatFresh && sys.worker_last_ok !== false ? 'ok' : 'bad';
-  const d = sys.deliveries;
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <section className={`${card} p-4`}>
-          <SectionTitle
-            icon={Settings2}
-            title="Configuration"
-            right={(
-              <button type="button" onClick={() => setReload((n) => n + 1)} className={btnGhost}>
-                <RefreshCw className="w-3 h-3" /> Refresh
-              </button>
-            )}
-          />
-          <div className="divide-y divide-slate-800">
-            <Row state={sys.app_base_url_ok ? 'ok' : 'bad'} label="Public address (APP_BASE_URL)">
-              {sys.app_base_url || 'Not set'}{!sys.app_base_url_ok && ' · links in emails, texts and invites will not open for people.'}
-            </Row>
-            <Row state={sys.email_ready ? 'ok' : 'warn'} label="Email">
-              {sys.email_ready ? `${sys.email_provider.toUpperCase()} from ${sys.email_from}` : `Console mode: emails are only written to the backend log (provider "${sys.email_provider}").`}
-            </Row>
-            <Row state={sys.sms_ready && sys.sms_provider !== 'console' ? 'ok' : 'warn'} label="Text messages">
-              {sys.sms_provider === 'console'
-                ? 'Console mode: texts are only written to the backend log.'
-                : sys.sms_ready ? `Sending with ${sys.sms_provider}` : `Not sending (provider "${sys.sms_provider}"). People only get emails and in-app notifications.`}
-            </Row>
-            <Row state={sys.firebase === 'real' ? 'ok' : 'warn'} label="Google / Firebase sign-in">
-              {sys.firebase === 'real' ? 'On' : sys.firebase === 'mock' ? 'Mock mode (testing only)' : 'Off: people sign in with a ShiftBoard password only'}
-            </Row>
-            <Row state="ok" label="Self sign-up">
-              {sys.self_registration ? 'Anyone can create a worker account.' : 'Off: only admins and invites create accounts.'}
-            </Row>
-            <Row state={sys.always_admin_count ? 'ok' : 'warn'} label="Always-admin accounts">
-              {sys.always_admin_count} listed in ALWAYS_ADMIN_EMAILS{sys.always_admin_count ? '' : ' (add one so you can never be locked out)'}
-            </Row>
-          </div>
-          <p className="text-[11px] text-slate-500 mt-2">Change these in the backend's secrets file and restart the backend container.</p>
-        </section>
-
-        <section className={`${card} p-4`}>
-          <SectionTitle icon={Activity} title="Background worker" tone="text-emerald-400" />
-          <div className="divide-y divide-slate-800">
-            <Row state={workerState} label={!sys.worker_enabled ? 'Turned off' : workerState === 'ok' ? 'Running' : 'Not responding'}>
-              {sys.worker_enabled
-                ? <>Sends emails and texts, the daily new-shift digest (around {sys.digest_hour}:00 local time), shift reminders and late clock-in alerts.</>
-                : 'NOTIFICATIONS_WORKER_ENABLED is false, so no emails, texts, reminders or late alerts go out.'}
-            </Row>
-            <Row state={beatFresh ? 'ok' : 'warn'} label="Last heartbeat">
-              {beat ? `${ago(beat)} (${fmtDateTime(beat)})` : 'None recorded yet (Redis unreachable or the worker has not ticked).'}
-            </Row>
-            {sys.worker_last_error && (
-              <Row state="bad" label="Last error in this process">
-                <span className="font-mono">{sys.worker_last_error}</span>
-              </Row>
-            )}
-          </div>
-          <div className="grid grid-cols-5 gap-2 mt-3">
-            {[
-              ['Queued', d.pending, 'text-white'],
-              ['Sent 24h', d.sent_24h, 'text-emerald-400'],
-              ['Failed 24h', d.failed_24h, d.failed_24h ? 'text-rose-400' : 'text-white'],
-              ['Failed 7d', d.failed_7d, d.failed_7d ? 'text-rose-400' : 'text-white'],
-              ['Skipped 24h', d.skipped_24h, 'text-slate-400'],
-            ].map(([label, value, tone]) => (
-              <div key={label} className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold whitespace-nowrap truncate">{label}</div>
-                <div className={`text-lg font-black font-mono ${tone}`}>{value}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-
-      <section className={`${card} p-4`}>
-        <SectionTitle
-          icon={XCircle}
-          tone="text-rose-400"
-          title={`Failed emails & texts (${failed.length})`}
-          right={failed.length > 0 && (
-            <button type="button" disabled={busy === 'all'} onClick={() => run('all', () => api.post('/admin/deliveries/retry-failed'))} className={btnGhost}>
-              <RotateCcw className="w-3 h-3" /> Retry all (last 7 days)
-            </button>
-          )}
-        />
-        {failed.length === 0 ? (
-          <p className="text-xs text-slate-500 py-3 text-center">Nothing failed.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-300">
-              <thead className="text-slate-500 uppercase tracking-wider text-[10px] border-b border-slate-800">
-                <tr>
-                  <th className="py-2 pr-3">When</th>
-                  <th className="py-2 pr-3">To</th>
-                  <th className="py-2 pr-3">Message</th>
-                  <th className="py-2 pr-3">Error</th>
-                  <th className="py-2 text-right" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {failed.map((f) => (
-                  <tr key={f.id}>
-                    <td className="py-2 pr-3 whitespace-nowrap text-slate-400">{fmtDateTime(f.created_at)}</td>
-                    <td className="py-2 pr-3">
-                      <div className="text-slate-100">{f.user_name}</div>
-                      <div className="text-[10px] text-slate-500">{f.channel === 'sms' ? 'Text' : 'Email'} · {f.user_email}</div>
-                    </td>
-                    <td className="py-2 pr-3">{f.title}</td>
-                    <td className="py-2 pr-3 font-mono text-rose-300 max-w-xs truncate" title={f.last_error || ''}>{f.last_error || '—'}</td>
-                    <td className="py-2 text-right">
-                      <button type="button" disabled={busy === f.id} onClick={() => run(f.id, () => api.post(`/admin/deliveries/${f.id}/retry`))} className={btnGhost}>
-                        <RotateCcw className="w-3 h-3" /> Retry
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <section className={`${card} p-4`}>
-          <SectionTitle icon={Mail} title="Send a test email" />
-          <form
-            className="flex gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (to.trim()) run('test', () => api.post('/admin/test-email', { to: to.trim() }));
-            }}
-          >
-            <input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="you@example.com" className={inputCls} />
-            <button type="submit" disabled={busy === 'test' || !to.trim()} className={btnPrimary}>
-              <Send className="w-3.5 h-3.5" /> {busy === 'test' ? 'Sending…' : 'Send'}
-            </button>
-          </form>
-          <p className="text-[11px] text-slate-500 mt-2">Uses the same email settings as real notifications, so it proves the whole path works.</p>
-        </section>
-
-        <section className={`${card} p-4`}>
-          <SectionTitle icon={Database} title="Data" tone="text-slate-400" />
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {Object.entries(sys.table_counts).map(([k, v]) => (
-              <div key={k} className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{k.replace('_', ' ')}</div>
-                <div className="text-sm text-white font-mono font-bold">{v.toLocaleString()}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-```
-
----
-
-## C9. `frontend/src/pages/AdminPanel.jsx` (FULL FILE REPLACEMENT)
-Replaces the whole 1,053-line Phase 20–25 page. The route in `App.jsx` is unchanged. Note `w-full` on the page root.
-
-```jsx
-import React, { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Shield, LayoutDashboard, Building2, Users, History, Server, UserPlus, Plus } from 'lucide-react';
-import api from '../api/client';
-import VenueSettingsModal from '../components/VenueSettingsModal';
-import AdminOverview from '../components/admin/AdminOverview';
-import AdminVenues, { AdminVenueDrawer } from '../components/admin/AdminVenues';
-import AdminUsers from '../components/admin/AdminUsers';
-import AdminUserDrawer from '../components/admin/AdminUserDrawer';
-import AdminCreateUserModal from '../components/admin/AdminCreateUserModal';
-import AdminActivity from '../components/admin/AdminActivity';
-import AdminSystem from '../components/admin/AdminSystem';
-import { Flash, venuesChanged } from '../components/admin/adminUi';
-
-const TABS = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'venues', label: 'Venues', icon: Building2 },
-  { id: 'users', label: 'People', icon: Users },
-  { id: 'activity', label: 'Activity', icon: History },
-  { id: 'system', label: 'System', icon: Server },
-];
-
-/**
- * Phase 29.2: Platform admin console.
- * Tabs (kept in ?tab=): Overview · Venues · People · Activity · System.
- * Venue and person details open in right-hand drawers from any tab.
- */
-export default function AdminPanel() {
-  const [params, setParams] = useSearchParams();
-  const tab = TABS.some((t) => t.id === params.get('tab')) ? params.get('tab') : 'overview';
-  const [logView, setLogView] = useState('venues');
-  const [venues, setVenues] = useState([]);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [flash, setFlash] = useState(null);
-  const [venueDrawer, setVenueDrawer] = useState(null);
-  const [userDrawer, setUserDrawer] = useState(null);
-  const [createUser, setCreateUser] = useState(false);
-  const [createVenue, setCreateVenue] = useState(false);
-
-  const refresh = () => setRefreshKey((n) => n + 1);
-  const clearFlash = useCallback(() => setFlash(null), []);
-  const ok = (message) => {
-    setFlash({ type: 'success', message });
-    refresh();
-  };
-
-  useEffect(() => {
-    api
-      .get('/admin/venues')
-      .then((res) => setVenues((res.data || []).map((v) => ({ id: v.id, name: v.name }))))
-      .catch(() => setVenues([]));
-  }, [refreshKey]);
-
-  const goTab = (id, opts = {}) => {
-    if (id === 'activity') setLogView(opts.log || 'venues');
-    const next = new URLSearchParams(params);
-    next.set('tab', id);
-    setParams(next, { replace: true });
-  };
-
-  return (
-    <div className="w-full min-h-screen bg-slate-950 text-slate-100 pb-16">
-      <section className="bg-slate-900 border-b border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-indigo-500/10 text-indigo-400 rounded-2xl border border-indigo-500/20">
-                <Shield className="w-7 h-7" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-black text-white">Platform admin</h1>
-                <p className="text-xs text-slate-400 mt-0.5">Every venue, every account, and the health of the platform.</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setCreateUser(true)}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-white text-xs inline-flex items-center gap-1.5">
-                <UserPlus className="w-4 h-4" /> New user
-              </button>
-              <button type="button" onClick={() => setCreateVenue(true)}
-                className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs inline-flex items-center gap-1.5">
-                <Plus className="w-4 h-4" /> New venue
-              </button>
-            </div>
-          </div>
-          <nav className="flex gap-1 mt-5 overflow-x-auto -mb-px">
-            {TABS.map((t) => {
-              const Icon = t.icon;
-              const on = tab === t.id;
-              return (
-                <button key={t.id} type="button" onClick={() => goTab(t.id)}
-                  className={`px-3.5 py-2.5 text-sm font-bold inline-flex items-center gap-2 border-b-2 whitespace-nowrap transition ${
-                    on ? 'border-indigo-400 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
-                  <Icon className={`w-4 h-4 ${on ? 'text-indigo-400' : ''}`} /> {t.label}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-      </section>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-4">
-        <Flash flash={flash} onClose={clearFlash} />
-
-        {tab === 'overview' && (
-          <AdminOverview refreshKey={refreshKey} onTab={goTab} onOpenVenue={setVenueDrawer} onOpenUser={setUserDrawer} />
-        )}
-        {tab === 'venues' && (
-          <AdminVenues refreshKey={refreshKey} onOpenVenue={setVenueDrawer} onCreate={() => setCreateVenue(true)} />
-        )}
-        {tab === 'users' && (
-          <AdminUsers refreshKey={refreshKey} venues={venues} onOpenUser={setUserDrawer} onCreate={() => setCreateUser(true)} />
-        )}
-        {tab === 'activity' && (
-          <AdminActivity refreshKey={refreshKey} venues={venues} initialLog={logView}
-            onOpenUser={setUserDrawer} onOpenVenue={setVenueDrawer} />
-        )}
-        {tab === 'system' && <AdminSystem refreshKey={refreshKey} onFlash={setFlash} />}
-      </main>
-
-      {venueDrawer && (
-        <AdminVenueDrawer
-          key={venueDrawer}
-          venueId={venueDrawer}
-          onClose={() => setVenueDrawer(null)}
-          onOpenUser={(id) => setUserDrawer(id)}
-          onChanged={ok}
-          onDeleted={(message) => {
-            setVenueDrawer(null);
-            ok(message);
-          }}
-        />
-      )}
-      {userDrawer && (
-        <AdminUserDrawer
-          key={userDrawer}
-          userId={userDrawer}
-          venues={venues}
-          onClose={() => setUserDrawer(null)}
-          onChanged={ok}
-          onDeleted={(message) => {
-            setUserDrawer(null);
-            ok(message);
-          }}
-        />
-      )}
-      {createUser && (
-        <AdminCreateUserModal
-          venues={venues}
-          onClose={() => setCreateUser(false)}
-          onCreated={(u) => ok(`Created ${u.first_name} ${u.last_name} (${u.email}).`)}
-          onOpenUser={(id) => setUserDrawer(id)}
-        />
-      )}
-      {createVenue && (
-        <VenueSettingsModal
-          mode="create"
-          venue={null}
-          showManagerEmail
-          onClose={() => setCreateVenue(false)}
-          onSaved={(saved) => {
-            setCreateVenue(false);
-            venuesChanged();
-            ok(`Created ${saved.name}. Set up positions and a manager from its panel.`);
-            setVenueDrawer(saved.id);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-```
-
----
-
-## C10. `frontend/src/components/Navbar.jsx` (EDIT)
-The admin venue switcher also reloads on the `admin_venues_changed` event. Nothing else in the navbar changes.
+## C4. `frontend/src/components/VenueSettingsModal.jsx` (EDITS)
+New **Event templates** tab; new optional props `initialTab` and `onUseTemplate`.
 
 **Edit 1.** Find:
 ```jsx
-  }, [location.pathname]);
+import ModalShell from './ModalShell';
+import VenueLocationsPanel from './VenueLocationsPanel';
+import { TIMEZONE_OPTIONS } from '../utils/venueTime';
 
-  // Super Admin venue switcher data
-  useEffect(() => {
-    if (isPlatformAdmin) {
-      api
-        .get('/admin/venues')
 ```
 Replace with:
 ```jsx
-  }, [location.pathname]);
+import ModalShell from './ModalShell';
+import VenueLocationsPanel from './VenueLocationsPanel';
+import EventTemplatesPanel from './EventTemplatesPanel';
+import { TIMEZONE_OPTIONS } from '../utils/venueTime';
 
-  // Super Admin venue switcher data (Phase 29.2: reloads when the admin console creates/deletes a venue)
-  useEffect(() => {
-    if (!isPlatformAdmin) return undefined;
-    const load = () =>
-      api
-        .get('/admin/venues')
 ```
 
 **Edit 2.** Find:
 ```jsx
-            setSelectedVenueId(list[0].id);
-            localStorage.setItem('shiftboard_admin_venue_id', list[0].id);
-          }
-        })
-        .catch((err) => console.error('Failed to load admin venues for switcher:', err));
-    }
-  }, [isPlatformAdmin]);
+}
 
+export default function VenueSettingsModal({ mode = 'edit', venue = null, showManagerEmail = false, onClose, onSaved }) {
+  const isEdit = mode === 'edit' && !!venue?.id;
+  const [tab, setTab] = useState('details');
+  const [form, setForm] = useState(emptyForm(venue));
+  const [saving, setSaving] = useState(false);
 ```
 Replace with:
 ```jsx
-            setSelectedVenueId(list[0].id);
-            localStorage.setItem('shiftboard_admin_venue_id', list[0].id);
-          } else {
-            setSelectedVenueId('');
-          }
-        })
-        .catch((err) => console.error('Failed to load admin venues for switcher:', err));
-    load();
-    window.addEventListener('admin_venues_changed', load);
-    return () => window.removeEventListener('admin_venues_changed', load);
-  }, [isPlatformAdmin]);
+}
 
+// Phase 29.3: initialTab ('details' | 'positions' | 'locations' | 'templates'); onUseTemplate(template) shows "Use" on templates
+export default function VenueSettingsModal({
+  mode = 'edit', venue = null, showManagerEmail = false, initialTab = 'details', onUseTemplate = null, onClose, onSaved,
+}) {
+  const isEdit = mode === 'edit' && !!venue?.id;
+  const [tab, setTab] = useState(isEdit ? initialTab : 'details');
+  const [form, setForm] = useState(emptyForm(venue));
+  const [saving, setSaving] = useState(false);
+```
+
+**Edit 3.** Find:
+```jsx
+
+  const tabs = isEdit ? (
+    <div className="flex gap-2">
+      {[{ id: 'details', label: 'Details' }, { id: 'positions', label: 'Positions & pay' }, { id: 'locations', label: 'Locations' }].map((t) => (
+        <button key={t.id} type="button" onClick={() => setTab(t.id)}
+          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+```
+Replace with:
+```jsx
+
+  const tabs = isEdit ? (
+    <div className="flex flex-wrap gap-2">
+      {[
+        { id: 'details', label: 'Details' },
+        { id: 'positions', label: 'Positions & pay' },
+        { id: 'locations', label: 'Locations' },
+        { id: 'templates', label: 'Event templates' },   // Phase 29.3
+      ].map((t) => (
+        <button key={t.id} type="button" onClick={() => setTab(t.id)}
+          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+```
+
+**Edit 4.** Find:
+```jsx
+      ) : tab === 'locations' ? (
+        <VenueLocationsPanel venue={venue} onError={setError} />
+      ) : (
+        <div className="space-y-4">
+```
+Replace with:
+```jsx
+      ) : tab === 'locations' ? (
+        <VenueLocationsPanel venue={venue} onError={setError} />
+      ) : tab === 'templates' ? (
+        <EventTemplatesPanel venue={venue} onError={setError} onUseTemplate={onUseTemplate} />
+      ) : (
+        <div className="space-y-4">
+```
+
+---
+
+## C5. `frontend/src/components/PostedShiftsBoard.jsx` (EDITS)
+
+**Edit 1.** Find:
+```jsx
+import { enUS } from 'date-fns/locale';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin } from 'lucide-react';
+import api from '../api/client';
+import TipBadge from './TipBadge';
+```
+Replace with:
+```jsx
+import { enUS } from 'date-fns/locale';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin, Send, Undo2, Trash2, LayoutTemplate, FilePen } from 'lucide-react';
+import api from '../api/client';
+import TipBadge from './TipBadge';
+```
+
+**Edit 2.** Find:
+```jsx
+const SCOPES = [
+  { id: 'upcoming', label: 'Upcoming' },
+  { id: 'past', label: 'Past' },
+  { id: 'all', label: 'All' },
+```
+Replace with:
+```jsx
+const SCOPES = [
+  { id: 'upcoming', label: 'Upcoming' },
+  { id: 'drafts', label: 'Drafts' },       // Phase 29.3
+  { id: 'past', label: 'Past' },
+  { id: 'all', label: 'All' },
+```
+
+**Edit 3.** Find:
+```jsx
+  onOpenedEvent,
+  onDataChanged,           // Phase 29: after assign / offer / rating (parent reloads, which bumps refreshKey)
+}) {
+  const [scope, setScope] = useState('upcoming');
+```
+Replace with:
+```jsx
+  onOpenedEvent,
+  onDataChanged,           // Phase 29: after assign / offer / rating (parent reloads, which bumps refreshKey)
+  onPublishEvent,          // Phase 29.3: (ev) draft -> live
+  onUnpublishEvent,        // Phase 29.3: (ev) live -> draft
+  onDeleteDraft,           // Phase 29.3: (ev)
+  onSaveTemplate,          // Phase 29.3: (ev)
+}) {
+  const [scope, setScope] = useState('upcoming');
+```
+
+**Edit 4.** Find:
+```jsx
+            eventPropGetter={(e) => ({
+              style: {
+                backgroundColor: e.resource.total_requested > 0 ? '#b45309' : '#059669',
+                borderColor: e.resource.total_requested > 0 ? '#f59e0b' : '#10b981',
+                color: '#ffffff',
+                borderRadius: '6px',
+```
+Replace with:
+```jsx
+            eventPropGetter={(e) => ({
+              style: {
+                backgroundColor: e.resource.status === 'draft' ? '#334155' : e.resource.total_requested > 0 ? '#b45309' : '#059669',
+                borderColor: e.resource.status === 'draft' ? '#94a3b8' : e.resource.total_requested > 0 ? '#f59e0b' : '#10b981',
+                borderStyle: e.resource.status === 'draft' ? 'dashed' : 'solid',
+                color: '#ffffff',
+                borderRadius: '6px',
+```
+
+**Edit 5.** Find:
+```jsx
+          <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+          <p className="text-xs text-slate-400">
+            {scope === 'upcoming' ? 'No upcoming shifts posted for this venue.' : 'No shifts found.'}
+          </p>
+        </div>
+```
+Replace with:
+```jsx
+          <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+          <p className="text-xs text-slate-400">
+            {scope === 'upcoming' ? 'No upcoming shifts posted for this venue.'
+              : scope === 'drafts' ? 'No drafts. Use “Save as draft” when posting a shift to prepare it before workers can see it.'
+              : 'No shifts found.'}
+          </p>
+        </div>
+```
+
+**Edit 6.** Find:
+```jsx
+                {items.map((ev) => {
+                  const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
+                  return (
+                    <div key={ev.event_key} className={`bg-slate-950 border rounded-xl overflow-visible ${ev.cancelled ? 'border-rose-900/60 opacity-70' : 'border-slate-800'}`}>
+                      <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
+                        <div>
+                          <div className="text-sm font-bold text-white">{ev.title}</div>
+                          {ev.cancelled && (
+                            <div className="text-[11px] text-rose-300">Cancelled{ev.cancel_reason ? `: ${ev.cancel_reason}` : ''}</div>
+```
+Replace with:
+```jsx
+                {items.map((ev) => {
+                  const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
+                  const isDraft = ev.status === 'draft';          // Phase 29.3
+                  const upcoming = new Date(ev.start_time) > new Date();
+                  const nobody = ev.total_assigned === 0 && ev.total_requested === 0 && !ev.positions.some((p) => (p.offers || []).some((o) => o.status === 'pending'));
+                  return (
+                    <div key={ev.event_key} className={`bg-slate-950 border rounded-xl overflow-visible ${ev.cancelled ? 'border-rose-900/60 opacity-70' : isDraft ? 'border-dashed border-slate-500' : 'border-slate-800'}`}>
+                      <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
+                        <div>
+                          <div className="text-sm font-bold text-white flex flex-wrap items-center gap-2">
+                            {ev.title}
+                            {isDraft && (
+                              <span title="Only managers can see a draft" className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-500 inline-flex items-center gap-1">
+                                <FilePen className="w-3 h-3" /> Draft · not visible to workers
+                              </span>
+                            )}
+                          </div>
+                          {ev.cancelled && (
+                            <div className="text-[11px] text-rose-300">Cancelled{ev.cancel_reason ? `: ${ev.cancel_reason}` : ''}</div>
+```
+
+**Edit 7.** Find:
+```jsx
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 self-start md:self-auto relative">
+                          <button
+                            type="button"
+```
+Replace with:
+```jsx
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto relative">
+                          <button
+                            type="button"
+```
+
+**Edit 8.** Find:
+```jsx
+                            <Eye className="w-3.5 h-3.5" /> Details
+                          </button>
+                          {onEditEvent && ev.event_id && !ev.cancelled && (
+                            <button
+```
+Replace with:
+```jsx
+                            <Eye className="w-3.5 h-3.5" /> Details
+                          </button>
+                          {isDraft && onPublishEvent && !ev.cancelled && (
+                            <button
+                              type="button"
+                              onClick={() => onPublishEvent(ev)}
+                              disabled={!upcoming}
+                              title={upcoming ? 'Workers can see and request it, and your team is told' : 'The start time has passed. Edit the date first.'}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition inline-flex items-center gap-1.5 disabled:opacity-40"
+                            >
+                              <Send className="w-3.5 h-3.5" /> Publish
+                            </button>
+                          )}
+                          {onEditEvent && ev.event_id && !ev.cancelled && (
+                            <button
+```
+
+**Edit 9.** Find:
+```jsx
+                          {menuKey === ev.event_key && (
+                            <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
+                              {onTimesheet && (
+                                <button type="button" onClick={() => { setMenuKey(null); onTimesheet(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+```
+Replace with:
+```jsx
+                          {menuKey === ev.event_key && (
+                            <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
+                              {onTimesheet && !isDraft && (
+                                <button type="button" onClick={() => { setMenuKey(null); onTimesheet(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+```
+
+**Edit 10.** Find:
+```jsx
+                                </button>
+                              )}
+                              {onCancelEvent && !ev.cancelled && new Date(ev.start_time) > new Date() && (
+                                <button type="button" onClick={() => { setMenuKey(null); onCancelEvent(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
+```
+Replace with:
+```jsx
+                                </button>
+                              )}
+                              {onSaveTemplate && (
+                                <button type="button" onClick={() => { setMenuKey(null); onSaveTemplate(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+                                  <LayoutTemplate className="w-3.5 h-3.5" /> Save as template
+                                </button>
+                              )}
+                              {onUnpublishEvent && !isDraft && !ev.cancelled && upcoming && nobody && (
+                                <button type="button" onClick={() => { setMenuKey(null); onUnpublishEvent(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+                                  <Undo2 className="w-3.5 h-3.5" /> Move back to drafts
+                                </button>
+                              )}
+                              {onDeleteDraft && isDraft && (
+                                <button type="button" onClick={() => { setMenuKey(null); onDeleteDraft(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
+                                  <Trash2 className="w-3.5 h-3.5" /> Delete draft
+                                </button>
+                              )}
+                              {onCancelEvent && !isDraft && !ev.cancelled && new Date(ev.start_time) > new Date() && (
+                                <button type="button" onClick={() => { setMenuKey(null); onCancelEvent(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
+```
+
+**Edit 11.** Find:
+```jsx
+                                {pos.status === 'CANCELLED' && <span className="text-[10px] text-rose-300">cancelled</span>}
+                              </div>
+                              <div className="md:col-span-3 flex items-center gap-1.5 text-emerald-400 font-semibold">
+                                <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
+                                {pos.hide_rate && <EyeOff className="w-3 h-3 text-slate-500" title="Pay hidden from workers" />}
+```
+Replace with:
+```jsx
+                                {pos.status === 'CANCELLED' && <span className="text-[10px] text-rose-300">cancelled</span>}
+                              </div>
+                              <div className="md:col-span-3 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0 text-emerald-400 font-semibold whitespace-nowrap">
+                                <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
+                                {pos.hide_rate && <EyeOff className="w-3 h-3 text-slate-500" title="Pay hidden from workers" />}
+```
+
+---
+
+## C6. `frontend/src/components/EventRosterModal.jsx` (EDITS)
+
+**Edit 1.** Find:
+```jsx
+          </div>
+        )}
+        {event.positions.map((pos) => {
+          const isFull = pos.assigned.length >= pos.capacity;
+          const canStaff = venueId && !event.cancelled && pos.status !== 'CANCELLED' && !isFull && !ended;
+          return (
+            <div key={pos.shift_id} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+```
+Replace with:
+```jsx
+          </div>
+        )}
+        {event.status === 'draft' && (
+          <div className="p-3 rounded-xl text-xs border border-dashed border-slate-500 bg-slate-800/50 text-slate-200">
+            This is a <strong>draft</strong>. Workers can't see it, and you can't assign or offer spots until it's published.
+          </div>
+        )}
+        {event.positions.map((pos) => {
+          const isFull = pos.assigned.length >= pos.capacity;
+          const isDraft = event.status === 'draft';   // Phase 29.3: publish before staffing
+          const canStaff = venueId && !event.cancelled && !isDraft && pos.status !== 'CANCELLED' && !isFull && !ended;
+          return (
+            <div key={pos.shift_id} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+```
+
+**Edit 2.** Find:
+```jsx
+                  </button>
+                )}
+                {onCancelPosition && !event.cancelled && pos.status !== 'CANCELLED' && (
+                  <button type="button" onClick={() => onCancelPosition(pos, event)}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-300 text-xs border border-rose-600/30 inline-flex items-center gap-1">
+```
+Replace with:
+```jsx
+                  </button>
+                )}
+                {onCancelPosition && !event.cancelled && !isDraft && pos.status !== 'CANCELLED' && (
+                  <button type="button" onClick={() => onCancelPosition(pos, event)}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-300 text-xs border border-rose-600/30 inline-flex items-center gap-1">
+```
+
+---
+
+## C7. `frontend/src/components/DuplicateEventModal.jsx` (EDITS)
+
+**Edit 1.** Find:
+```jsx
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const dates = useMemo(() => {
+```
+Replace with:
+```jsx
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const sourceDraft = event.status === 'draft';               // Phase 29.3: copies of a draft are drafts
+  const [asDraft, setAsDraft] = useState(sourceDraft);
+
+  const dates = useMemo(() => {
+```
+
+**Edit 2.** Find:
+```jsx
+    setSaving(true);
+    try {
+      const res = await api.post(`/events/${event.event_id}/duplicate`, { dates });
+      onDone && onDone(res.data.count);
+      onClose();
+    } catch (err) {
+```
+Replace with:
+```jsx
+    setSaving(true);
+    try {
+      const res = await api.post(`/events/${event.event_id}/duplicate`, { dates, as_draft: asDraft });
+      onDone && onDone(res.data.count, asDraft);
+      onClose();
+    } catch (err) {
+```
+
+**Edit 3.** Find:
+```jsx
+      <button type="button" onClick={submit} disabled={saving}
+        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+        {saving ? 'Copying…' : `Create ${dates.length} ${dates.length === 1 ? 'copy' : 'copies'}`}
+      </button>
+    </>
+```
+Replace with:
+```jsx
+      <button type="button" onClick={submit} disabled={saving}
+        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+        {saving ? 'Copying…' : `Create ${dates.length} ${asDraft ? 'draft ' : ''}${dates.length === 1 ? 'copy' : 'copies'}`}
+      </button>
+    </>
+```
+
+**Edit 4.** Find:
+```jsx
+        )}
+      </div>
+      <p className="text-[11px] text-slate-500 mt-3">
+        Same start time ({timeZone || 'venue'} time), positions, pay, notes and approval settings. Nobody is booked on the copies.
+```
+Replace with:
+```jsx
+        )}
+      </div>
+      <label className={`mt-3 flex items-start gap-2 text-xs ${sourceDraft ? 'text-slate-500' : 'text-slate-300'}`}>
+        <input type="checkbox" checked={asDraft} disabled={sourceDraft} onChange={(e) => setAsDraft(e.target.checked)}
+          className="mt-0.5 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+        <span>
+          Create the copies as drafts (workers can't see them until you publish each one)
+          {sourceDraft && <span className="block text-[10px]">This event is a draft, so its copies are drafts too.</span>}
+        </span>
+      </label>
+      <p className="text-[11px] text-slate-500 mt-3">
+        Same start time ({timeZone || 'venue'} time), positions, pay, notes and approval settings. Nobody is booked on the copies.
+```
+
+---
+
+## C8. `frontend/src/pages/VenueManagerDashboard.jsx` (EDITS)
+Publish / Move back to drafts / Delete draft / Save as template handlers, the **Templates** header button, and template **Use** → Post a Shift.
+
+**Edit 1.** Find:
+```jsx
+import api from '../api/client';
+import {
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X,
+} from 'lucide-react';
+import PostedShiftsBoard from '../components/PostedShiftsBoard';
+```
+Replace with:
+```jsx
+import api from '../api/client';
+import {
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X, LayoutTemplate,
+} from 'lucide-react';
+import PostedShiftsBoard from '../components/PostedShiftsBoard';
+```
+
+**Edit 2.** Find:
+```jsx
+import ReasonDialog from '../components/ReasonDialog';
+import DuplicateEventModal from '../components/DuplicateEventModal';
+import TimesheetModal from '../components/TimesheetModal';
+import TeamModal from '../components/TeamModal';
+```
+Replace with:
+```jsx
+import ReasonDialog from '../components/ReasonDialog';
+import DuplicateEventModal from '../components/DuplicateEventModal';
+import ConfirmDialog from '../components/ConfirmDialog';
+import TimesheetModal from '../components/TimesheetModal';
+import TeamModal from '../components/TeamModal';
+```
+
+**Edit 3.** Find:
+```jsx
+  const [venuePositions, setVenuePositions] = useState([]);
+  const [showVenueSettings, setShowVenueSettings] = useState(false);
+  const [eventForm, setEventForm] = useState(null); // { mode: 'create' } | { mode: 'edit', eventId }
+  const [reasonDialog, setReasonDialog] = useState(null);
+  const [dupEvent, setDupEvent] = useState(null);
+```
+Replace with:
+```jsx
+  const [venuePositions, setVenuePositions] = useState([]);
+  const [showVenueSettings, setShowVenueSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('details');   // Phase 29.3
+  const [confirmDialog, setConfirmDialog] = useState(null);    // Phase 29.3
+  const [eventForm, setEventForm] = useState(null); // { mode: 'create', templateId? } | { mode: 'edit', eventId }
+  const [reasonDialog, setReasonDialog] = useState(null);
+  const [dupEvent, setDupEvent] = useState(null);
+```
+
+**Edit 4.** Find:
+```jsx
+    });
+
+  const askCancelPosition = (pos, ev) =>
+    setReasonDialog({
+```
+Replace with:
+```jsx
+    });
+
+  // Phase 29.3: drafts and templates
+  const publishEvent = async (ev) => {
+    setActionLoading(`publish-${ev.event_id}`);
+    try {
+      await api.post(`/events/${ev.event_id}/publish`);
+      afterChange(`Published “${ev.title}”. Workers can see it and your team has been told.`);
+    } catch (err) {
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Could not publish.' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const askUnpublish = (ev) =>
+    setConfirmDialog({
+      title: 'Move back to drafts?',
+      message: `Workers will stop seeing “${ev.title}” until you publish it again. Nobody has requested it yet.`,
+      confirmLabel: 'Move to drafts',
+      onConfirm: async () => {
+        await api.post(`/events/${ev.event_id}/unpublish`);
+        afterChange(`“${ev.title}” is a draft again.`);
+      },
+    });
+
+  const askDeleteDraft = (ev) =>
+    setConfirmDialog({
+      title: 'Delete this draft?',
+      message: `“${ev.title}” and its positions will be deleted. Nobody was told about it, so nobody is affected.`,
+      confirmLabel: 'Delete draft',
+      danger: true,
+      onConfirm: async () => {
+        await api.delete(`/events/${ev.event_id}`);
+        afterChange('Draft deleted.');
+      },
+    });
+
+  const askSaveTemplate = (ev) =>
+    setConfirmDialog({
+      title: 'Save as a template',
+      message: 'Saves the times, where, notes and positions (with pay) so you can post this event again in a few clicks. Dates and people are not saved.',
+      confirmLabel: 'Save template',
+      input: { label: 'Template name', placeholder: 'e.g. Friday Jazz', initial: ev.title, required: true },
+      onConfirm: async (name) => {
+        await api.post(`/events/${ev.event_id}/save-as-template`, { name });
+        setNotification({ type: 'success', message: `Saved the template “${name}”. Pick it next time you post a shift.` });
+      },
+    });
+
+  const openTemplates = () => {
+    setSettingsTab('templates');
+    setShowVenueSettings(true);
+  };
+
+  const askCancelPosition = (pos, ev) =>
+    setReasonDialog({
+```
+
+**Edit 5.** Find:
+```jsx
+              <Plus className="w-4 h-4" /> Post a Shift
+            </button>
+            <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
+              <UserPlus className="w-4 h-4 text-emerald-400" /> Team
+            </button>
+            <button type="button" onClick={() => setShowVenueSettings(true)} disabled={!venueDetails} className={headerBtn}>
+              <Settings className="w-4 h-4 text-amber-400" /> Settings
+            </button>
+```
+Replace with:
+```jsx
+              <Plus className="w-4 h-4" /> Post a Shift
+            </button>
+            <button type="button" onClick={openTemplates} disabled={!venueDetails} className={headerBtn}>
+              <LayoutTemplate className="w-4 h-4 text-indigo-300" /> Templates
+            </button>
+            <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
+              <UserPlus className="w-4 h-4 text-emerald-400" /> Team
+            </button>
+            <button type="button" onClick={() => { setSettingsTab('details'); setShowVenueSettings(true); }} disabled={!venueDetails} className={headerBtn}>
+              <Settings className="w-4 h-4 text-amber-400" /> Settings
+            </button>
+```
+
+**Edit 6.** Find:
+```jsx
+              onCancelEvent={askCancelEvent}
+              onDuplicateEvent={(ev) => setDupEvent(ev)}
+              onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
+              onRemovePerson={askRemovePerson}
+```
+Replace with:
+```jsx
+              onCancelEvent={askCancelEvent}
+              onDuplicateEvent={(ev) => setDupEvent(ev)}
+              onPublishEvent={publishEvent}
+              onUnpublishEvent={askUnpublish}
+              onDeleteDraft={askDeleteDraft}
+              onSaveTemplate={askSaveTemplate}
+              onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
+              onRemovePerson={askRemovePerson}
+```
+
+**Edit 7.** Find:
+```jsx
+          mode={eventForm.mode}
+          eventId={eventForm.eventId}
+          venue={venueDetails}
+          positions={venuePositions}
+          onClose={() => setEventForm(null)}
+          onSaved={() => {
+            setEventForm(null);
+            fetchVenueData(currentVenueId);
+            setNotification({
+              type: 'success',
+              message: eventForm.mode === 'edit' ? 'Event updated.' : 'Event and shifts published.',
+            });
+            loadVenuePositions(currentVenueId);
+```
+Replace with:
+```jsx
+          mode={eventForm.mode}
+          eventId={eventForm.eventId}
+          templateId={eventForm.templateId}
+          venue={venueDetails}
+          positions={venuePositions}
+          onClose={() => setEventForm(null)}
+          onSaved={(saved, info = {}) => {
+            setEventForm(null);
+            fetchVenueData(currentVenueId);
+            setNotification({
+              type: 'success',
+              message: saved?.status === 'draft'
+                ? 'Draft saved. Only managers can see it. Publish it from Posted Shifts when it’s ready.'
+                : info.published
+                  ? 'Published. Workers can see it and your team has been told.'
+                  : 'Event updated.',
+            });
+            loadVenuePositions(currentVenueId);
+```
+
+**Edit 8.** Find:
+```jsx
+
+      {reasonDialog && <ReasonDialog {...reasonDialog} onClose={() => setReasonDialog(null)} />}
+      {dupEvent && (
+        <DuplicateEventModal
+          event={dupEvent}
+          timeZone={tz}
+          onClose={() => setDupEvent(null)}
+          onDone={(count) => afterChange(`Created ${count} ${count === 1 ? 'copy' : 'copies'}.`)}
+        />
+      )}
+```
+Replace with:
+```jsx
+
+      {reasonDialog && <ReasonDialog {...reasonDialog} onClose={() => setReasonDialog(null)} />}
+      {confirmDialog && <ConfirmDialog {...confirmDialog} onClose={() => setConfirmDialog(null)} />}
+      {dupEvent && (
+        <DuplicateEventModal
+          event={dupEvent}
+          timeZone={tz}
+          onClose={() => setDupEvent(null)}
+          onDone={(count, asDraft) => afterChange(`Created ${count} ${asDraft ? 'draft ' : ''}${count === 1 ? 'copy' : 'copies'}.`)}
+        />
+      )}
+```
+
+**Edit 9.** Find:
+```jsx
+          mode="edit"
+          venue={venueDetails}
+          onClose={() => {
+            setShowVenueSettings(false);
+```
+Replace with:
+```jsx
+          mode="edit"
+          venue={venueDetails}
+          initialTab={settingsTab}
+          onUseTemplate={(tpl) => {
+            setShowVenueSettings(false);
+            loadVenuePositions(currentVenueId);
+            setEventForm({ mode: 'create', templateId: tpl.id });
+          }}
+          onClose={() => {
+            setShowVenueSettings(false);
 ```
 
 ---
@@ -3827,21 +3344,32 @@ docker compose up -d --build
 * **Keep current data:**
 ```bash
 docker compose exec -T database psql -U shiftboard_user -d shiftboard <<'SQL'
-CREATE TABLE IF NOT EXISTS admin_audit (
+ALTER TABLE shift_events ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'published';
+ALTER TABLE shift_events ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+UPDATE shift_events SET published_at = created_at WHERE published_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS event_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(40) NOT NULL,
-    target_type VARCHAR(20) NOT NULL,
-    target_id UUID,
-    summary VARCHAR(400) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    name VARCHAR(120) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    start_local VARCHAR(5) NOT NULL,
+    end_local VARCHAR(5) NOT NULL,
+    notes TEXT,
+    staff_notes TEXT,
+    location_id UUID REFERENCES venue_locations(id) ON DELETE SET NULL,
+    geofence_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
+    location_staff_notes TEXT,
+    positions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_event_templates_venue ON event_templates(venue_id);
 SQL
 docker compose up -d --build
 ```
-(Use the database service name, user and DB from `docker-compose.yml` if they differ.)
+(Use the database service name, user and DB from `docker-compose.yml` if they differ.) Existing events all stay published.
 
 If the page is blank or shows "Invalid hook call" after the rebuild:
 ```bash
@@ -3850,48 +3378,41 @@ docker compose exec frontend rm -rf node_modules/.vite && docker compose restart
 then hard-refresh.
 
 ### Checklist
-Sign in as a platform admin and open `/admin`.
+Sign in as the venue manager (or as an admin with the venue picked).
 
-1. **Tabs:** Overview, Venues, People, Activity and System each load. The URL shows `?tab=…`, and reloading keeps the tab.
-2. **Overview:**
-   * **Needs attention** lists real items (e.g. "Email is in console mode…", any venue with no manager). Clicking a venue item opens its drawer; clicking a delivery or system item opens System.
-   * The tiles read "N workers · N managers · N admins" (singular when 1).
-3. **Venues:**
-   * The **Clock-in** column says "Anywhere" unless the venue turned on on-site clock-in.
-   * **Booking** shows the venue's real policy.
-   * A venue without a manager has a **No manager** chip.
-   * **Dashboard** opens `/venue` on that venue, and the navbar picker switches to it.
-4. **Venue drawer:**
-   * Click a row. Managers, the activity log and admin changes show.
-   * **Team** and **Settings** open the usual modals.
-   * Esc closes the drawer (and only the top modal when one is open).
-5. **Safe delete:**
-   * In a test venue's drawer, **Delete venue…**. The button stays disabled until the name is typed.
-   * For a venue where someone has clocked in, deleting without the checkbox shows "…payroll history…" (409). With the box ticked it deletes.
-   * The navbar venue list updates without a reload.
-6. **People:**
-   * The search matches name, email or phone. Paging appears past 25 people.
-   * Filter by a venue: its managers, team *and* people who requested there appear.
-   * A worker who has worked a venue but isn't on its team shows a **grey** chip for it (not "None assigned").
-7. **Person drawer:**
-   * Change the phone and last name, then **Save changes**. A banner confirms, and the Admin changes list in the drawer shows "<name> (<email>): profile edited".
-   * Change an email to one that's taken: "Another account already uses …".
-   * Esc closes the drawer.
-   * **Reset password** (password accounts only), **Deactivate** / **Reactivate**, and **Delete…** (type the email) all work. You can't act on your own account.
-8. **New user:**
-   * Leave "Generate a temporary one" selected. The result screen shows the password once, with **Copy password** and **Copy sign-in message**.
-   * Sign in with it in a private window.
-9. **Activity tab:**
-   * **Venue activity** shows lines from every venue with the venue name. The venue filter and chips work, and clicking an event line opens it in the manager dashboard.
-   * **Admin changes** shows the actions from steps 5–8.
-10. **System:**
-    * Configuration rows are correct for your `.secrets` (email/SMS console mode shows an amber warning).
-    * **Background worker** says Running with a recent heartbeat within about a minute of startup. (If it says "Turned off", `NOTIFICATIONS_WORKER_ENABLED` is false.)
-    * **Send a test email** to yourself: a banner confirms, and in console mode the email appears in `docker compose logs backend`.
-    * Failed deliveries (if any) show **Retry**. It moves them back to Queued.
-11. **Managers and workers** get **403** on every `/api/admin/*` endpoint above.
-
-### Notes
-* Deleting a venue doesn't notify people booked on its upcoming events. The dialog warns about this. Cancel the events first if people need telling.
-* The **Same name** flag only compares people on the current page. Use the search box to check a name across everyone.
-* Heartbeat and worker health are best-effort. If Redis is down, the heartbeat shows "None recorded yet" even though the worker still runs (single-process fallback).
+1. **Save as draft:**
+   * **Post a Shift**, fill it in, then **Save as draft**. The banner says "Draft saved…".
+   * The card has a dashed border and **Draft · not visible to workers**, plus a green **Publish** button.
+   * The **Drafts** filter shows only drafts.
+2. **Workers can't see it:**
+   * As a worker on the team, the draft isn't in the shift list, on the venue's public page or in the bell.
+   * Asking the API for the draft as a worker (`GET /api/listings/<draft id>`) returns 404.
+3. **No staffing on drafts:** the draft's **Details** says it's a draft and shows no **Assign / Offer** or **Cancel position**.
+4. **Edit a draft:**
+   * The modal is titled "Edit draft", with **Save draft** and **Save & publish**.
+   * Changing the time doesn't mark anything "Updated".
+5. **Publish:**
+   * Click **Publish** on the card. The banner says your team has been told.
+   * Team members get "New shift at …", and the event appears for workers.
+   * The Activity log shows "Saved a draft…" and then "Published…".
+6. **Move back to drafts:**
+   * On a published event nobody has touched, ⋯ → **Move back to drafts** hides it again.
+   * Once someone has requested it, that menu item is gone. The API refuses it too.
+7. **Delete draft:** ⋯ → **Delete draft** removes it. The log says "Deleted the draft …".
+8. **Past draft:** a draft whose start has passed has a disabled Publish button. Editing the date fixes it.
+9. **Duplicate:**
+   * ⋯ → Duplicate / repeat has **Create the copies as drafts**. With it ticked, the copies appear under Drafts and nobody is told.
+   * For a draft the box is ticked and locked.
+10. **Templates tab:**
+    * **Templates** in the header, or Settings → **Event templates**.
+    * **New template**: name "Friday Jazz", 18:00–23:30, two positions, then **Save template**. It appears as a card.
+    * An end time earlier than the start shows a moon icon (overnight).
+11. **Use a template:**
+    * **Use** on the card opens Post a Shift filled in: name, times on tomorrow's date, notes and positions.
+    * Change the date: the end time moves with it. Then publish or save a draft.
+12. **Start from a template:** in a fresh Post a Shift, the purple **Start from a template** box fills everything in when you pick one.
+13. **Save as template:** ⋯ → **Save as template** on any event asks for a name, then the template appears in the tab with the event's times.
+14. **Edit and delete a template:** **Edit** opens the same form with name and clock times; **Delete** asks "Delete?" inline. Neither changes events already posted.
+15. **Admin:**
+    * From the admin console's venue drawer → Settings, the Event templates tab is there (no **Use** button).
+    * Overview numbers don't count drafts.

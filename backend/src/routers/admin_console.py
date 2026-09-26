@@ -170,10 +170,11 @@ async def overview(current_user: User = Depends(require_admin), db: AsyncSession
     new_7d = int(await db.scalar(select(func.count(User.id)).where(User.created_at >= now - timedelta(days=7))) or 0)
     venues = (await db.execute(select(Venue).order_by(Venue.name))).scalars().all()
 
-    live = and_(func.upper(Shift.status) != "CANCELLED", Shift.start_time >= now)
+    live = and_(func.upper(Shift.status).notin_(("CANCELLED", "DRAFT")), Shift.start_time >= now)   # Phase 29.3: not drafts
     events_7d = int(await db.scalar(
         select(func.count(ShiftEvent.id)).where(
-            ShiftEvent.cancelled_at.is_(None), ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=7))
+            ShiftEvent.cancelled_at.is_(None), ShiftEvent.status != "draft",
+            ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=7))
     ) or 0)
     cap, filled = (await db.execute(
         select(func.coalesce(func.sum(Shift.capacity), 0), func.coalesce(func.sum(Shift.spots_filled), 0))
@@ -267,12 +268,13 @@ async def venues_summary(current_user: User = Depends(require_admin), db: AsyncS
     )).all())
     events = dict((await db.execute(
         select(ShiftEvent.venue_id, func.count(ShiftEvent.id)).where(
-            ShiftEvent.cancelled_at.is_(None), ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=30))
+            ShiftEvent.cancelled_at.is_(None), ShiftEvent.status != "draft",
+            ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=30))
         .group_by(ShiftEvent.venue_id)
     )).all())
     open7 = dict((await db.execute(
         select(Shift.venue_id, func.sum(Shift.capacity - Shift.spots_filled)).where(
-            func.upper(Shift.status) != "CANCELLED", Shift.start_time >= now, Shift.start_time < now + timedelta(days=7),
+            func.upper(Shift.status).notin_(("CANCELLED", "DRAFT")), Shift.start_time >= now, Shift.start_time < now + timedelta(days=7),
             Shift.spots_filled < Shift.capacity)
         .group_by(Shift.venue_id)
     )).all())

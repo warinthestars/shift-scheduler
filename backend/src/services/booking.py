@@ -96,6 +96,8 @@ async def request_position(
         shift_status = (shift.status or "").upper()
         if shift_status == "CANCELLED":
             raise HTTPException(status_code=400, detail="This position was cancelled.")
+        if shift_status == "DRAFT":                                                   # Phase 29.3
+            raise HTTPException(status_code=400, detail="This event isn't open for requests.")
         if as_utc(shift.start_time) <= datetime.now(timezone.utc):
             raise HTTPException(status_code=400, detail="This shift has already started.")
         if await is_blocked(db, shift.venue_id, worker.id):          # Phase 29

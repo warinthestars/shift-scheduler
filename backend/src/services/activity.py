@@ -51,6 +51,12 @@ CATEGORY = {
     "event_cancelled": "changes",
     "position_cancelled": "changes",
     "event_duplicated": "changes",
+    "event_drafted": "changes",          # Phase 29.3
+    "event_published": "changes",
+    "event_unpublished": "changes",
+    "event_discarded": "changes",
+    "template_saved": "changes",
+    "template_deleted": "changes",
     "venue_settings": "changes",
     "not_clocked_in": "alerts",
 }
@@ -169,6 +175,9 @@ async def _for_event(db: AsyncSession, kind: str, event_id, actor_id, extra: str
         "event_cancelled": f"Cancelled {what}",
         "position_cancelled": f"Cancelled a position in {what}",
         "event_duplicated": f"Copied {what}",
+        "event_drafted": f"Saved a draft: {what}",                 # Phase 29.3
+        "event_published": f"Published {what}",
+        "event_unpublished": f"Moved {what} back to drafts",
     }.get(kind, what)
     if extra:
         text += f" · {extra}"

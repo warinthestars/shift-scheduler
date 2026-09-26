@@ -5,7 +5,7 @@ from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, Numeric,
     DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
 )
-from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION
+from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
 from sqlalchemy.orm import relationship
 from src.database import Base
 
@@ -254,10 +254,33 @@ class ShiftEvent(Base):
     location_staff_notes = Column(Text, nullable=True)                     # Phase 27: event-specific, booked staff only
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     cancel_reason = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="published")      # Phase 29.3: draft | published
+    published_at = Column(DateTime(timezone=True), nullable=True)          # Phase 29.3
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     shifts = relationship("Shift", back_populates="event", cascade="all, delete-orphan")
+
+
+class EventTemplate(Base):
+    """Phase 29.3: A venue's reusable event setup. Times are venue-local 'HH:MM' (end earlier = next day)."""
+    __tablename__ = "event_templates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String(120), nullable=False)
+    title = Column(String(255), nullable=False)
+    start_local = Column(String(5), nullable=False)
+    end_local = Column(String(5), nullable=False)
+    notes = Column(Text, nullable=True)
+    staff_notes = Column(Text, nullable=True)
+    location_id = Column(UUID(as_uuid=True), ForeignKey("venue_locations.id", ondelete="SET NULL"), nullable=True)
+    geofence_mode = Column(String(20), nullable=False, default="venue_default")
+    location_staff_notes = Column(Text, nullable=True)
+    positions = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 class Shift(Base):
     __tablename__ = "shifts"

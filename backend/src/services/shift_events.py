@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, func, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import ShiftEvent, Shift, ShiftRequest, Venue, User, VenueLocation
+from src.models import ShiftEvent, Shift, ShiftRequest, ShiftOffer, Venue, User, VenueLocation
 from src.schemas import (
     EventCreate, EventUpdate, EventPositionInput, EventDetail, EventDetailPosition,
 )
@@ -23,6 +23,10 @@ VALID_APPROVAL_MODES = ("venue_default", "auto", "manual")
 ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
 PENDING_STATUSES = ("pending", "pending_manager_approval")
 ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
+# Phase 29.3: a draft event's positions carry shift status DRAFT, so every worker-facing query that
+# only looks at OPEN positions (listings, directory, offers, new-shift alerts) skips them.
+DRAFT = "draft"
+PUBLISHED = "published"
 
 
 def _as_utc(dt):
@@ -144,6 +148,7 @@ async def create_event_with_positions(
     for p in data.positions:
         _validate_position(p)
     mode = validate_geofence_mode(data.geofence_mode)
+    is_draft = not getattr(data, "publish", True)          # Phase 29.3
     try:
         # Phase 27: where is it? (a typed-in new location is saved to the venue's list here)
         location = await resolve_event_location(
@@ -162,11 +167,14 @@ async def create_event_with_positions(
             location_id=location.id if location is not None else None,
             geofence_mode=mode,
             location_staff_notes=_clean(data.location_staff_notes),
+            status=DRAFT if is_draft else PUBLISHED,                                   # Phase 29.3
+            published_at=None if is_draft else datetime.now(timezone.utc),
         )
         db.add(event)
         await db.flush()
         for p in data.positions:
-            s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0, status="OPEN")
+            s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0,
+                      status="DRAFT" if is_draft else "OPEN")
             _apply_position(s, p, event)
             db.add(s)
         await db.commit()
@@ -216,6 +224,7 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
                     detail=f"'{p.role_type}' already has {a} people booked, so it needs at least {a} spots."
                 )
 
+    is_draft = (event.status or PUBLISHED) == DRAFT      # Phase 29.3: nobody to tell about draft edits
     try:
         # Phase 26.2: work out what changed so booked workers are told
         venue = await db.scalar(select(Venue).where(Venue.id == event.venue_id))
@@ -262,7 +271,7 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
         event.end_time = new_end
         event.notes = _clean(data.notes)
         event.staff_notes = _clean(data.staff_notes)
-        if changes:
+        if changes and not is_draft:
             event.info_updated_at = datetime.now(timezone.utc)
             event.info_change = "; ".join(changes)
 
@@ -273,13 +282,14 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
         for p in data.positions:
             if p.shift_id:
                 s = by_id[p.shift_id]
-                _apply_position(s, p, event, track_changes=True)
+                _apply_position(s, p, event, track_changes=not is_draft)
                 if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
                     s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
             else:
                 s = Shift(
                     venue_id=event.venue_id, event_id=event.id,
-                    created_by_user_id=event.created_by_user_id, spots_filled=0, status="OPEN",
+                    created_by_user_id=event.created_by_user_id, spots_filled=0,
+                    status="DRAFT" if is_draft else "OPEN",
                 )
                 _apply_position(s, p, event)
                 db.add(s)
@@ -317,6 +327,8 @@ async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail
         location_staff_notes=event.location_staff_notes,
         cancelled=event.cancelled_at is not None,
         cancel_reason=event.cancel_reason,
+        status=event.status or PUBLISHED,
+        published_at=event.published_at,
         positions=[
             EventDetailPosition(
                 shift_id=s.id,
@@ -429,8 +441,12 @@ async def cancel_shifts(db: AsyncSession, event: ShiftEvent, shift_ids: Optional
         raise HTTPException(status_code=500, detail=f"Failed to cancel: {str(e)}")
 
 
-async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date]) -> List[ShiftEvent]:
-    """Copy an event to each date, keeping the same local start time in the venue's timezone."""
+async def duplicate_event(
+    db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date], as_draft: bool = False,
+) -> List[ShiftEvent]:
+    """Copy an event to each date, keeping the same local start time in the venue's timezone.
+    Phase 29.3: copies are drafts when as_draft is set or the source is a draft."""
+    as_draft = as_draft or (event.status or PUBLISHED) == DRAFT
     unique_dates = sorted(set(dates or []))
     if not unique_dates:
         raise HTTPException(status_code=400, detail="Pick at least one date.")
@@ -486,6 +502,88 @@ async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, use
             geofence_mode=event.geofence_mode or "venue_default",
             location_staff_notes=event.location_staff_notes,
             positions=positions,
+            publish=not as_draft,
         ), allow_archived_location=True)
         created.append(ev)
     return created
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.3: Draft / publish
+# ------------------------------------------------------------------------------
+BLOCKING_REQUEST_STATUSES = ACTIVE_REQUEST_STATUSES + ("checked_in", "completed")
+
+
+async def publish_event(db: AsyncSession, event: ShiftEvent) -> None:
+    """Draft -> live. Positions become OPEN; the caller tells the team (new_event_posted)."""
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="This event was cancelled.")
+    if (event.status or PUBLISHED) != DRAFT:
+        raise HTTPException(status_code=400, detail="This event is already published.")
+    now = datetime.now(timezone.utc)
+    if _as_utc(event.start_time) <= now:
+        raise HTTPException(status_code=400, detail="This draft's start time has passed. Change the date, then publish.")
+    shifts = (await db.execute(
+        select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
+    )).scalars().all()
+    if not shifts:
+        raise HTTPException(status_code=400, detail="Add at least one position before publishing.")
+    try:
+        for s in shifts:
+            s.status = "FILLED" if (s.spots_filled or 0) >= (s.capacity or 1) else "OPEN"
+        event.status = PUBLISHED
+        event.published_at = now
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to publish: {str(e)}")
+
+
+async def unpublish_event(db: AsyncSession, event: ShiftEvent) -> None:
+    """Live -> draft. Only while nobody has requested, been booked or been offered a spot."""
+    if event.cancelled_at is not None:
+        raise HTTPException(status_code=400, detail="This event was cancelled.")
+    if (event.status or PUBLISHED) == DRAFT:
+        raise HTTPException(status_code=400, detail="This event is already a draft.")
+    shift_ids = (await db.execute(select(Shift.id).where(Shift.event_id == event.id))).scalars().all()
+    if shift_ids:
+        people = await db.scalar(
+            select(func.count(ShiftRequest.id)).where(
+                ShiftRequest.shift_id.in_(shift_ids),
+                func.lower(ShiftRequest.status).in_(BLOCKING_REQUEST_STATUSES),
+            )
+        )
+        if people:
+            raise HTTPException(
+                status_code=400,
+                detail="People have already requested or been booked on this event, so it can't go back to a draft. Edit it, or cancel it instead.",
+            )
+        offers = await db.scalar(
+            select(func.count(ShiftOffer.id)).where(ShiftOffer.shift_id.in_(shift_ids), ShiftOffer.status == "pending")
+        )
+        if offers:
+            raise HTTPException(status_code=400, detail="Withdraw the open offers on this event first.")
+    try:
+        await db.execute(
+            update(Shift)
+            .where(Shift.event_id == event.id, func.upper(Shift.status).in_(("OPEN", "FILLED")))
+            .values(status="DRAFT")
+            .execution_options(synchronize_session=False)
+        )
+        event.status = DRAFT
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to move it back to drafts: {str(e)}")
+
+
+async def discard_draft(db: AsyncSession, event: ShiftEvent) -> None:
+    """Delete a draft outright (its positions cascade). Published events are cancelled, never deleted."""
+    if (event.status or PUBLISHED) != DRAFT:
+        raise HTTPException(status_code=400, detail="Only drafts can be deleted. Cancel a published event instead.")
+    try:
+        await db.execute(delete(ShiftEvent).where(ShiftEvent.id == event.id))
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete the draft: {str(e)}")

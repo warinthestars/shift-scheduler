@@ -108,9 +108,15 @@ export default function EventRosterModal({
             <button type="button" onClick={() => setFlash(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
           </div>
         )}
+        {event.status === 'draft' && (
+          <div className="p-3 rounded-xl text-xs border border-dashed border-slate-500 bg-slate-800/50 text-slate-200">
+            This is a <strong>draft</strong>. Workers can't see it, and you can't assign or offer spots until it's published.
+          </div>
+        )}
         {event.positions.map((pos) => {
           const isFull = pos.assigned.length >= pos.capacity;
-          const canStaff = venueId && !event.cancelled && pos.status !== 'CANCELLED' && !isFull && !ended;
+          const isDraft = event.status === 'draft';   // Phase 29.3: publish before staffing
+          const canStaff = venueId && !event.cancelled && !isDraft && pos.status !== 'CANCELLED' && !isFull && !ended;
           return (
             <div key={pos.shift_id} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
               <div className="px-4 py-3 bg-slate-800/40 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
@@ -130,7 +136,7 @@ export default function EventRosterModal({
                     <UserPlus className="w-3 h-3" /> Assign / Offer
                   </button>
                 )}
-                {onCancelPosition && !event.cancelled && pos.status !== 'CANCELLED' && (
+                {onCancelPosition && !event.cancelled && !isDraft && pos.status !== 'CANCELLED' && (
                   <button type="button" onClick={() => onCancelPosition(pos, event)}
                     className="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-300 text-xs border border-rose-600/30 inline-flex items-center gap-1">
                     <Ban className="w-3 h-3" /> Cancel position

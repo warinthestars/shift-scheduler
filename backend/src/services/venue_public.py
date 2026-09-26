@@ -48,7 +48,7 @@ async def build_directory(db: AsyncSession) -> List[VenueDirectoryItem]:
                 0,
             ).label("open_spots"),
             func.min(Shift.start_time).filter(Shift.start_time >= now).label("next_start"),
-        ).group_by(Shift.venue_id)
+        ).where(func.upper(Shift.status) != "DRAFT").group_by(Shift.venue_id)      # Phase 29.3: drafts are hidden
     )).all()
     stats = {r.venue_id: r for r in stats_rows}
 
@@ -116,7 +116,8 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
         select(
             func.count(distinct(func.concat(Shift.title, "|", Shift.start_time, "|", Shift.end_time))),
             func.coalesce(func.sum(Shift.capacity), 0),
-        ).where(Shift.venue_id == venue.id, Shift.start_time >= since, Shift.start_time < now)
+        ).where(Shift.venue_id == venue.id, Shift.start_time >= since, Shift.start_time < now,
+                func.upper(Shift.status) != "DRAFT")      # Phase 29.3
     )).one()
 
     spots_filled = await db.scalar(
@@ -174,7 +175,7 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
 
 async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
     now = datetime.now(timezone.utc)
-    q = select(Shift).where(Shift.venue_id == venue.id)
+    q = select(Shift).where(Shift.venue_id == venue.id, func.upper(Shift.status) != "DRAFT")   # Phase 29.3
     if scope == "past":
         q = q.where(
             Shift.end_time < now,
