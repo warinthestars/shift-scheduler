@@ -31,9 +31,10 @@ export default function Navbar() {
     setMobileOpen(false);
   }, [location.pathname]);
 
-  // Super Admin venue switcher data
+  // Super Admin venue switcher data (Phase 29.2: reloads when the admin console creates/deletes a venue)
   useEffect(() => {
-    if (isPlatformAdmin) {
+    if (!isPlatformAdmin) return undefined;
+    const load = () =>
       api
         .get('/admin/venues')
         .then((res) => {
@@ -45,10 +46,14 @@ export default function Navbar() {
           } else if (list.length > 0) {
             setSelectedVenueId(list[0].id);
             localStorage.setItem('shiftboard_admin_venue_id', list[0].id);
+          } else {
+            setSelectedVenueId('');
           }
         })
         .catch((err) => console.error('Failed to load admin venues for switcher:', err));
-    }
+    load();
+    window.addEventListener('admin_venues_changed', load);
+    return () => window.removeEventListener('admin_venues_changed', load);
   }, [isPlatformAdmin]);
 
   // Phase 28: stay in sync when a notification link switches the venue

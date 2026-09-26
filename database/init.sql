@@ -490,3 +490,18 @@ CREATE TABLE venue_activity (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_venue_activity_venue_created ON venue_activity(venue_id, created_at DESC);
+
+-- ==============================================================================
+-- Phase 29.2: Platform admin audit log (who changed users, venues and system settings)
+-- ==============================================================================
+CREATE TABLE admin_audit (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    action VARCHAR(40) NOT NULL,
+    target_type VARCHAR(20) NOT NULL,                     -- user | venue | system
+    target_id UUID,                                       -- no FK: the target may be deleted
+    summary VARCHAR(400) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_admin_audit_created ON admin_audit(created_at DESC);
+CREATE INDEX idx_admin_audit_target ON admin_audit(target_type, target_id);

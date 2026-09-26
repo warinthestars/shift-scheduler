@@ -187,6 +187,11 @@ async def run_tick() -> None:
         logger.exception("notification delivery failed")
 
 
+# Phase 29.2: health for the admin System page (this process) + a Redis heartbeat (any process)
+WORKER_STATE = {"started_at": None, "last_tick_at": None, "last_ok": None, "last_error": None, "ticks": 0}
+HEARTBEAT_KEY = "shiftboard:notification-worker:last-tick"
+
+
 async def _acquire_lock():
     """Returns (redis_client or None, got_lock: bool)."""
     try:
@@ -200,6 +205,7 @@ async def _acquire_lock():
 
 async def notification_worker_loop() -> None:
     logger.info("Notification worker started.")
+    WORKER_STATE["started_at"] = datetime.now(timezone.utc)
     await asyncio.sleep(10)   # let startup/seed finish
     while True:
         client = None
@@ -207,9 +213,17 @@ async def notification_worker_loop() -> None:
             client, got = await _acquire_lock()
             if got:
                 await run_tick()
+                now = datetime.now(timezone.utc)
+                WORKER_STATE.update(last_tick_at=now, last_ok=True, last_error=None, ticks=WORKER_STATE["ticks"] + 1)
+                if client is not None:
+                    try:
+                        await client.set(HEARTBEAT_KEY, now.isoformat(), ex=3600)
+                    except Exception:
+                        pass
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as e:
+            WORKER_STATE.update(last_tick_at=datetime.now(timezone.utc), last_ok=False, last_error=str(e)[:300])
             logger.exception("notification worker tick failed")
         finally:
             if client is not None:

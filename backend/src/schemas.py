@@ -101,6 +101,7 @@ class UserResponse(UserBase):
     created_at: datetime
     auth_source: Optional[str] = None     # "local" | "firebase" | "both"
     has_password: bool = False
+    temporary_password: Optional[str] = None   # Phase 29.2: only on admin create, when generated
 
     # For UI compatibility
     @property
@@ -116,7 +117,7 @@ class UserResponse(UserBase):
 
 class UserCreateAdmin(BaseModel):
     email: EmailStr
-    password: str
+    password: Optional[str] = None           # Phase 29.2: blank = generate a temporary password (returned once)
     first_name: str
     last_name: str
     phone: Optional[str] = None
@@ -126,6 +127,7 @@ class UserCreateAdmin(BaseModel):
 class UserUpdateAdmin(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    email: Optional[EmailStr] = None         # Phase 29.2
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
@@ -1356,3 +1358,195 @@ class ActivityItem(BaseModel):
     request_id: Optional[UUID] = None
     worker_id: Optional[UUID] = None
     created_at: datetime
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.2: Admin console
+# ------------------------------------------------------------------------------
+class AdminNameRef(BaseModel):
+    id: UUID
+    name: str
+
+
+class AdminPersonRef(BaseModel):
+    user_id: UUID
+    name: str
+    email: Optional[str] = None
+
+
+class AdminMembership(BaseModel):
+    venue_id: UUID
+    venue_name: str
+    status: str                              # active | removed | blocked | worked
+    source: Optional[str] = None
+    positions: List[str] = []
+    notes: Optional[str] = None              # the venue's private note (admins see all)
+
+
+class AdminUserRow(BaseModel):
+    id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: str
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    role: str
+    is_active: bool = True
+    auth_source: str = "local"               # local | firebase | both
+    has_password: bool = False
+    created_at: datetime
+    managed_venues: List[AdminNameRef] = []
+    memberships: List[AdminMembership] = []
+    shifts_worked: int = 0
+    upcoming: int = 0
+    aggregate_rating: float = 5.0
+    rating_count: int = 0
+    last_activity_at: Optional[datetime] = None
+    discoverable: str = "private"
+    always_admin: bool = False
+
+
+class AdminUserPage(BaseModel):
+    total: int
+    items: List[AdminUserRow]
+
+
+class AdminHistoryItem(BaseModel):
+    request_id: UUID
+    venue_id: UUID
+    venue_name: str
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    start_time: datetime
+    end_time: datetime
+    status: str
+
+
+class AdminAuditItem(BaseModel):
+    id: UUID
+    actor_name: Optional[str] = None
+    action: str
+    target_type: str
+    target_id: Optional[UUID] = None
+    summary: str
+    created_at: datetime
+
+
+class AdminUserDetail(BaseModel):
+    user: AdminUserRow
+    reliability: Optional[WorkerReliability] = None
+    email_enabled: bool = True
+    sms_enabled: bool = False
+    history: List[AdminHistoryItem] = []
+    audit: List[AdminAuditItem] = []
+
+
+class AdminVenueRow(BaseModel):
+    id: UUID
+    name: str
+    address: str
+    timezone: str = "America/New_York"
+    created_at: datetime
+    managers: List[AdminPersonRef] = []
+    team_active: int = 0
+    upcoming_events: int = 0                 # next 30 days, not cancelled
+    open_spots_7d: int = 0
+    pending_requests: int = 0
+    approval_policy: str = "team_auto"
+    geofence_enabled: bool = False
+    positions_count: int = 0
+    locations_count: int = 0
+    last_activity_at: Optional[datetime] = None
+    warnings: List[str] = []
+
+
+class AdminAttention(BaseModel):
+    level: str                               # error | warn | info
+    text: str
+    kind: str = "system"                     # venue | users | system | deliveries
+    target_id: Optional[UUID] = None
+
+
+class AdminActivityItem(BaseModel):
+    id: UUID
+    venue_id: UUID
+    venue_name: str
+    kind: str
+    category: str
+    summary: str
+    actor_name: Optional[str] = None
+    event_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class AdminOverview(BaseModel):
+    users_total: int = 0
+    workers: int = 0
+    managers: int = 0
+    admins: int = 0
+    deactivated: int = 0
+    new_users_7d: int = 0
+    venues: int = 0
+    events_next_7d: int = 0
+    spots_next_7d: int = 0
+    open_spots_next_7d: int = 0
+    fill_rate_next_7d: Optional[float] = None
+    urgent_open_spots_48h: int = 0
+    pending_requests: int = 0
+    stale_requests_24h: int = 0
+    pending_handoffs: int = 0
+    deliveries_sent_24h: int = 0
+    deliveries_failed_24h: int = 0
+    attention: List[AdminAttention] = []
+    recent_activity: List[AdminActivityItem] = []
+    recent_audit: List[AdminAuditItem] = []
+
+
+class AdminDeliveryStats(BaseModel):
+    pending: int = 0
+    sent_24h: int = 0
+    failed_24h: int = 0
+    failed_7d: int = 0
+    skipped_24h: int = 0
+
+
+class AdminSystem(BaseModel):
+    app_base_url: str = ""
+    app_base_url_ok: bool = False
+    email_provider: str = "console"
+    email_from: str = ""
+    email_ready: bool = False
+    sms_provider: str = "off"
+    sms_ready: bool = False
+    firebase: str = "off"                    # real | mock | off
+    self_registration: bool = True
+    always_admin_count: int = 0
+    worker_enabled: bool = True
+    worker_started_at: Optional[datetime] = None
+    worker_last_tick_at: Optional[datetime] = None
+    worker_last_ok: Optional[bool] = None
+    worker_last_error: Optional[str] = None
+    worker_heartbeat_at: Optional[datetime] = None   # from Redis (any backend process)
+    digest_hour: int = 9
+    deliveries: AdminDeliveryStats = AdminDeliveryStats()
+    table_counts: dict = {}
+
+
+class AdminDelivery(BaseModel):
+    id: UUID
+    channel: str
+    status: str
+    attempts: int = 0
+    last_error: Optional[str] = None
+    created_at: datetime
+    send_after: Optional[datetime] = None
+    user_id: UUID
+    user_name: str = ""
+    user_email: Optional[str] = None
+    title: str = ""
+
+
+class AdminTestEmail(BaseModel):
+    to: EmailStr

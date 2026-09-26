@@ -503,6 +503,18 @@ class ShiftOffer(Base):
     responded_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
+class AdminAudit(Base):
+    """Phase 29.2: one platform-admin action (user / venue / system)."""
+    __tablename__ = "admin_audit"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(40), nullable=False)
+    target_type = Column(String(20), nullable=False)          # user | venue | system
+    target_id = Column(UUID(as_uuid=True), nullable=True)      # no FK: the target may be deleted
+    summary = Column(String(400), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
 class VenueActivity(Base):
     """Phase 29.1: one line in a venue's activity log."""
     __tablename__ = "venue_activity"
