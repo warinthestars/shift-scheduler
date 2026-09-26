@@ -16,7 +16,7 @@ export const STATUS_LABELS = {
   checked_in: 'Clocked in',
   completed: 'Completed',
   rejected: 'Not selected',
-  dropped: 'Released',
+  dropped: 'You dropped this',
   transferred: 'Handed off',
   cancelled: 'Cancelled by venue',
   removed: 'Removed by manager',

@@ -139,6 +139,9 @@ async def build_listings(
 
         positions: List[ListingPosition] = []
         my_request: Optional[ListingMyRequest] = None
+        # Phase 29.4: did the viewer drop a position here? Then asking back needs a reason + approval.
+        drops = [as_utc(mine[s.id].dropped_at) for s in ev_shifts if s.id in mine and mine[s.id].dropped_at is not None]
+        dropped_here = max(drops) if drops else None
         for s in ev_shifts:
             r = mine.get(s.id)
             my_status = (r.status or "").lower() if r is not None else None
@@ -167,11 +170,12 @@ async def build_listings(
                 capacity=cap,
                 spots_left=left,
                 status="OPEN" if is_open else "FILLED",
-                booking="instant" if decision == RequestStatus.APPROVED else "approval",
+                booking="instant" if decision == RequestStatus.APPROVED and dropped_here is None else "approval",
                 est_pay_min=round(rate * hours, 2) if rate is not None else None,
                 est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
                 my_status=my_status,
                 my_status_reason=r.status_reason if r is not None else None,
+                my_dropped_at=r.dropped_at if r is not None and my_status == "dropped" else None,   # Phase 29.4
                 staff_notes=s.staff_notes if booked_here else None,
             ))
 
@@ -237,6 +241,7 @@ async def build_listings(
             cancel_reason=ev.cancel_reason,
             started=started,
             can_request=can_request,
+            dropped_here=dropped_here if (my_request is None or my_request.status in PENDING_STATUSES) else None,   # Phase 29.4
             staff_notes=ev.staff_notes if (
                 my_request is not None and my_request.status in ASSIGNED_STATUSES
             ) else None,

@@ -352,6 +352,9 @@ class ShiftRequestResponse(BaseModel):
     status_reason: Optional[str] = None
     pay_rate: Optional[float] = None
     notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
+    dropped_at: Optional[datetime] = None            # Phase 29.4
+    previous_drop_at: Optional[datetime] = None      # Phase 29.4: asking back / rebooked after dropping this event
+    rebook_reason: Optional[str] = None              # Phase 29.4
     shift: Optional[ShiftResponse] = None
     worker: Optional[UserBrief] = None
 
@@ -479,6 +482,10 @@ class RosterPerson(BaseModel):
     would_book_again: Optional[bool] = None
     rating_review: Optional[str] = None
     approval_source: Optional[str] = None   # Phase 29: e.g. manager_assign, offer
+    dropped_at: Optional[datetime] = None        # Phase 29.4: when they dropped (dropped list)
+    drop_reason: Optional[str] = None            # Phase 29.4: what they said when dropping
+    previous_drop_at: Optional[datetime] = None  # Phase 29.4: came back / asking back after a drop
+    rebook_reason: Optional[str] = None          # Phase 29.4
 
 
 class EventPosition(BaseModel):
@@ -498,6 +505,7 @@ class EventPosition(BaseModel):
     assigned: List[RosterPerson] = []
     requested: List[RosterPerson] = []
     offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
+    dropped: List[RosterPerson] = []         # Phase 29.4: people who dropped this position (can be booked back)
 
 
 class VenueEventResponse(BaseModel):
@@ -902,6 +910,7 @@ class ListingPosition(BaseModel):
     est_pay_max: Optional[float] = None
     my_status: Optional[str] = None            # viewer's request status on this position
     my_status_reason: Optional[str] = None
+    my_dropped_at: Optional[datetime] = None   # Phase 29.4: the viewer dropped this position
     staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
 
 
@@ -940,6 +949,7 @@ class EventListing(BaseModel):
     cancel_reason: Optional[str] = None
     started: bool = False
     can_request: bool = True
+    dropped_here: Optional[datetime] = None           # Phase 29.4: viewer dropped a position in this event -> asking back needs a reason + approval
 
 
 class PositionRequestBody(BaseModel):
@@ -1233,10 +1243,13 @@ class AssignCandidate(BaseModel):
     requested_this: bool = False             # has a waiting request on this position (assign = approve it)
     offered: bool = False                    # has a pending offer for this position
     venue_shifts: int = 0
+    dropped_at: Optional[datetime] = None    # Phase 29.4: dropped this event; Assign needs a reason, offers are skipped
+    drop_reason: Optional[str] = None
 
 
 class AssignRequest(BaseModel):
     worker_id: UUID
+    reason: Optional[str] = Field(None, max_length=500)   # Phase 29.4: required to book back someone who dropped this event
 
 
 class AssignResult(BaseModel):
@@ -1607,3 +1620,10 @@ class EventTemplateResponse(BaseModel):
 
 class SaveAsTemplateRequest(BaseModel):
     name: str
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.4: Drops
+# ------------------------------------------------------------------------------
+class DropShiftBody(BaseModel):
+    reason: Optional[str] = Field(None, max_length=500)   # optional; managers see it

@@ -120,6 +120,9 @@ async def _request_pending(db: AsyncSession, request_id) -> None:
         return
     title = f"{person(worker)} requested {shift.role_type}"
     body = f"{event.title if event else shift.title} · {when_text(shift.start_time, venue)}"
+    if req.previous_drop_at is not None:                      # Phase 29.4: asking back after a drop
+        title = f"{person(worker)} dropped this earlier and is asking back · {shift.role_type}"
+        body += "\nThey dropped this event earlier. It needs your approval."
     if req.notes:
         body += f"\n“{req.notes}”"
     await notify_in(
@@ -504,9 +507,11 @@ async def _shift_dropped(db: AsyncSession, request_id) -> None:
     await notify_in(
         db, await manager_ids(db, shift.venue_id), "shift_dropped",
         f"{person(worker)} dropped {shift.role_type} · {event.title if event else shift.title}",
-        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event.",
+        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event."
+        + (f"\nTheir reason: “{req.status_reason}”" if req.status_reason else ""),          # Phase 29.4
         manager_link(shift.venue_id, shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id,
-        request_id=req.id, urgent=is_soon(shift.start_time), dedupe_key=f"dropped:{req.id}",
+        request_id=req.id, urgent=is_soon(shift.start_time),
+        dedupe_key=f"dropped:{req.id}:{int(_as_utc(req.dropped_at).timestamp()) if req.dropped_at else 0}",
     )
 
 

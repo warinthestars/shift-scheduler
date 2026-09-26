@@ -233,6 +233,8 @@ CREATE TABLE shift_requests (
     notes TEXT,
     dropped_at TIMESTAMPTZ,
     status_reason TEXT,
+    previous_drop_at TIMESTAMPTZ,                             -- Phase 29.4: coming back after dropping this event
+    rebook_reason TEXT,                                       -- Phase 29.4: why (worker's request note or the manager's reason)
     pay_rate NUMERIC(10, 2),
     info_seen_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

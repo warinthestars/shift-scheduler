@@ -887,11 +887,29 @@ async def get_venue_events(
             would_book_again=ratings_by_req[req.id].would_book_again if req.id in ratings_by_req else None,
             rating_review=ratings_by_req[req.id].review if req.id in ratings_by_req else None,
             approval_source=req.approval_source,
+            previous_drop_at=req.previous_drop_at,       # Phase 29.4
+            rebook_reason=req.rebook_reason,
         )
         if person.status in ASSIGNED_STATUSES:
             assigned_by_shift[req.shift_id].append(person)
         else:
             requested_by_shift[req.shift_id].append(person)
+
+    # Phase 29.4: people who dropped a position (the manager can book them back with a reason)
+    dropped_by_shift = defaultdict(list)
+    for req, worker in (await db.execute(
+        select(ShiftRequest, User)
+        .join(User, ShiftRequest.worker_id == User.id)
+        .where(ShiftRequest.shift_id.in_(shift_ids), func.lower(ShiftRequest.status) == "dropped")
+        .order_by(ShiftRequest.dropped_at.desc())
+    )).all():
+        dropped_by_shift[req.shift_id].append(RosterPerson(
+            request_id=req.id, worker_id=worker.id, first_name=worker.first_name or "", last_name=worker.last_name or "",
+            email=worker.email, phone=worker.phone,
+            aggregate_rating=float(worker.aggregate_rating) if worker.aggregate_rating is not None else 5.0,
+            rating_count=int(worker.rating_count or 0), status="dropped", requested_at=req.created_at,
+            dropped_at=req.dropped_at, drop_reason=req.status_reason,
+        ))
 
     event_ids = {s.event_id for s in shifts if s.event_id}
     event_notes, event_cancel = {}, {}
@@ -961,6 +979,7 @@ async def get_venue_events(
             assigned=assigned_by_shift[s.id],
             requested=requested_by_shift[s.id],
             offers=offers_by_shift[s.id],
+            dropped=dropped_by_shift[s.id],            # Phase 29.4
         ))
 
     result = []

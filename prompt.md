@@ -1,80 +1,107 @@
-# Phase 29.3: Draft & Publish, and Event Templates
+# Phase 29.4: Worker View Overhaul, and Coming Back After a Drop
 
-**Why:** Until now, pressing Post a Shift made the event public at once and messaged the whole team. A manager couldn't:
-- set up next week's events and check them first
-- keep a half-finished event
-- reuse the setup of an event they run every week, other than copying one that was already posted
+**Why:** The worker page grew one feature at a time: offers, hand-offs, the calendar, read-receipts, clock-in windows and location checks. An audit of it, both on the live site and on a local copy loaded with a realistic worker (a shift today, an updated shift, a pending request, a drop, a hand-off offer, a manager's offer and history), found these problems:
 
-This phase adds a **draft** state for events and **event templates**, which are managed from a new tab in Venue Settings.
+* **Too many buttons:** each shift card showed up to 7 of them (Details, Directions, Calendar, Board, Transfer, Drop, Clock In). The one that matters right now (Clock in, Read the update) was last in the row, and on phones it wrapped under everything else.
+* **Tabs cut off on phones:** "My Schedule" was cut in half and "Pending Transfers" was off-screen, with no hint to scroll.
+* **Opening tab:** the page always opened on Find Shifts, even when the worker has a shift in an hour.
+* **Hand-offs:**
+  - The worker screens say "Transfer" while managers see "Hand-off".
+  - A worker couldn't see or withdraw a hand-off they had sent. `GET /transfers/my-outgoing` existed but nothing used it.
+  - The incoming hand-off card didn't show the teammate's note.
+  - On the server, a sender could "cancel" a hand-off even after the manager had approved it.
+* **Drop button and dialog:**
+  - The Drop button used light-theme colours (`text-red-600`, `hover:bg-red-50`, a white flash on the dark page).
+  - The drop dialog was hand-built, so Esc didn't close it.
+  - It gave no way to say why, and no warning that dropping within 72 h counts as a late drop.
+* **Raw data on cards:** labels like "Via: manager assign", "1 transfers" and "7 open" were shown as-is.
+* **Dropped shifts in Find Shifts:** they said "you" and offered **Book instantly**, and the server then refused with "You dropped this shift earlier…". The status label read "Released".
+* **Managers couldn't undo a drop:** they couldn't book back someone who dropped (the Assign button refused), even when the worker could make it after all. That's the second half of this phase.
+* **Timestamps:** approving a request stored a naive `datetime.utcnow()`, which breaks the aware-UTC rule.
 
 ## What this phase adds
 
-1. **Draft & publish:**
-   * Post a Shift now has **Save as draft** and **Publish** buttons.
-   * A draft is visible only to managers and admins. Workers never see it anywhere:
-     - listings and event pages
-     - the venue directory and public venue page
-     - new-shift alerts
-     - offers
-   * Nobody can request a draft, and a manager can't assign or offer it.
-   * Editing a draft never flags "Updated" for anyone. The form shows **Save draft** and **Save & publish**.
-   * **Publish** (a button on the draft's card) makes it live and sends the usual "New shift at …" alert to the team at that moment.
-     - A draft whose start time has passed can't be published until its date is changed.
-   * **Move back to drafts** (⋯ menu) hides a published event again, but only while nobody has requested it, been booked on it, or has an open offer.
-   * **Delete draft** (⋯ menu) removes a draft completely. Published events still use Cancel.
-   * **How it works underneath:**
-     - `shift_events.status` is `draft` | `published`, and a draft's positions carry shift status `DRAFT`.
-     - Every existing worker-facing query that only looks at `OPEN` positions skips drafts automatically.
-     - The few queries that look at "anything not cancelled" were updated.
-   * **Posted Shifts:**
-     - drafts have a dashed border and a **Draft · not visible to workers** badge
-     - a new **Drafts** filter
-     - drafts show grey in the calendar
-     - the event's roster says it's a draft and hides Assign/Offer and Cancel position
-   * **Duplicate / repeat** has a **Create the copies as drafts** checkbox. Copies of a draft are always drafts.
-   * Activity log lines: "Saved a draft", "Published", "Moved … back to drafts", "Deleted the draft".
-   * Admin console numbers (staffed %, open spots, events) ignore drafts.
-2. **Event templates:**
-   * A template is a named setup of:
-     - an event name
-     - start and end clock times (an end earlier than the start means it finishes the next day)
-     - a saved location, the clock-in check setting and notes
-     - positions with spots, pay range, tips, approval and position notes
-   * Templates belong to one venue. There's a limit of 50 per venue, and names must be unique within the venue.
-   * **Venue Settings → Event templates** (new tab): cards showing times, location and positions, with **Use**, **Edit** and **Delete**, plus a **New template** button.
-     - Templates are created and edited in the same form as posting a shift, so every option is there.
-     - A typed-in new location is saved to the venue's list.
-   * **Post a Shift → Start from a template:** fills in everything. It keeps the date you already picked, or uses tomorrow; you then change the date and publish or save a draft.
-   * **Use** on a template opens Post a Shift already filled in.
-   * **⋯ → Save as template** on any posted event or draft saves its times (in venue time), where, notes and positions.
-   * A **Templates** button in the dashboard header opens the tab directly.
-   * If a template's saved location was archived since, the template falls back to the venue address and says so.
-3. **Small form improvement:** moving the start time now moves the end time too (same length), so changing the date no longer leaves the end on the old day.
-4. **Layout fixes on Posted Shifts:**
-   * The pay / "Needs OK" / "Tips" line no longer runs into the "0/2 filled" column.
-   * The action buttons wrap on phones instead of spilling out of the card.
+### A. Coming back after a drop (flagged, always approved by a manager)
+1. **Worker asks back:**
+   * A dropped shift appears on My shifts under **"Dropped · you can still ask to come back"**. The same applies to the event in Find shifts, where the CTA reads "Ask to come back".
+   * The request form requires **"Why you can make it now"** (5+ characters).
+   * The request **always waits for a manager**, even when the venue books the team instantly. This covers any position in that event, not only the one they dropped.
+   * **Withdrawing and asking again still needs a reason**, so there's no loophole.
+   * After a denial, that position stays closed to them (same as any denial today).
+2. **Managers see the flag everywhere:**
+   * Queue card: "Dropped this event on Sat, Sep 26 and is asking back. Needs your OK."
+   * Review modal: a red box, and the note is headed "Why they can make it now".
+   * The event roster.
+   * The bell: "… dropped this earlier and is asking back · Server".
+   * The activity log: "… requested … · asking back after dropping · "reason"".
+3. **Manager books someone back:**
+   * The roster shows a new **Dropped** list under each position, with who dropped, when and their reason, and a **Book back…** button that asks for a reason.
+   * In **Assign / Offer**, people who dropped this event show "Dropped this event on … · "reason"". **Assign** asks for a reason inline before booking. **Offers skip them** ("Use Assign with a reason").
+   * The API refuses to assign without a reason (400).
+   * The roster marks the person "Back after dropping on … · "reason"".
+   * The activity log reads "Assigned … · booked back after a drop · "reason"".
+4. **Drop reason:** Drop now takes an optional reason (`POST /api/shifts/{id}/drop {reason}`). It's saved in `status_reason`, shown to managers in the drop notification and the activity log, and shown back to the worker. Old clients that send no body still work.
+5. **Reliability stays honest:**
+   * The row keeps `dropped_at`.
+   * A drop still counts while they're asking back, after they withdraw, or after a denial.
+   * It stops counting only if they actually work the shift.
+   * Two new columns on `shift_requests`: `previous_drop_at` and `rebook_reason`.
 
-⚠️ **Schema change:** two new columns on `shift_events` and one new table (`event_templates`). See §E.
+### B. Worker page overhaul
+1. **Tabs:**
+   * Renamed and reordered to **My shifts · Find shifts · Calendar · Hand-offs**, with counts and badges.
+   * On phones they sit in a **2×2 grid**, so none are hidden.
+   * The page **opens on My shifts** when you have something coming up or an offer to answer; otherwise it opens on Find shifts.
+   * The tab ids are unchanged (`schedule`, `find`, `calendar`, `transfers`), so every notification link keeps working.
+2. **Header:**
+   * Profile photo with an initials fallback.
+   * Clickable chips: rating, "N coming up", "N waiting for your answer" (offers plus hand-offs), "N open to pick up".
+   * A "Worker preview" badge appears only for admins and managers, instead of "Worker" for everyone.
+3. **My shifts cards** (new `MyShiftCard`):
+   * A date tile and a plain status: Confirmed · Waiting for the manager · Worked · You dropped this · Clocked in.
+   * Where the booking came from, in words: "Assigned by your manager", "Booked instantly (team)", "You accepted an offer"…
+   * **One main button:**
+     - Clock in / Clock out
+     - "Clock-in opens 8:01 PM"
+     - Read the update. When clock-in is open, it shows next to Clock in and **never hides it**.
+     - Withdraw request
+     - Ask to come back
+   * **Everything else is in a ⋯ menu:** Details & notes, Directions, Add to my calendar, Shift chat, Hand off to a teammate, Drop shift. Drop is disabled inside 24 h, with the reason.
+   * Offers are answered at the top of My shifts. Other tabs show a slim "N shifts offered to you" link.
+4. **Drop dialog** (new `DropShiftDialog`):
+   * Uses the standard modal, so Esc works.
+   * Optional reason.
+   * Late-drop warning inside 72 h.
+   * Explains the spot opens right away and that coming back needs approval.
+5. **Hand-offs tab** (new `HandoffsPanel`):
+   * **Offered to you**: shows the teammate's note, plus Accept / Decline.
+   * **Sent by you** (last 14 days): shows each hand-off's status in words, with **Withdraw** while it's still waiting.
+   * The hand-off modal (`TransferModal`) uses the standard modal and "hand off" wording, and says clearly **you keep the shift until the manager approves**.
+6. **Banners:** messages are plain ("Shift dropped. Your manager has been told…"). They're dismissed with ✕.
+7. **Server fixes:**
+   * Declining or withdrawing a hand-off only works while it's still waiting. Before this, a sender could "cancel" an already approved hand-off.
+   * Approvals store an aware UTC time.
+   * The "shift dropped" alert is no longer swallowed by the dedupe key when someone drops the same shift a second time.
+
+⚠️ **Schema change:** two new columns on `shift_requests`. See §E.
 
 ## 0. Rules for this phase (read first)
 * Do **NOT** touch:
   - `backend/src/auth.py`, `backend/src/routers/auth.py`, `backend/src/services/firebase.py`, `backend/src/services/always_admin.py`
-  - `main.py` CORS logic (only add the one import and `include_router` line shown)
+  - `main.py` (unchanged this phase)
   - `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/vite.config.js`
-* No new npm or Python packages. (`JSONB` comes from SQLAlchemy's PostgreSQL dialect, already installed.)
-* No native PostgreSQL ENUMs:
-  - `shift_events.status`: `draft` | `published`
-  - `shifts.status` gains the value `DRAFT` (still VARCHAR)
+* No new npm or Python packages.
+* No native PostgreSQL ENUMs. Statuses are unchanged; "asking back" is an ordinary `pending` request with `previous_drop_at` set.
 * Aware UTC datetimes only.
-* Activity and notification hooks always run **after** the endpoint's commit. `notify_events.new_event_posted` is called on publish, never for drafts.
-* Delete drafts with a `delete(ShiftEvent).where(...)` statement (the database cascades to positions). Never use `db.delete(event)`.
+* Notification and activity hooks run after the commit, as before.
+* **Keep `dropped_at` on the request row** when someone asks back or is booked back. Reliability depends on it. Do not add `req.dropped_at = None` back into `booking.py` or `staffing.py`.
 * **NEW FILE / FULL FILE REPLACEMENT**: write exactly the content shown. **EDITS**: each edit is an exact *Find* → *Replace with*. Every *Find* appears **exactly once** in the current file; apply them in order.
   - Some files use Windows line endings (CRLF). Match on the text and keep the file's line endings.
-* These blocks were generated from the real current (Phase 29.2) files and checked:
-  - after applying them, the backend imports cleanly and all 155 API operations build (8 new)
+* These blocks were generated from the real current (Phase 29.3) files and checked:
+  - after applying them, the backend imports cleanly (155 API operations; no new routes)
   - the frontend bundles with no missing imports
-  - 67 new integration checks pass against PostgreSQL 16, and the Phase 29, 29.1 and 29.2 suites still pass
-  - the board, Drafts filter, ⋯ menu, Save-as-template dialog, Post a Shift with a template, the Templates tab and the template editor were rendered with the real Tailwind build at desktop and phone widths
+  - 39 new integration checks pass against PostgreSQL 16, and the Phase 29, 29.1, 29.2 and 29.3 suites still pass
+  - the new worker page (desktop and phone), the ⋯ menu, the drop dialog, ask-to-come-back, the Hand-offs tab, and the manager's roster / Book back / Assign-with-reason were rendered with the real Tailwind build
 
   Don't "improve" them.
 
@@ -82,2465 +109,1677 @@ This phase adds a **draft** state for events and **event templates**, which are 
 
 # PART A: Database, models, schemas
 
-## A1. `database/init.sql` (EDITS)
-Two columns on `shift_events`; the `event_templates` table appended at the end.
+## A1. `database/init.sql` (EDIT)
 
 **Edit 1.** Find:
 ```sql
-    cancelled_at TIMESTAMPTZ,
-    cancel_reason TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    dropped_at TIMESTAMPTZ,
+    status_reason TEXT,
+    pay_rate NUMERIC(10, 2),
+    info_seen_at TIMESTAMPTZ,
 ```
 Replace with:
 ```sql
-    cancelled_at TIMESTAMPTZ,
-    cancel_reason TEXT,
-    status VARCHAR(20) NOT NULL DEFAULT 'published',          -- Phase 29.3: draft | published
-    published_at TIMESTAMPTZ,                                 -- Phase 29.3: first time it went live
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-```
-
-**Edit 2.** Find:
-```sql
-CREATE INDEX idx_admin_audit_created ON admin_audit(created_at DESC);
-CREATE INDEX idx_admin_audit_target ON admin_audit(target_type, target_id);
-```
-Replace with:
-```sql
-CREATE INDEX idx_admin_audit_created ON admin_audit(created_at DESC);
-CREATE INDEX idx_admin_audit_target ON admin_audit(target_type, target_id);
-
--- ------------------------------------------------------------------------------
--- Phase 29.3: Event templates (a venue's reusable event setups)
--- ------------------------------------------------------------------------------
-CREATE TABLE event_templates (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
-    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    name VARCHAR(120) NOT NULL,                               -- what managers pick from ("Friday Jazz")
-    title VARCHAR(255) NOT NULL,                              -- the event name it fills in
-    start_local VARCHAR(5) NOT NULL,                          -- 'HH:MM' venue time
-    end_local VARCHAR(5) NOT NULL,                            -- 'HH:MM'; earlier than start = next day
-    notes TEXT,
-    staff_notes TEXT,
-    location_id UUID REFERENCES venue_locations(id) ON DELETE SET NULL,
-    geofence_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
-    location_staff_notes TEXT,
-    positions JSONB NOT NULL DEFAULT '[]'::jsonb,             -- [{role_type, capacity, hourly_rate, ...}]
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_event_templates_venue ON event_templates(venue_id);
+    dropped_at TIMESTAMPTZ,
+    status_reason TEXT,
+    previous_drop_at TIMESTAMPTZ,                             -- Phase 29.4: coming back after dropping this event
+    rebook_reason TEXT,                                       -- Phase 29.4: why (worker's request note or the manager's reason)
+    pay_rate NUMERIC(10, 2),
+    info_seen_at TIMESTAMPTZ,
 ```
 
 ---
 
-## A2. `backend/src/models.py` (EDITS)
-`ShiftEvent.status` / `published_at` and the new `EventTemplate` model (positions stored as JSONB).
+## A2. `backend/src/models.py` (EDIT)
 
 **Edit 1.** Find:
 ```python
-    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
-)
-from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION
-from sqlalchemy.orm import relationship
-from src.database import Base
+    dropped_at = Column(DateTime(timezone=True), nullable=True)
+    status_reason = Column(Text, nullable=True)
+    pay_rate = Column(Numeric(10, 2), nullable=True)
+    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
 ```
 Replace with:
 ```python
-    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
-)
-from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
-from sqlalchemy.orm import relationship
-from src.database import Base
-```
-
-**Edit 2.** Find:
-```python
-    cancelled_at = Column(DateTime(timezone=True), nullable=True)
-    cancel_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    shifts = relationship("Shift", back_populates="event", cascade="all, delete-orphan")
-
-class Shift(Base):
-```
-Replace with:
-```python
-    cancelled_at = Column(DateTime(timezone=True), nullable=True)
-    cancel_reason = Column(Text, nullable=True)
-    status = Column(String(20), nullable=False, default="published")      # Phase 29.3: draft | published
-    published_at = Column(DateTime(timezone=True), nullable=True)          # Phase 29.3
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    shifts = relationship("Shift", back_populates="event", cascade="all, delete-orphan")
-
-
-class EventTemplate(Base):
-    """Phase 29.3: A venue's reusable event setup. Times are venue-local 'HH:MM' (end earlier = next day)."""
-    __tablename__ = "event_templates"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
-    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    name = Column(String(120), nullable=False)
-    title = Column(String(255), nullable=False)
-    start_local = Column(String(5), nullable=False)
-    end_local = Column(String(5), nullable=False)
-    notes = Column(Text, nullable=True)
-    staff_notes = Column(Text, nullable=True)
-    location_id = Column(UUID(as_uuid=True), ForeignKey("venue_locations.id", ondelete="SET NULL"), nullable=True)
-    geofence_mode = Column(String(20), nullable=False, default="venue_default")
-    location_staff_notes = Column(Text, nullable=True)
-    positions = Column(JSONB, nullable=False, default=list)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-class Shift(Base):
+    dropped_at = Column(DateTime(timezone=True), nullable=True)
+    status_reason = Column(Text, nullable=True)
+    previous_drop_at = Column(DateTime(timezone=True), nullable=True)   # Phase 29.4: rebooked / asking back after a drop
+    rebook_reason = Column(Text, nullable=True)                         # Phase 29.4
+    pay_rate = Column(Numeric(10, 2), nullable=True)
+    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
 ```
 
 ---
 
 ## A3. `backend/src/schemas.py` (EDITS)
-`EventCreate.publish` (default true, so older callers keep publishing), `status` on `EventDetail` and `VenueEventResponse`, `DuplicateEventRequest.as_draft`, and the template schemas at the end.
+* `ShiftRequestResponse`: `dropped_at`, `previous_drop_at`, `rebook_reason`
+* `RosterPerson`: drop and rebook fields
+* `EventPosition.dropped`
+* `ListingPosition.my_dropped_at`, `EventListing.dropped_here`
+* `AssignCandidate.dropped_at` / `drop_reason`
+* `AssignRequest.reason`
+* the new `DropShiftBody`
 
 **Edit 1.** Find:
 ```python
-    event_key: str
-    event_id: Optional[UUID] = None
-    location_name: Optional[str] = None      # Phase 27: None = venue address
-    cancelled: bool = False
+    pay_rate: Optional[float] = None
+    notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
+    shift: Optional[ShiftResponse] = None
+    worker: Optional[UserBrief] = None
 ```
 Replace with:
 ```python
-    event_key: str
-    event_id: Optional[UUID] = None
-    status: str = "published"                # Phase 29.3: draft | published
-    location_name: Optional[str] = None      # Phase 27: None = venue address
-    cancelled: bool = False
+    pay_rate: Optional[float] = None
+    notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
+    dropped_at: Optional[datetime] = None            # Phase 29.4
+    previous_drop_at: Optional[datetime] = None      # Phase 29.4: asking back / rebooked after dropping this event
+    rebook_reason: Optional[str] = None              # Phase 29.4
+    shift: Optional[ShiftResponse] = None
+    worker: Optional[UserBrief] = None
 ```
 
 **Edit 2.** Find:
 ```python
-    location_staff_notes: Optional[str] = None          # Phase 27: event-specific, confirmed staff only
-    positions: List[EventPositionInput]
+    rating_review: Optional[str] = None
+    approval_source: Optional[str] = None   # Phase 29: e.g. manager_assign, offer
 
 
 ```
 Replace with:
 ```python
-    location_staff_notes: Optional[str] = None          # Phase 27: event-specific, confirmed staff only
-    positions: List[EventPositionInput]
-    publish: bool = True                     # Phase 29.3: False = save as a draft (workers can't see it)
+    rating_review: Optional[str] = None
+    approval_source: Optional[str] = None   # Phase 29: e.g. manager_assign, offer
+    dropped_at: Optional[datetime] = None        # Phase 29.4: when they dropped (dropped list)
+    drop_reason: Optional[str] = None            # Phase 29.4: what they said when dropping
+    previous_drop_at: Optional[datetime] = None  # Phase 29.4: came back / asking back after a drop
+    rebook_reason: Optional[str] = None          # Phase 29.4
 
 
 ```
 
 **Edit 3.** Find:
 ```python
-    cancelled: bool = False
-    cancel_reason: Optional[str] = None
-    positions: List[EventDetailPosition]
+    requested: List[RosterPerson] = []
+    offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
+
 
 ```
 Replace with:
 ```python
-    cancelled: bool = False
-    cancel_reason: Optional[str] = None
-    status: str = "published"                           # Phase 29.3: draft | published
-    published_at: Optional[datetime] = None             # Phase 29.3
-    positions: List[EventDetailPosition]
+    requested: List[RosterPerson] = []
+    offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
+    dropped: List[RosterPerson] = []         # Phase 29.4: people who dropped this position (can be booked back)
+
 
 ```
 
 **Edit 4.** Find:
 ```python
-class DuplicateEventRequest(BaseModel):
-    dates: List[date]
-
+    my_status: Optional[str] = None            # viewer's request status on this position
+    my_status_reason: Optional[str] = None
+    staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
 
 ```
 Replace with:
 ```python
-class DuplicateEventRequest(BaseModel):
-    dates: List[date]
-    as_draft: bool = False                   # Phase 29.3: copies of a draft are always drafts
-
+    my_status: Optional[str] = None            # viewer's request status on this position
+    my_status_reason: Optional[str] = None
+    my_dropped_at: Optional[datetime] = None   # Phase 29.4: the viewer dropped this position
+    staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
 
 ```
 
 **Edit 5.** Find:
 ```python
-class AdminTestEmail(BaseModel):
-    to: EmailStr
+    started: bool = False
+    can_request: bool = True
+
+
 ```
 Replace with:
 ```python
-class AdminTestEmail(BaseModel):
-    to: EmailStr
+    started: bool = False
+    can_request: bool = True
+    dropped_here: Optional[datetime] = None           # Phase 29.4: viewer dropped a position in this event -> asking back needs a reason + approval
 
 
-# ------------------------------------------------------------------------------
-# Phase 29.3: Event templates
-# ------------------------------------------------------------------------------
-class EventTemplatePosition(BaseModel):
-    role_type: str
-    capacity: int = 1
-    hourly_rate: float
-    hourly_rate_max: Optional[float] = None
-    hide_rate: bool = False
-    tips_eligible: bool = False
-    tip_pool: bool = False
-    role_notes: Optional[str] = None
-    staff_notes: Optional[str] = None
-    approval_mode: str = "venue_default"
+```
+
+**Edit 6.** Find:
+```python
+    offered: bool = False                    # has a pending offer for this position
+    venue_shifts: int = 0
 
 
-class EventTemplateInput(BaseModel):
-    name: str                                # what managers pick from ("Friday Jazz")
-    title: str                               # the event name it fills in
-    start_local: str                         # 'HH:MM' venue time
-    end_local: str                           # 'HH:MM'; earlier than start = ends the next day
-    notes: Optional[str] = None
-    staff_notes: Optional[str] = None
-    location_id: Optional[UUID] = None       # a saved venue location (None = venue address)
-    geofence_mode: str = "venue_default"
-    location_staff_notes: Optional[str] = None
-    positions: List[EventTemplatePosition]
+class AssignRequest(BaseModel):
+    worker_id: UUID
 
 
-class EventTemplateResponse(BaseModel):
-    id: UUID
-    venue_id: UUID
-    name: str
-    title: str
-    start_local: str
-    end_local: str
-    overnight: bool = False                  # end_local is on the next day
-    notes: Optional[str] = None
-    staff_notes: Optional[str] = None
-    location: Optional[VenueLocationResponse] = None
-    geofence_mode: str = "venue_default"
-    location_staff_notes: Optional[str] = None
-    positions: List[EventTemplatePosition]
-    created_by_name: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
+```
+Replace with:
+```python
+    offered: bool = False                    # has a pending offer for this position
+    venue_shifts: int = 0
+    dropped_at: Optional[datetime] = None    # Phase 29.4: dropped this event; Assign needs a reason, offers are skipped
+    drop_reason: Optional[str] = None
 
 
+class AssignRequest(BaseModel):
+    worker_id: UUID
+    reason: Optional[str] = Field(None, max_length=500)   # Phase 29.4: required to book back someone who dropped this event
+
+
+```
+
+**Edit 7.** Find:
+```python
 class SaveAsTemplateRequest(BaseModel):
     name: str
+```
+Replace with:
+```python
+class SaveAsTemplateRequest(BaseModel):
+    name: str
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.4: Drops
+# ------------------------------------------------------------------------------
+class DropShiftBody(BaseModel):
+    reason: Optional[str] = Field(None, max_length=500)   # optional; managers see it
 ```
 
 ---
 
 # PART B: Backend
 
-## B1. `backend/src/services/shift_events.py` (EDITS)
-Drafts on create/edit/duplicate, plus `publish_event`, `unpublish_event` and `discard_draft` at the end.
+## B1. `backend/src/services/booking.py` (EDITS)
+Ask-back rules: reason required, always pending, and `dropped_at` kept. Also adds the `prior_drop_in_event()` helper that staffing uses.
 
 **Edit 1.** Find:
 ```python
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.models import ShiftEvent, Shift, ShiftRequest, Venue, User, VenueLocation
-from src.schemas import (
-    EventCreate, EventUpdate, EventPositionInput, EventDetail, EventDetailPosition,
+* A position can be requested again only after the worker WITHDREW it. Drops, rejections,
+  removals, no-shows and hand-offs stay on record (they feed reliability).
+"""
+import logging
 ```
 Replace with:
 ```python
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.models import ShiftEvent, Shift, ShiftRequest, ShiftOffer, Venue, User, VenueLocation
-from src.schemas import (
-    EventCreate, EventUpdate, EventPositionInput, EventDetail, EventDetailPosition,
+* A position can be requested again only after the worker WITHDREW it. Drops, rejections,
+  removals, no-shows and hand-offs stay on record (they feed reliability).
+* Phase 29.4: a worker who DROPPED a position in this event can ask to come back (same or another
+  position). They must say why, it always waits for a manager, and the request carries
+  previous_drop_at + rebook_reason. dropped_at is kept on the row so the drop still counts for
+  reliability unless they end up working the shift.
+"""
+import logging
 ```
 
 **Edit 2.** Find:
 ```python
-PENDING_STATUSES = ("pending", "pending_manager_approval")
-ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
+ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
+ACTIVE_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES
+REREQUESTABLE_STATUSES = ("withdrawn",)
+BLOCKED_MESSAGES = {
+    "rejected": "The venue already passed on your request for this position. You can request a different position.",
+    "removed": "The venue removed you from this shift.",
+    "no_show": "You were marked as a no-show for this shift.",
+    "cancelled": "This position was cancelled.",
+    "dropped": "You dropped this shift earlier, so it can't be picked back up here. Message the manager if they still need you.",
+    "transferred": "You handed this shift off earlier.",
+}
+NOTE_MAX = 500
 
 
 ```
 Replace with:
 ```python
-PENDING_STATUSES = ("pending", "pending_manager_approval")
-ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
-# Phase 29.3: a draft event's positions carry shift status DRAFT, so every worker-facing query that
-# only looks at OPEN positions (listings, directory, offers, new-shift alerts) skips them.
-DRAFT = "draft"
-PUBLISHED = "published"
+ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
+ACTIVE_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES
+REREQUESTABLE_STATUSES = ("withdrawn", "dropped")      # Phase 29.4: dropped = ask to come back
+BLOCKED_MESSAGES = {
+    "rejected": "The venue already passed on your request for this position. You can request a different position.",
+    "removed": "The venue removed you from this shift.",
+    "no_show": "You were marked as a no-show for this shift.",
+    "cancelled": "This position was cancelled.",
+    "transferred": "You handed this shift off earlier.",
+}
+NOTE_MAX = 500
+
+
+REBOOK_REASON_MIN = 5
+
+
+async def prior_drop_in_event(db: AsyncSession, worker_id, shift: Shift) -> Optional[datetime]:
+    """Phase 29.4: the latest time this worker dropped a position in this event (or this shift), if ever."""
+    q = (
+        select(func.max(ShiftRequest.dropped_at))
+        .join(Shift, Shift.id == ShiftRequest.shift_id)
+        .where(ShiftRequest.worker_id == worker_id, ShiftRequest.dropped_at.isnot(None))
+    )
+    q = q.where(Shift.event_id == shift.event_id) if shift.event_id else q.where(Shift.id == shift.id)
+    return await db.scalar(q)
 
 
 ```
 
 **Edit 3.** Find:
 ```python
-        _validate_position(p)
-    mode = validate_geofence_mode(data.geofence_mode)
-    try:
-        # Phase 27: where is it? (a typed-in new location is saved to the venue's list here)
+                )
+
+        # --- Earlier history on this exact position ---------------------------------------
+        existing = await db.scalar(
 ```
 Replace with:
 ```python
-        _validate_position(p)
-    mode = validate_geofence_mode(data.geofence_mode)
-    is_draft = not getattr(data, "publish", True)          # Phase 29.3
-    try:
-        # Phase 27: where is it? (a typed-in new location is saved to the venue's list here)
+                )
+
+        # --- Phase 29.4: coming back after a drop needs a reason and a manager ---------------
+        prior_drop = await prior_drop_in_event(db, worker.id, shift)
+        clean_note = _clean_note(note)
+        if prior_drop is not None and (not clean_note or len(clean_note) < REBOOK_REASON_MIN):
+            raise HTTPException(
+                status_code=400,
+                detail="You dropped a shift at this event earlier. Tell the manager why you can make it now. "
+                       "They have to approve it.",
+            )
+
+        # --- Earlier history on this exact position ---------------------------------------
+        existing = await db.scalar(
 ```
 
 **Edit 4.** Find:
 ```python
-            geofence_mode=mode,
-            location_staff_notes=_clean(data.location_staff_notes),
-        )
-        db.add(event)
-        await db.flush()
-        for p in data.positions:
-            s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0, status="OPEN")
-            _apply_position(s, p, event)
-            db.add(s)
+        decision, source = await evaluate_shift_request(db=db, worker=worker, shift=shift, venue=shift.venue)
+        status_val = (decision.value if hasattr(decision, "value") else str(decision)).lower()
+        now = datetime.now(timezone.utc)
+
 ```
 Replace with:
 ```python
-            geofence_mode=mode,
-            location_staff_notes=_clean(data.location_staff_notes),
-            status=DRAFT if is_draft else PUBLISHED,                                   # Phase 29.3
-            published_at=None if is_draft else datetime.now(timezone.utc),
-        )
-        db.add(event)
-        await db.flush()
-        for p in data.positions:
-            s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0,
-                      status="DRAFT" if is_draft else "OPEN")
-            _apply_position(s, p, event)
-            db.add(s)
+        decision, source = await evaluate_shift_request(db=db, worker=worker, shift=shift, venue=shift.venue)
+        status_val = (decision.value if hasattr(decision, "value") else str(decision)).lower()
+        if prior_drop is not None:                     # Phase 29.4: never instant after a drop
+            status_val, source = "pending", None
+        now = datetime.now(timezone.utc)
+
 ```
 
 **Edit 5.** Find:
 ```python
-                )
-
-    try:
-        # Phase 26.2: work out what changed so booked workers are told
+            req.check_out_time = None
+            req.check_out_verified = False
+            req.dropped_at = None
+            req.status_reason = None
+            req.pay_rate = None
+            req.notes = _clean_note(note)
+            req.created_at = now
+        else:
 ```
 Replace with:
 ```python
-                )
-
-    is_draft = (event.status or PUBLISHED) == DRAFT      # Phase 29.3: nobody to tell about draft edits
-    try:
-        # Phase 26.2: work out what changed so booked workers are told
+            req.check_out_time = None
+            req.check_out_verified = False
+            # Phase 29.4: dropped_at is kept (the drop still counts unless they work the shift)
+            req.status_reason = None
+            req.pay_rate = None
+            req.notes = _clean_note(note)
+            req.previous_drop_at = prior_drop
+            req.rebook_reason = clean_note if prior_drop is not None else None
+            req.created_at = now
+        else:
 ```
 
 **Edit 6.** Find:
 ```python
-        event.notes = _clean(data.notes)
-        event.staff_notes = _clean(data.staff_notes)
-        if changes:
-            event.info_updated_at = datetime.now(timezone.utc)
-            event.info_change = "; ".join(changes)
+                approved_at=now if status_val == "approved" else None,
+                notes=_clean_note(note),
+            )
+            db.add(req)
 ```
 Replace with:
 ```python
-        event.notes = _clean(data.notes)
-        event.staff_notes = _clean(data.staff_notes)
-        if changes and not is_draft:
-            event.info_updated_at = datetime.now(timezone.utc)
-            event.info_change = "; ".join(changes)
+                approved_at=now if status_val == "approved" else None,
+                notes=_clean_note(note),
+                previous_drop_at=prior_drop,                                    # Phase 29.4
+                rebook_reason=clean_note if prior_drop is not None else None,
+            )
+            db.add(req)
 ```
 
 **Edit 7.** Find:
 ```python
-            if p.shift_id:
-                s = by_id[p.shift_id]
-                _apply_position(s, p, event, track_changes=True)
-                if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
-                    s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
-            else:
-                s = Shift(
-                    venue_id=event.venue_id, event_id=event.id,
-                    created_by_user_id=event.created_by_user_id, spots_filled=0, status="OPEN",
-                )
-                _apply_position(s, p, event)
+    if status_val != "approved":
+        await notify_events.request_pending(req_id)
+    await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id)   # Phase 29.1
+    return req_id
+
 ```
 Replace with:
 ```python
-            if p.shift_id:
-                s = by_id[p.shift_id]
-                _apply_position(s, p, event, track_changes=not is_draft)
-                if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
-                    s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
-            else:
-                s = Shift(
-                    venue_id=event.venue_id, event_id=event.id,
-                    created_by_user_id=event.created_by_user_id, spots_filled=0,
-                    status="DRAFT" if is_draft else "OPEN",
-                )
-                _apply_position(s, p, event)
+    if status_val != "approved":
+        await notify_events.request_pending(req_id)
+    await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id,
+                               f"asking back after dropping · “{clean_note}”" if prior_drop is not None else "")   # Phase 29.1 / 29.4
+    return req_id
+
+```
+
+---
+
+## B2. `backend/src/services/staffing.py` (EDITS)
+Assign with a reason books back someone who dropped. Candidates carry the drop, and offers skip them.
+
+**Edit 1.** Find:
+```python
+from src.services.booking import (
+    _load_shift_locked, as_utc, PENDING_STATUSES, BOOKED_STATUSES, ACTIVE_STATUSES,
+)
+from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
+```
+Replace with:
+```python
+from src.services.booking import (
+    _load_shift_locked, as_utc, PENDING_STATUSES, BOOKED_STATUSES, ACTIVE_STATUSES,
+    prior_drop_in_event, REBOOK_REASON_MIN,
+)
+from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
+```
+
+**Edit 2.** Find:
+```python
+
+MAX_OFFER_PEOPLE = 5
+REASSIGNABLE_STATUSES = ("withdrawn", "rejected", "cancelled", "removed")
+HISTORY_MESSAGES = {
+    "dropped": "dropped this shift earlier",
+    "no_show": "was marked a no-show on this shift",
+    "transferred": "handed this shift off earlier",
+```
+Replace with:
+```python
+
+MAX_OFFER_PEOPLE = 5
+REASSIGNABLE_STATUSES = ("withdrawn", "rejected", "cancelled", "removed", "dropped")   # Phase 29.4: dropped = with a reason
+HISTORY_MESSAGES = {
+    "no_show": "was marked a no-show on this shift",
+    "transferred": "handed this shift off earlier",
+```
+
+**Edit 3.** Find:
+```python
+    approved_by: Optional[UUID],
+    who: str,
+) -> ShiftRequest:
+    """
+```
+Replace with:
+```python
+    approved_by: Optional[UUID],
+    who: str,
+    rebook_reason: Optional[str] = None,
+) -> ShiftRequest:
+    """
+```
+
+**Edit 4.** Find:
+```python
+                raise HTTPException(status_code=400, detail=f"Already on this position (status: {st}).")
+
+    # Overlapping booking elsewhere
+    overlap = await db.scalar(
+```
+Replace with:
+```python
+                raise HTTPException(status_code=400, detail=f"Already on this position (status: {st}).")
+
+    # Phase 29.4: booking back someone who dropped this event needs the manager's reason
+    # (approving their own "ask to come back" request is fine: they already gave one)
+    prior_drop = await prior_drop_in_event(db, worker.id, shift)
+    asked_back = target is not None and (target.status or "").lower() in PENDING_STATUSES and target.previous_drop_at is not None
+    reason = (rebook_reason or "").strip()[:500]
+    if prior_drop is not None and not asked_back:
+        if you:
+            raise HTTPException(status_code=400, detail="You dropped a shift at this event earlier. Ask the manager to book you back.")
+        if len(reason) < REBOOK_REASON_MIN:
+            when = as_utc(prior_drop).strftime("%b %-d")
+            raise HTTPException(
+                status_code=400,
+                detail=f"{who} dropped this event on {when}. Add a short reason to book them back.",
+            )
+
+    # Overlapping booking elsewhere
+    overlap = await db.scalar(
+```
+
+**Edit 5.** Find:
+```python
+    target.check_out_time = None
+    target.check_out_verified = False
+    target.dropped_at = None
+    target.status_reason = None
+    target.pay_rate = None
+    await db.flush()
+
+```
+Replace with:
+```python
+    target.check_out_time = None
+    target.check_out_verified = False
+    # Phase 29.4: dropped_at is kept on purpose (history + reliability if this booking doesn't happen)
+    target.status_reason = None
+    target.pay_rate = None
+    if prior_drop is not None:
+        target.previous_drop_at = prior_drop
+        if not asked_back:
+            target.rebook_reason = reason
+    await db.flush()
+
+```
+
+**Edit 6.** Find:
+```python
+
+
+async def assign_worker(db: AsyncSession, manager: User, shift_id: UUID, worker_id: UUID) -> Tuple[UUID, str]:
+    """Manager books a specific person. Commits. Returns (request_id, message)."""
+    try:
+        shift = await _load_shift_locked(db, shift_id)
+        worker = await db.scalar(select(User).where(User.id == worker_id))
+        if worker is None:
+            raise HTTPException(status_code=404, detail="Person not found.")
+        name = full_name(worker)
+        req = await _book_locked(db, shift, worker, source="manager_assign", approved_by=manager.id, who=name)
+        req_id = req.id
+        role = shift.role_type
+```
+Replace with:
+```python
+
+
+async def assign_worker(
+    db: AsyncSession, manager: User, shift_id: UUID, worker_id: UUID, reason: Optional[str] = None,
+) -> Tuple[UUID, str]:
+    """Manager books a specific person. Commits. Returns (request_id, message).
+    Phase 29.4: `reason` is required when the person dropped this event earlier."""
+    try:
+        shift = await _load_shift_locked(db, shift_id)
+        worker = await db.scalar(select(User).where(User.id == worker_id))
+        if worker is None:
+            raise HTTPException(status_code=404, detail="Person not found.")
+        name = full_name(worker)
+        req = await _book_locked(db, shift, worker, source="manager_assign", approved_by=manager.id, who=name,
+                                 rebook_reason=reason)
+        req_id = req.id
+        role = shift.role_type
+```
+
+**Edit 7.** Find:
+```python
+            if c.offered:
+                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Already has an offer for this position."))
+                continue
+            if not c.available and not c.requested_this:
+```
+Replace with:
+```python
+            if c.offered:
+                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Already has an offer for this position."))
+                continue
+            if c.dropped_at is not None and not c.requested_this:                     # Phase 29.4
+                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Dropped this event earlier. Use Assign with a reason."))
+                continue
+            if not c.available and not c.requested_this:
 ```
 
 **Edit 8.** Find:
 ```python
-        cancelled=event.cancelled_at is not None,
-        cancel_reason=event.cancel_reason,
-        positions=[
-            EventDetailPosition(
+        in_event[wid].append((sid, (st or "").lower(), role))
+
+    history = {wid: (st or "").lower() for wid, st in (await db.execute(
+        select(ShiftRequest.worker_id, ShiftRequest.status).where(
 ```
 Replace with:
 ```python
-        cancelled=event.cancelled_at is not None,
-        cancel_reason=event.cancel_reason,
-        status=event.status or PUBLISHED,
-        published_at=event.published_at,
-        positions=[
-            EventDetailPosition(
+        in_event[wid].append((sid, (st or "").lower(), role))
+
+    # Phase 29.4: who dropped this event (Assign needs a reason; offers skip them)
+    drop_q = (
+        select(ShiftRequest.worker_id, ShiftRequest.dropped_at, ShiftRequest.status, ShiftRequest.status_reason)
+        .join(Shift, Shift.id == ShiftRequest.shift_id)
+        .where(ShiftRequest.worker_id.in_(ids), ShiftRequest.dropped_at.isnot(None),
+               func.lower(ShiftRequest.status).notin_(ACTIVE_STATUSES))
+    )
+    drop_q = drop_q.where(Shift.event_id == shift.event_id) if shift.event_id else drop_q.where(Shift.id == shift.id)
+    dropped = {}
+    for wid, dat, st, why in (await db.execute(drop_q)).all():
+        if wid not in dropped or dat > dropped[wid][0]:
+            dropped[wid] = (dat, why if (st or "").lower() == "dropped" else None)
+
+    history = {wid: (st or "").lower() for wid, st in (await db.execute(
+        select(ShiftRequest.worker_id, ShiftRequest.status).where(
 ```
 
 **Edit 9.** Find:
 ```python
-
-
-async def duplicate_event(db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date]) -> List[ShiftEvent]:
-    """Copy an event to each date, keeping the same local start time in the venue's timezone."""
-    unique_dates = sorted(set(dates or []))
-    if not unique_dates:
-```
-Replace with:
-```python
-
-
-async def duplicate_event(
-    db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, dates: List[date], as_draft: bool = False,
-) -> List[ShiftEvent]:
-    """Copy an event to each date, keeping the same local start time in the venue's timezone.
-    Phase 29.3: copies are drafts when as_draft is set or the source is a draft."""
-    as_draft = as_draft or (event.status or PUBLISHED) == DRAFT
-    unique_dates = sorted(set(dates or []))
-    if not unique_dates:
-```
-
-**Edit 10.** Find:
-```python
-            location_staff_notes=event.location_staff_notes,
-            positions=positions,
-        ), allow_archived_location=True)
-        created.append(ev)
-    return created
-```
-Replace with:
-```python
-            location_staff_notes=event.location_staff_notes,
-            positions=positions,
-            publish=not as_draft,
-        ), allow_archived_location=True)
-        created.append(ev)
-    return created
-
-
-# ------------------------------------------------------------------------------
-# Phase 29.3: Draft / publish
-# ------------------------------------------------------------------------------
-BLOCKING_REQUEST_STATUSES = ACTIVE_REQUEST_STATUSES + ("checked_in", "completed")
-
-
-async def publish_event(db: AsyncSession, event: ShiftEvent) -> None:
-    """Draft -> live. Positions become OPEN; the caller tells the team (new_event_posted)."""
-    if event.cancelled_at is not None:
-        raise HTTPException(status_code=400, detail="This event was cancelled.")
-    if (event.status or PUBLISHED) != DRAFT:
-        raise HTTPException(status_code=400, detail="This event is already published.")
-    now = datetime.now(timezone.utc)
-    if _as_utc(event.start_time) <= now:
-        raise HTTPException(status_code=400, detail="This draft's start time has passed. Change the date, then publish.")
-    shifts = (await db.execute(
-        select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
-    )).scalars().all()
-    if not shifts:
-        raise HTTPException(status_code=400, detail="Add at least one position before publishing.")
-    try:
-        for s in shifts:
-            s.status = "FILLED" if (s.spots_filled or 0) >= (s.capacity or 1) else "OPEN"
-        event.status = PUBLISHED
-        event.published_at = now
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to publish: {str(e)}")
-
-
-async def unpublish_event(db: AsyncSession, event: ShiftEvent) -> None:
-    """Live -> draft. Only while nobody has requested, been booked or been offered a spot."""
-    if event.cancelled_at is not None:
-        raise HTTPException(status_code=400, detail="This event was cancelled.")
-    if (event.status or PUBLISHED) == DRAFT:
-        raise HTTPException(status_code=400, detail="This event is already a draft.")
-    shift_ids = (await db.execute(select(Shift.id).where(Shift.event_id == event.id))).scalars().all()
-    if shift_ids:
-        people = await db.scalar(
-            select(func.count(ShiftRequest.id)).where(
-                ShiftRequest.shift_id.in_(shift_ids),
-                func.lower(ShiftRequest.status).in_(BLOCKING_REQUEST_STATUSES),
-            )
-        )
-        if people:
-            raise HTTPException(
-                status_code=400,
-                detail="People have already requested or been booked on this event, so it can't go back to a draft. Edit it, or cancel it instead.",
-            )
-        offers = await db.scalar(
-            select(func.count(ShiftOffer.id)).where(ShiftOffer.shift_id.in_(shift_ids), ShiftOffer.status == "pending")
-        )
-        if offers:
-            raise HTTPException(status_code=400, detail="Withdraw the open offers on this event first.")
-    try:
-        await db.execute(
-            update(Shift)
-            .where(Shift.event_id == event.id, func.upper(Shift.status).in_(("OPEN", "FILLED")))
-            .values(status="DRAFT")
-            .execution_options(synchronize_session=False)
-        )
-        event.status = DRAFT
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to move it back to drafts: {str(e)}")
-
-
-async def discard_draft(db: AsyncSession, event: ShiftEvent) -> None:
-    """Delete a draft outright (its positions cascade). Published events are cancelled, never deleted."""
-    if (event.status or PUBLISHED) != DRAFT:
-        raise HTTPException(status_code=400, detail="Only drafts can be deleted. Cancel a published event instead.")
-    try:
-        await db.execute(delete(ShiftEvent).where(ShiftEvent.id == event.id))
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete the draft: {str(e)}")
-```
-
----
-
-## B2. NEW FILE `backend/src/services/event_templates.py`
-
-```python
-"""
-Phase 29.3: Event templates - a venue's reusable event setups (name, times, where, notes, positions).
-
-Times are venue-local 'HH:MM' strings. An end earlier than (or equal to) the start means the event ends
-the next day. Templates never create anything by themselves: the "Post a shift" form fills itself in
-from one, and the manager picks the date.
-"""
-import re
-from datetime import timezone
-from typing import Dict, List, Optional
-from zoneinfo import ZoneInfo
-
-from fastapi import HTTPException
-from sqlalchemy import select, func, delete
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.models import EventTemplate, ShiftEvent, Shift, Venue, User, VenueLocation
-from src.schemas import EventTemplateInput, EventTemplatePosition, EventTemplateResponse, EventPositionInput
-from src.services.shift_events import _validate_position, _clean
-from src.services.locations import (
-    validate_geofence_mode, check_geofence_possible, usage_counts, to_response as location_response,
-)
-
-MAX_TEMPLATES_PER_VENUE = 50
-TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-
-
-def _name(u: Optional[User]) -> Optional[str]:
-    if u is None:
-        return None
-    return f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
-
-
-def _norm_time(value: str, label: str) -> str:
-    v = (value or "").strip()
-    if len(v) == 4 and v[1] == ":":
-        v = "0" + v                                   # '9:30' -> '09:30'
-    if not TIME_RE.match(v):
-        raise HTTPException(status_code=400, detail=f"{label} must be a time like 18:00.")
-    return v
-
-
-def _position_dicts(positions: List[EventTemplatePosition]) -> List[dict]:
-    if not positions:
-        raise HTTPException(status_code=400, detail="Add at least one position.")
-    out = []
-    for p in positions:
-        _validate_position(EventPositionInput(**p.model_dump()))
-        rate = round(float(p.hourly_rate), 2)
-        rate_max = round(float(p.hourly_rate_max), 2) if p.hourly_rate_max is not None and p.hourly_rate_max > p.hourly_rate else None
-        out.append({
-            "role_type": p.role_type.strip()[:100],
-            "capacity": int(p.capacity),
-            "hourly_rate": rate,
-            "hourly_rate_max": rate_max,
-            "hide_rate": bool(p.hide_rate),
-            "tips_eligible": bool(p.tips_eligible),
-            "tip_pool": bool(p.tips_eligible and p.tip_pool),
-            "role_notes": _clean(p.role_notes),
-            "staff_notes": _clean(p.staff_notes),
-            "approval_mode": (p.approval_mode or "venue_default").lower(),
-        })
-    return out
-
-
-async def _location_for(db: AsyncSession, venue: Venue, location_id, keep_id=None) -> Optional[VenueLocation]:
-    """A saved, non-archived location of this venue (an archived one may stay on a template that already has it)."""
-    if not location_id:
-        return None
-    loc = await db.scalar(select(VenueLocation).where(VenueLocation.id == location_id))
-    if loc is None or loc.venue_id != venue.id:
-        raise HTTPException(status_code=400, detail="That location doesn't belong to this venue.")
-    if loc.is_archived and location_id != keep_id:
-        raise HTTPException(status_code=400, detail=f"“{loc.name}” is archived. Bring it back under Venue Settings → Locations first.")
-    return loc
-
-
-async def _check_name(db: AsyncSession, venue_id, name: str, exclude_id=None) -> str:
-    clean = (name or "").strip()[:120]
-    if not clean:
-        raise HTTPException(status_code=400, detail="Give the template a name.")
-    q = select(EventTemplate.id).where(EventTemplate.venue_id == venue_id, func.lower(EventTemplate.name) == clean.lower())
-    if exclude_id is not None:
-        q = q.where(EventTemplate.id != exclude_id)
-    if await db.scalar(q):
-        raise HTTPException(status_code=400, detail=f"You already have a template called “{clean}”.")
-    return clean
-
-
-def _apply(tpl: EventTemplate, data: EventTemplateInput, name: str, location: Optional[VenueLocation], mode: str) -> None:
-    title = (data.title or "").strip()[:255]
-    if not title:
-        raise HTTPException(status_code=400, detail="Give the event a name.")
-    start = _norm_time(data.start_local, "Start time")
-    end = _norm_time(data.end_local, "End time")
-    if start == end:
-        raise HTTPException(status_code=400, detail="The end time can't be the same as the start time.")
-    tpl.name = name
-    tpl.title = title
-    tpl.start_local = start
-    tpl.end_local = end
-    tpl.notes = _clean(data.notes)
-    tpl.staff_notes = _clean(data.staff_notes)
-    tpl.location_id = location.id if location is not None else None
-    tpl.geofence_mode = mode
-    tpl.location_staff_notes = _clean(data.location_staff_notes)
-    tpl.positions = _position_dicts(data.positions)
-
-
-async def to_responses(db: AsyncSession, templates: List[EventTemplate]) -> List[EventTemplateResponse]:
-    loc_ids = [t.location_id for t in templates if t.location_id]
-    locations: Dict = {
-        l.id: l for l in (await db.execute(select(VenueLocation).where(VenueLocation.id.in_(loc_ids)))).scalars().all()
-    } if loc_ids else {}
-    counts = await usage_counts(db, list(locations.keys())) if locations else {}
-    user_ids = {t.created_by_user_id for t in templates if t.created_by_user_id}
-    users = {
-        u.id: u for u in (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
-    } if user_ids else {}
-    out = []
-    for t in templates:
-        loc = locations.get(t.location_id)
-        out.append(EventTemplateResponse(
-            id=t.id, venue_id=t.venue_id, name=t.name, title=t.title,
-            start_local=t.start_local, end_local=t.end_local, overnight=t.end_local <= t.start_local,
-            notes=t.notes, staff_notes=t.staff_notes,
-            location=location_response(loc, counts) if loc is not None else None,
-            geofence_mode=t.geofence_mode or "venue_default", location_staff_notes=t.location_staff_notes,
-            positions=[EventTemplatePosition(**p) for p in (t.positions or [])],
-            created_by_name=_name(users.get(t.created_by_user_id)),
-            created_at=t.created_at, updated_at=t.updated_at,
+            offered=wid in offered,
+            venue_shifts=int(worked.get(wid, 0)),
         ))
-    return out
-
-
-async def list_templates(db: AsyncSession, venue_id) -> List[EventTemplateResponse]:
-    rows = (await db.execute(
-        select(EventTemplate).where(EventTemplate.venue_id == venue_id).order_by(func.lower(EventTemplate.name))
-    )).scalars().all()
-    return await to_responses(db, list(rows))
-
-
-async def create_template(db: AsyncSession, venue: Venue, user: User, data: EventTemplateInput) -> EventTemplate:
-    count = await db.scalar(select(func.count(EventTemplate.id)).where(EventTemplate.venue_id == venue.id)) or 0
-    if count >= MAX_TEMPLATES_PER_VENUE:
-        raise HTTPException(status_code=400, detail=f"A venue can have up to {MAX_TEMPLATES_PER_VENUE} templates. Delete one you no longer use.")
-    name = await _check_name(db, venue.id, data.name)
-    mode = validate_geofence_mode(data.geofence_mode)
-    location = await _location_for(db, venue, data.location_id)
-    check_geofence_possible(mode, venue, location)
-    tpl = EventTemplate(venue_id=venue.id, created_by_user_id=user.id)
-    _apply(tpl, data, name, location, mode)
-    try:
-        db.add(tpl)
-        await db.commit()
-        await db.refresh(tpl)
-        return tpl
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to save the template: {str(e)}")
-
-
-async def update_template(db: AsyncSession, venue: Venue, tpl: EventTemplate, data: EventTemplateInput) -> EventTemplate:
-    name = await _check_name(db, venue.id, data.name, exclude_id=tpl.id)
-    mode = validate_geofence_mode(data.geofence_mode)
-    location = await _location_for(db, venue, data.location_id, keep_id=tpl.location_id)
-    check_geofence_possible(mode, venue, location)
-    _apply(tpl, data, name, location, mode)
-    try:
-        await db.commit()
-        await db.refresh(tpl)
-        return tpl
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to save the template: {str(e)}")
-
-
-async def delete_template(db: AsyncSession, tpl: EventTemplate) -> None:
-    try:
-        await db.execute(delete(EventTemplate).where(EventTemplate.id == tpl.id))
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete the template: {str(e)}")
-
-
-async def template_from_event(db: AsyncSession, event: ShiftEvent, venue: Venue, user: User, name: str) -> EventTemplate:
-    """Save an existing event's setup (times in venue time, where, notes, open positions) as a template."""
-    shifts = (await db.execute(
-        select(Shift)
-        .where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
-        .order_by(Shift.created_at.asc())
-    )).scalars().all()
-    if not shifts:
-        raise HTTPException(status_code=400, detail="Nothing to save: every position is cancelled.")
-    tz = ZoneInfo(venue.timezone or "America/New_York")
-    start = event.start_time if event.start_time.tzinfo else event.start_time.replace(tzinfo=timezone.utc)
-    end = event.end_time if event.end_time.tzinfo else event.end_time.replace(tzinfo=timezone.utc)
-    location = await db.scalar(select(VenueLocation).where(VenueLocation.id == event.location_id)) if event.location_id else None
-    data = EventTemplateInput(
-        name=name,
-        title=event.title,
-        start_local=start.astimezone(tz).strftime("%H:%M"),
-        end_local=end.astimezone(tz).strftime("%H:%M"),
-        notes=event.notes,
-        staff_notes=event.staff_notes,
-        location_id=location.id if location is not None and not location.is_archived else None,
-        geofence_mode=event.geofence_mode or "venue_default",
-        location_staff_notes=event.location_staff_notes,
-        positions=[
-            EventTemplatePosition(
-                role_type=s.role_type, capacity=s.capacity or 1, hourly_rate=float(s.hourly_rate),
-                hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
-                hide_rate=bool(s.hide_rate), tips_eligible=bool(s.tips_eligible), tip_pool=bool(s.tip_pool),
-                role_notes=s.description, staff_notes=s.staff_notes, approval_mode=s.approval_mode or "venue_default",
-            )
-            for s in shifts
-        ],
-    )
-    return await create_template(db, venue, user, data)
+    out.sort(key=lambda c: (
+```
+Replace with:
+```python
+            offered=wid in offered,
+            venue_shifts=int(worked.get(wid, 0)),
+            dropped_at=dropped[wid][0] if wid in dropped else None,
+            drop_reason=dropped[wid][1] if wid in dropped else None,
+        ))
+    out.sort(key=lambda c: (
 ```
 
 ---
 
-## B3. NEW FILE `backend/src/routers/event_templates.py`
-Manager of the venue or platform admin (`can_manage_venue`).
+## B3. `backend/src/routers/staffing.py` (EDITS)
+`POST /api/shifts/{shift_id}/assign` body is now `{worker_id, reason?}`. `reason` is required (5+ characters) when the person dropped this event and didn't ask back themselves; otherwise the response is 400.
 
-| Method | URL | Purpose |
-|---|---|---|
-| GET | `/api/venues/{venue_id}/event-templates` | list (sorted by name) |
-| POST | `/api/venues/{venue_id}/event-templates` | create → 201 |
-| PUT | `/api/venues/{venue_id}/event-templates/{template_id}` | replace |
-| DELETE | `/api/venues/{venue_id}/event-templates/{template_id}` | → 204 |
-| POST | `/api/events/{event_id}/save-as-template` | `{name}` → 201 |
-
+**Edit 1.** Find:
 ```python
-"""
-Phase 29.3: Event templates (the venue's reusable event setups). Venue managers of the venue, or platform admins.
-
-  GET    /api/venues/{venue_id}/event-templates
-  POST   /api/venues/{venue_id}/event-templates                  EventTemplateInput -> 201
-  PUT    /api/venues/{venue_id}/event-templates/{template_id}    EventTemplateInput
-  DELETE /api/venues/{venue_id}/event-templates/{template_id}    -> 204
-  POST   /api/events/{event_id}/save-as-template                 {name} -> 201
-"""
-from typing import List
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import User, Venue, ShiftEvent, EventTemplate
-from src.schemas import EventTemplateInput, EventTemplateResponse, SaveAsTemplateRequest
-from src.auth import require_manager_or_admin
-from src.services.venue_public import can_manage_venue
-from src.services.event_templates import (
-    list_templates, create_template, update_template, delete_template, template_from_event, to_responses,
-)
-from src.services import activity
+from src.models import User, Shift, ShiftOffer
+from src.schemas import (
+    AssignCandidate, AssignRequest, AssignResult, OfferCreate, OfferCreateResult, WorkerOffer, OfferAcceptResult,
+```
+Replace with:
+```python
 
-router = APIRouter(tags=["Event templates"])
-
-
-async def _venue(db: AsyncSession, venue_id: UUID, user: User) -> Venue:
-    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
-    if venue is None:
-        raise HTTPException(status_code=404, detail="Venue not found.")
-    if not await can_manage_venue(db, user, venue.id):
-        raise HTTPException(status_code=403, detail="You don't manage this venue.")
-    return venue
-
-
-async def _template(db: AsyncSession, venue: Venue, template_id: UUID) -> EventTemplate:
-    tpl = await db.scalar(select(EventTemplate).where(EventTemplate.id == template_id, EventTemplate.venue_id == venue.id))
-    if tpl is None:
-        raise HTTPException(status_code=404, detail="Template not found.")
-    return tpl
-
-
-@router.get("/api/venues/{venue_id}/event-templates", response_model=List[EventTemplateResponse])
-async def get_templates(
-    venue_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    venue = await _venue(db, venue_id, current_user)
-    return await list_templates(db, venue.id)
-
-
-@router.post("/api/venues/{venue_id}/event-templates", response_model=EventTemplateResponse, status_code=status.HTTP_201_CREATED)
-async def post_template(
-    venue_id: UUID,
-    data: EventTemplateInput,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    venue = await _venue(db, venue_id, current_user)
-    tpl = await create_template(db, venue, current_user, data)
-    out = (await to_responses(db, [tpl]))[0]
-    await activity.for_venue("template_saved", venue.id, current_user.id, f"Created the event template “{tpl.name}”")
-    return out
-
-
-@router.put("/api/venues/{venue_id}/event-templates/{template_id}", response_model=EventTemplateResponse)
-async def put_template(
-    venue_id: UUID,
-    template_id: UUID,
-    data: EventTemplateInput,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    venue = await _venue(db, venue_id, current_user)
-    tpl = await update_template(db, venue, await _template(db, venue, template_id), data)
-    out = (await to_responses(db, [tpl]))[0]
-    await activity.for_venue("template_saved", venue.id, current_user.id, f"Edited the event template “{tpl.name}”")
-    return out
-
-
-@router.delete("/api/venues/{venue_id}/event-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_template(
-    venue_id: UUID,
-    template_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    venue = await _venue(db, venue_id, current_user)
-    tpl = await _template(db, venue, template_id)
-    name = tpl.name
-    await delete_template(db, tpl)
-    await activity.for_venue("template_deleted", venue.id, current_user.id, f"Deleted the event template “{name}”")
-
-
-@router.post("/api/events/{event_id}/save-as-template", response_model=EventTemplateResponse, status_code=status.HTTP_201_CREATED)
-async def save_event_as_template(
-    event_id: UUID,
-    body: SaveAsTemplateRequest,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    event = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == event_id))
-    if event is None:
-        raise HTTPException(status_code=404, detail="Event not found.")
-    venue = await _venue(db, event.venue_id, current_user)
-    tpl = await template_from_event(db, event, venue, current_user, body.name)
-    out = (await to_responses(db, [tpl]))[0]
-    await activity.for_venue("template_saved", venue.id, current_user.id,
-                             f"Saved “{event.title}” as the event template “{tpl.name}”")
-    return out
+from src.database import get_db
+from src.models import User, Shift, ShiftOffer, ShiftRequest
+from src.schemas import (
+    AssignCandidate, AssignRequest, AssignResult, OfferCreate, OfferCreateResult, WorkerOffer, OfferAcceptResult,
 ```
 
----
-
-## B4. `backend/src/routers/events.py` (EDITS)
-Drafts stay quiet on create/duplicate. New endpoints:
-
-| Method | URL | Purpose |
-|---|---|---|
-| POST | `/api/events/{event_id}/publish` | draft → live; tells the team; 400 if already live, cancelled or in the past |
-| POST | `/api/events/{event_id}/unpublish` | live → draft; 400 if anyone requested/was booked or an offer is open |
-| DELETE | `/api/events/{event_id}` | delete a **draft** → 204; 400 for published events |
-
-**Edit 1.** Find:
+**Edit 2.** Find:
 ```python
-from src.services.shift_events import (
-    create_event_with_positions, update_event, build_event_detail, cancel_shifts, duplicate_event,
-)
-from src.services.timesheets import build_timesheet
-from src.services import notify_events
-from src.services import activity
-from datetime import datetime, timezone
+):
+    await _managed_shift(db, shift_id, current_user)
+    request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id)
+    await notify_events.assigned(request_id)          # after commit; never raises
+    await activity.for_request("assigned", request_id, current_user.id)   # Phase 29.1
+    return AssignResult(request_id=request_id, message=message)
 
 ```
 Replace with:
 ```python
-from src.services.shift_events import (
-    create_event_with_positions, update_event, build_event_detail, cancel_shifts, duplicate_event,
-    publish_event, unpublish_event, discard_draft, DRAFT,
+):
+    await _managed_shift(db, shift_id, current_user)
+    request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id, reason=body.reason)
+    await notify_events.assigned(request_id)          # after commit; never raises
+    # Phase 29.4: flag a rebook after a drop in the activity log
+    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
+    extra = f"booked back after a drop · “{req.rebook_reason}”" if req is not None and req.previous_drop_at and req.rebook_reason else ""
+    await activity.for_request("assigned", request_id, current_user.id, extra)   # Phase 29.1
+    return AssignResult(request_id=request_id, message=message)
+
+```
+
+---
+
+## B4. `backend/src/routers/shifts.py` (EDITS)
+`POST /api/shifts/{shift_id}/drop` accepts an optional `{reason}` body. Approve stores an aware UTC time.
+
+**Edit 1.** Find:
+```python
 )
-from src.services.timesheets import build_timesheet
-from src.services import notify_events
-from src.services import activity
-from src.services.activity import short_when
-from datetime import datetime, timezone
+from src.schemas import (
+    ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
+    CheckInRequest, CheckOutRequest, TimeEntryResponse,
+```
+Replace with:
+```python
+)
+from src.schemas import (
+    DropShiftBody,                                            # Phase 29.4
+    ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
+    CheckInRequest, CheckOutRequest, TimeEntryResponse,
+```
+
+**Edit 2.** Find:
+```python
+        shift_req.approval_source = "manager_manual"
+        shift_req.approved_by_user_id = current_user.id
+        shift_req.approved_at = datetime.utcnow()
+        # Phase 26.1: booked on this position -> close their other waiting requests in the event
+        await withdraw_other_pending_in_event(
+```
+Replace with:
+```python
+        shift_req.approval_source = "manager_manual"
+        shift_req.approved_by_user_id = current_user.id
+        shift_req.approved_at = datetime.now(timezone.utc)      # Phase 29.4: was a naive utcnow()
+        # Phase 26.1: booked on this position -> close their other waiting requests in the event
+        await withdraw_other_pending_in_event(
+```
+
+**Edit 3.** Find:
+```python
+async def drop_shift(
+    shift_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+```
+Replace with:
+```python
+async def drop_shift(
+    shift_id: UUID,
+    body: Optional[DropShiftBody] = None,                     # Phase 29.4: optional reason for the manager
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+```
+
+**Edit 4.** Find:
+```python
+        shift_req.status = "dropped"
+        shift_req.dropped_at = now_utc
+
+        # Step 2: Decrement spots_filled
+```
+Replace with:
+```python
+        shift_req.status = "dropped"
+        shift_req.dropped_at = now_utc
+        shift_req.status_reason = ((body.reason or "").strip()[:500] or None) if body else None   # Phase 29.4
+
+        # Step 2: Decrement spots_filled
+```
+
+**Edit 5.** Find:
+```python
+    # Phase 29.1: managers hear about drops right away (after commit; never raises)
+    await notify_events.shift_dropped(shift_req.id)
+    await activity.for_request("shift_dropped", shift_req.id, current_user.id)
+
+    return {
+```
+Replace with:
+```python
+    # Phase 29.1: managers hear about drops right away (after commit; never raises)
+    await notify_events.shift_dropped(shift_req.id)
+    await activity.for_request("shift_dropped", shift_req.id, current_user.id,
+                               f"“{shift_req.status_reason}”" if shift_req.status_reason else "")   # Phase 29.4: with their reason
+
+    return {
+```
+
+---
+
+## B5. `backend/src/services/listings.py` (EDITS)
+
+**Edit 1.** Find:
+```python
+        positions: List[ListingPosition] = []
+        my_request: Optional[ListingMyRequest] = None
+        for s in ev_shifts:
+            r = mine.get(s.id)
+```
+Replace with:
+```python
+        positions: List[ListingPosition] = []
+        my_request: Optional[ListingMyRequest] = None
+        # Phase 29.4: did the viewer drop a position here? Then asking back needs a reason + approval.
+        drops = [as_utc(mine[s.id].dropped_at) for s in ev_shifts if s.id in mine and mine[s.id].dropped_at is not None]
+        dropped_here = max(drops) if drops else None
+        for s in ev_shifts:
+            r = mine.get(s.id)
+```
+
+**Edit 2.** Find:
+```python
+                spots_left=left,
+                status="OPEN" if is_open else "FILLED",
+                booking="instant" if decision == RequestStatus.APPROVED else "approval",
+                est_pay_min=round(rate * hours, 2) if rate is not None else None,
+                est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
+                my_status=my_status,
+                my_status_reason=r.status_reason if r is not None else None,
+                staff_notes=s.staff_notes if booked_here else None,
+            ))
+```
+Replace with:
+```python
+                spots_left=left,
+                status="OPEN" if is_open else "FILLED",
+                booking="instant" if decision == RequestStatus.APPROVED and dropped_here is None else "approval",
+                est_pay_min=round(rate * hours, 2) if rate is not None else None,
+                est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
+                my_status=my_status,
+                my_status_reason=r.status_reason if r is not None else None,
+                my_dropped_at=r.dropped_at if r is not None and my_status == "dropped" else None,   # Phase 29.4
+                staff_notes=s.staff_notes if booked_here else None,
+            ))
+```
+
+**Edit 3.** Find:
+```python
+            started=started,
+            can_request=can_request,
+            staff_notes=ev.staff_notes if (
+                my_request is not None and my_request.status in ASSIGNED_STATUSES
+```
+Replace with:
+```python
+            started=started,
+            can_request=can_request,
+            dropped_here=dropped_here if (my_request is None or my_request.status in PENDING_STATUSES) else None,   # Phase 29.4
+            staff_notes=ev.staff_notes if (
+                my_request is not None and my_request.status in ASSIGNED_STATUSES
+```
+
+---
+
+## B6. `backend/src/routers/venues.py` (EDITS)
+The manager board returns a `dropped` list per position and rebook flags on each person.
+
+**Edit 1.** Find:
+```python
+            rating_review=ratings_by_req[req.id].review if req.id in ratings_by_req else None,
+            approval_source=req.approval_source,
+        )
+        if person.status in ASSIGNED_STATUSES:
+            assigned_by_shift[req.shift_id].append(person)
+        else:
+            requested_by_shift[req.shift_id].append(person)
+
+    event_ids = {s.event_id for s in shifts if s.event_id}
+```
+Replace with:
+```python
+            rating_review=ratings_by_req[req.id].review if req.id in ratings_by_req else None,
+            approval_source=req.approval_source,
+            previous_drop_at=req.previous_drop_at,       # Phase 29.4
+            rebook_reason=req.rebook_reason,
+        )
+        if person.status in ASSIGNED_STATUSES:
+            assigned_by_shift[req.shift_id].append(person)
+        else:
+            requested_by_shift[req.shift_id].append(person)
+
+    # Phase 29.4: people who dropped a position (the manager can book them back with a reason)
+    dropped_by_shift = defaultdict(list)
+    for req, worker in (await db.execute(
+        select(ShiftRequest, User)
+        .join(User, ShiftRequest.worker_id == User.id)
+        .where(ShiftRequest.shift_id.in_(shift_ids), func.lower(ShiftRequest.status) == "dropped")
+        .order_by(ShiftRequest.dropped_at.desc())
+    )).all():
+        dropped_by_shift[req.shift_id].append(RosterPerson(
+            request_id=req.id, worker_id=worker.id, first_name=worker.first_name or "", last_name=worker.last_name or "",
+            email=worker.email, phone=worker.phone,
+            aggregate_rating=float(worker.aggregate_rating) if worker.aggregate_rating is not None else 5.0,
+            rating_count=int(worker.rating_count or 0), status="dropped", requested_at=req.created_at,
+            dropped_at=req.dropped_at, drop_reason=req.status_reason,
+        ))
+
+    event_ids = {s.event_id for s in shifts if s.event_id}
+```
+
+**Edit 2.** Find:
+```python
+            requested=requested_by_shift[s.id],
+            offers=offers_by_shift[s.id],
+        ))
+
+```
+Replace with:
+```python
+            requested=requested_by_shift[s.id],
+            offers=offers_by_shift[s.id],
+            dropped=dropped_by_shift[s.id],            # Phase 29.4
+        ))
+
+```
+
+---
+
+## B7. `backend/src/services/reliability.py` (EDITS)
+
+**Edit 1.** Find:
+```python
+from uuid import UUID
+
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+```
+Replace with:
+```python
+from uuid import UUID
+
+from sqlalchemy import select, func, or_, and_
+from sqlalchemy.ext.asyncio import AsyncSession
 
 ```
 
 **Edit 2.** Find:
 ```python
-    event = await create_event_with_positions(db, venue, current_user, data)
-    detail = await build_event_detail(db, event)
-    await notify_events.new_event_posted(event.id)          # Phase 28: tell the venue's team
-    await activity.for_event("event_created", event.id, current_user.id)   # Phase 29.1
-```
-Replace with:
-```python
-    event = await create_event_with_positions(db, venue, current_user, data)
-    detail = await build_event_detail(db, event)
-    if event.status == DRAFT:                               # Phase 29.3: drafts stay quiet
-        await activity.for_event("event_drafted", event.id, current_user.id)
-        return detail
-    await notify_events.new_event_posted(event.id)          # Phase 28: tell the venue's team
-    await activity.for_event("event_created", event.id, current_user.id)   # Phase 29.1
-```
-
-**Edit 3.** Find:
-```python
-    event = await _load_managed_event(db, event_id, current_user)
-    venue = await _venue_for(db, event.venue_id)
-    created = await duplicate_event(db, event, venue, current_user, body.dates)
-    for ev in created:
-        await notify_events.new_event_posted(ev.id)         # Phase 28
-    if created:
-        await activity.for_event("event_duplicated", event_id, current_user.id,
-                                 f"{len(created)} {'copy' if len(created) == 1 else 'copies'}")   # Phase 29.1
-    return DuplicateEventResult(created_event_ids=[e.id for e in created], count=len(created))
-
-
-```
-Replace with:
-```python
-    event = await _load_managed_event(db, event_id, current_user)
-    venue = await _venue_for(db, event.venue_id)
-    created = await duplicate_event(db, event, venue, current_user, body.dates, as_draft=body.as_draft)
-    drafts = sum(1 for ev in created if ev.status == DRAFT)
-    for ev in created:
-        if ev.status != DRAFT:
-            await notify_events.new_event_posted(ev.id)     # Phase 28 (drafts stay quiet, Phase 29.3)
-    if created:
-        await activity.for_event("event_duplicated", event_id, current_user.id,
-                                 f"{len(created)} {'copy' if len(created) == 1 else 'copies'}"
-                                 + (" as drafts" if drafts else ""))   # Phase 29.1
-    return DuplicateEventResult(created_event_ids=[e.id for e in created], count=len(created))
-
-
-# ------------------------------------------------------------------------------
-# Phase 29.3: Draft / publish
-# ------------------------------------------------------------------------------
-@router.post("/{event_id}/publish", response_model=EventDetail)
-async def publish(
-    event_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Make a draft live: workers can see and request it, and the venue's team is told."""
-    event = await _load_managed_event(db, event_id, current_user)
-    await publish_event(db, event)
-    await db.refresh(event)
-    detail = await build_event_detail(db, event)
-    await notify_events.new_event_posted(event.id)
-    await activity.for_event("event_published", event.id, current_user.id)
-    return detail
-
-
-@router.post("/{event_id}/unpublish", response_model=EventDetail)
-async def unpublish(
-    event_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Take a live event back to drafts (only while nobody has requested, been booked or been offered it)."""
-    event = await _load_managed_event(db, event_id, current_user)
-    await unpublish_event(db, event)
-    await db.refresh(event)
-    detail = await build_event_detail(db, event)
-    await activity.for_event("event_unpublished", event.id, current_user.id)
-    return detail
-
-
-@router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_draft(
-    event_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """Delete a draft. Published events can only be cancelled."""
-    event = await _load_managed_event(db, event_id, current_user)
-    venue = await _venue_for(db, event.venue_id)
-    what = f"{event.title} ({short_when(event.start_time, venue)})"
-    venue_id = event.venue_id
-    await discard_draft(db, event)
-    await activity.for_venue("event_discarded", venue_id, current_user.id, f"Deleted the draft {what}")
-
-
-```
-
----
-
-## B5. `backend/src/routers/venues.py` (EDITS)
-`GET /api/venues/{id}/events?scope=drafts`, and each event carries `status`.
-
-**Edit 1.** Find:
-```python
-async def get_venue_events(
-    venue_id: UUID,
-    scope: str = Query("upcoming", pattern="^(upcoming|past|all)$"),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
-    Shift row per role; rows sharing (title, start_time, end_time) are one event.
-```
-Replace with:
-```python
-async def get_venue_events(
-    venue_id: UUID,
-    scope: str = Query("upcoming", pattern="^(upcoming|past|all|drafts)$"),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Phase 29.3: scope=drafts lists only draft events (any date, soonest first).
-    Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
-    Shift row per role; rows sharing (title, start_time, end_time) are one event.
-```
-
-**Edit 2.** Find:
-```python
-    elif scope == "past":
-        q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
-    else:
-        q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
-```
-Replace with:
-```python
-    elif scope == "past":
-        q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
-    elif scope == "drafts":
-        q = q.where(func.upper(Shift.status) == "DRAFT").order_by(Shift.start_time.asc(), Shift.role_type.asc())
-    else:
-        q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
-```
-
-**Edit 3.** Find:
-```python
-                "event_key": key,
-                "event_id": s.event_id,
-                "title": s.title or "Shift",
-                "start_time": s.start_time,
-```
-Replace with:
-```python
-                "event_key": key,
-                "event_id": s.event_id,
-                "status": (event_objs[s.event_id].status or "published") if s.event_id in event_objs else "published",   # Phase 29.3
-                "title": s.title or "Shift",
-                "start_time": s.start_time,
-```
-
----
-
-## B6. `backend/src/services/listings.py` (EDIT)
-Workers never get drafts (list or single event).
-
-**Edit 1.** Find:
-```python
-    now = datetime.now(timezone.utc)
-
-    q = select(ShiftEvent)
-    if event_id is not None:
-        q = q.where(ShiftEvent.id == event_id)
-```
-Replace with:
-```python
-    now = datetime.now(timezone.utc)
-
-    q = select(ShiftEvent).where(ShiftEvent.status != "draft")   # Phase 29.3: drafts are manager-only
-    if event_id is not None:
-        q = q.where(ShiftEvent.id == event_id)
-```
-
----
-
-## B7. `backend/src/services/venue_public.py` (EDITS)
-Directory stats and the public venue page skip drafts.
-
-**Edit 1.** Find:
-```python
-            ).label("open_spots"),
-            func.min(Shift.start_time).filter(Shift.start_time >= now).label("next_start"),
-        ).group_by(Shift.venue_id)
+        .where(
+            ShiftRequest.worker_id.in_(worker_ids),
+            func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped", "no_show")),
+        )
     )).all()
-    stats = {r.venue_id: r for r in stats_rows}
 ```
 Replace with:
 ```python
-            ).label("open_spots"),
-            func.min(Shift.start_time).filter(Shift.start_time >= now).label("next_start"),
-        ).where(func.upper(Shift.status) != "DRAFT").group_by(Shift.venue_id)      # Phase 29.3: drafts are hidden
+        .where(
+            ShiftRequest.worker_id.in_(worker_ids),
+            or_(
+                func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped", "no_show")),
+                # Phase 29.4: dropped, then asked back / was booked back but it didn't happen -> still a drop
+                and_(ShiftRequest.dropped_at.isnot(None), func.lower(ShiftRequest.status) != "transferred"),
+            ),
+        )
     )).all()
-    stats = {r.venue_id: r for r in stats_rows}
-```
-
-**Edit 2.** Find:
-```python
-            func.count(distinct(func.concat(Shift.title, "|", Shift.start_time, "|", Shift.end_time))),
-            func.coalesce(func.sum(Shift.capacity), 0),
-        ).where(Shift.venue_id == venue.id, Shift.start_time >= since, Shift.start_time < now)
-    )).one()
-
-```
-Replace with:
-```python
-            func.count(distinct(func.concat(Shift.title, "|", Shift.start_time, "|", Shift.end_time))),
-            func.coalesce(func.sum(Shift.capacity), 0),
-        ).where(Shift.venue_id == venue.id, Shift.start_time >= since, Shift.start_time < now,
-                func.upper(Shift.status) != "DRAFT")      # Phase 29.3
-    )).one()
-
 ```
 
 **Edit 3.** Find:
 ```python
-async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
-    now = datetime.now(timezone.utc)
-    q = select(Shift).where(Shift.venue_id == venue.id)
-    if scope == "past":
-        q = q.where(
+            continue
+
+        if status_l == "dropped":
+            d = _aware(dropped_at)
+            if d is not None and (start - d) < LATE_DROP_WINDOW:
 ```
 Replace with:
 ```python
-async def build_public_events(db: AsyncSession, venue: Venue, user: User, scope: str) -> List[PublicVenueEvent]:
-    now = datetime.now(timezone.utc)
-    q = select(Shift).where(Shift.venue_id == venue.id, func.upper(Shift.status) != "DRAFT")   # Phase 29.3
-    if scope == "past":
-        q = q.where(
+            continue
+
+        if status_l == "dropped" or (dropped_at is not None and status_l not in COMMITTED_STATUSES + ("no_show",)):
+            d = _aware(dropped_at)
+            if d is not None and (start - d) < LATE_DROP_WINDOW:
 ```
 
 ---
 
-## B8. `backend/src/services/booking.py` (EDIT)
+## B8. `backend/src/services/notify_events.py` (EDITS)
 
 **Edit 1.** Find:
 ```python
-        if shift_status == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
-        if as_utc(shift.start_time) <= datetime.now(timezone.utc):
-            raise HTTPException(status_code=400, detail="This shift has already started.")
+    title = f"{person(worker)} requested {shift.role_type}"
+    body = f"{event.title if event else shift.title} · {when_text(shift.start_time, venue)}"
+    if req.notes:
+        body += f"\n“{req.notes}”"
 ```
 Replace with:
 ```python
-        if shift_status == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
-        if shift_status == "DRAFT":                                                   # Phase 29.3
-            raise HTTPException(status_code=400, detail="This event isn't open for requests.")
-        if as_utc(shift.start_time) <= datetime.now(timezone.utc):
-            raise HTTPException(status_code=400, detail="This shift has already started.")
-```
-
----
-
-## B9. `backend/src/services/staffing.py` (EDITS)
-Assign and offers refuse drafts.
-
-**Edit 1.** Find:
-```python
-    if (shift.status or "").upper() == "CANCELLED":
-        raise HTTPException(status_code=400, detail="This position was cancelled.")
-    if as_utc(shift.end_time) <= now:
-        raise HTTPException(status_code=400, detail="This shift is already over.")
-```
-Replace with:
-```python
-    if (shift.status or "").upper() == "CANCELLED":
-        raise HTTPException(status_code=400, detail="This position was cancelled.")
-    if (shift.status or "").upper() == "DRAFT":                                        # Phase 29.3
-        raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before booking people.")
-    if as_utc(shift.end_time) <= now:
-        raise HTTPException(status_code=400, detail="This shift is already over.")
+    title = f"{person(worker)} requested {shift.role_type}"
+    body = f"{event.title if event else shift.title} · {when_text(shift.start_time, venue)}"
+    if req.previous_drop_at is not None:                      # Phase 29.4: asking back after a drop
+        title = f"{person(worker)} dropped this earlier and is asking back · {shift.role_type}"
+        body += "\nThey dropped this event earlier. It needs your approval."
+    if req.notes:
+        body += f"\n“{req.notes}”"
 ```
 
 **Edit 2.** Find:
 ```python
-        if (shift.status or "").upper() == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
-        if shift.event_id:
-            ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id))
+        db, await manager_ids(db, shift.venue_id), "shift_dropped",
+        f"{person(worker)} dropped {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event.",
+        manager_link(shift.venue_id, shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id,
+        request_id=req.id, urgent=is_soon(shift.start_time), dedupe_key=f"dropped:{req.id}",
+    )
+
 ```
 Replace with:
 ```python
-        if (shift.status or "").upper() == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
-        if (shift.status or "").upper() == "DRAFT":                                    # Phase 29.3
-            raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before sending offers.")
-        if shift.event_id:
-            ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id))
+        db, await manager_ids(db, shift.venue_id), "shift_dropped",
+        f"{person(worker)} dropped {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event."
+        + (f"\nTheir reason: “{req.status_reason}”" if req.status_reason else ""),          # Phase 29.4
+        manager_link(shift.venue_id, shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id,
+        request_id=req.id, urgent=is_soon(shift.start_time),
+        dedupe_key=f"dropped:{req.id}:{int(_as_utc(req.dropped_at).timestamp()) if req.dropped_at else 0}",
+    )
+
 ```
 
 ---
 
-## B10. `backend/src/services/activity.py` (EDITS)
+## B9. `backend/src/routers/transfers.py` (EDIT)
+Declining or withdrawing a hand-off only works while it's still waiting.
 
 **Edit 1.** Find:
 ```python
-    "position_cancelled": "changes",
-    "event_duplicated": "changes",
-    "venue_settings": "changes",
-    "not_clocked_in": "alerts",
-```
-Replace with:
-```python
-    "position_cancelled": "changes",
-    "event_duplicated": "changes",
-    "event_drafted": "changes",          # Phase 29.3
-    "event_published": "changes",
-    "event_unpublished": "changes",
-    "event_discarded": "changes",
-    "template_saved": "changes",
-    "template_deleted": "changes",
-    "venue_settings": "changes",
-    "not_clocked_in": "alerts",
-```
+        is_manager = bool(mgr)
 
-**Edit 2.** Find:
-```python
-        "position_cancelled": f"Cancelled a position in {what}",
-        "event_duplicated": f"Copied {what}",
-    }.get(kind, what)
-    if extra:
+    if current_user.id == transfer.to_worker_id:
+        transfer.status = "declined"
 ```
 Replace with:
 ```python
-        "position_cancelled": f"Cancelled a position in {what}",
-        "event_duplicated": f"Copied {what}",
-        "event_drafted": f"Saved a draft: {what}",                 # Phase 29.3
-        "event_published": f"Published {what}",
-        "event_unpublished": f"Moved {what} back to drafts",
-    }.get(kind, what)
-    if extra:
+        is_manager = bool(mgr)
+
+    # Phase 29.4: only a hand-off that's still waiting can be declined / withdrawn / denied
+    if (transfer.status or "").lower() not in ("pending_worker_acceptance", "pending_manager_approval"):
+        raise HTTPException(status_code=400, detail="This hand-off is already settled.")
+
+    if current_user.id == transfer.to_worker_id:
+        transfer.status = "declined"
 ```
 
 ---
 
-## B11. `backend/src/routers/admin_console.py` (EDITS)
-Overview and venue numbers ignore drafts.
+# PART C: Frontend, worker
 
-**Edit 1.** Find:
-```python
-    venues = (await db.execute(select(Venue).order_by(Venue.name))).scalars().all()
+New folder: `frontend/src/components/worker/`.
 
-    live = and_(func.upper(Shift.status) != "CANCELLED", Shift.start_time >= now)
-    events_7d = int(await db.scalar(
-        select(func.count(ShiftEvent.id)).where(
-            ShiftEvent.cancelled_at.is_(None), ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=7))
-    ) or 0)
-    cap, filled = (await db.execute(
-```
-Replace with:
-```python
-    venues = (await db.execute(select(Venue).order_by(Venue.name))).scalars().all()
-
-    live = and_(func.upper(Shift.status).notin_(("CANCELLED", "DRAFT")), Shift.start_time >= now)   # Phase 29.3: not drafts
-    events_7d = int(await db.scalar(
-        select(func.count(ShiftEvent.id)).where(
-            ShiftEvent.cancelled_at.is_(None), ShiftEvent.status != "draft",
-            ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=7))
-    ) or 0)
-    cap, filled = (await db.execute(
-```
-
-**Edit 2.** Find:
-```python
-    events = dict((await db.execute(
-        select(ShiftEvent.venue_id, func.count(ShiftEvent.id)).where(
-            ShiftEvent.cancelled_at.is_(None), ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=30))
-        .group_by(ShiftEvent.venue_id)
-    )).all())
-    open7 = dict((await db.execute(
-        select(Shift.venue_id, func.sum(Shift.capacity - Shift.spots_filled)).where(
-            func.upper(Shift.status) != "CANCELLED", Shift.start_time >= now, Shift.start_time < now + timedelta(days=7),
-            Shift.spots_filled < Shift.capacity)
-        .group_by(Shift.venue_id)
-```
-Replace with:
-```python
-    events = dict((await db.execute(
-        select(ShiftEvent.venue_id, func.count(ShiftEvent.id)).where(
-            ShiftEvent.cancelled_at.is_(None), ShiftEvent.status != "draft",
-            ShiftEvent.start_time >= now, ShiftEvent.start_time < now + timedelta(days=30))
-        .group_by(ShiftEvent.venue_id)
-    )).all())
-    open7 = dict((await db.execute(
-        select(Shift.venue_id, func.sum(Shift.capacity - Shift.spots_filled)).where(
-            func.upper(Shift.status).notin_(("CANCELLED", "DRAFT")), Shift.start_time >= now, Shift.start_time < now + timedelta(days=7),
-            Shift.spots_filled < Shift.capacity)
-        .group_by(Shift.venue_id)
-```
-
----
-
-## B12. `backend/src/main.py` (EDITS)
-Router import + `include_router` only. **Do not touch the CORS block.**
-
-**Edit 1.** Find:
-```python
-from src.routers.activity import router as activity_router
-from src.routers.admin_console import router as admin_console_router
-from src.services.notification_worker import notification_worker_loop
-
-```
-Replace with:
-```python
-from src.routers.activity import router as activity_router
-from src.routers.admin_console import router as admin_console_router
-from src.routers.event_templates import router as event_templates_router
-from src.services.notification_worker import notification_worker_loop
-
-```
-
-**Edit 2.** Find:
-```python
-app.include_router(activity_router)
-app.include_router(admin_console_router)
-
-
-```
-Replace with:
-```python
-app.include_router(activity_router)
-app.include_router(admin_console_router)
-app.include_router(event_templates_router)
-
-
-```
-
----
-
-# PART C: Frontend
-
-## C1. `frontend/src/components/ShiftEventFormModal.jsx` (FULL FILE REPLACEMENT)
-Adds `mode="template"`, the template picker, draft/publish buttons and start→end syncing. Everything else (positions, pay, notes, location, approval) is unchanged.
+## C1. `frontend/src/pages/WorkerDashboard.jsx` (FULL FILE REPLACEMENT)
+Same data calls as before plus `GET /transfers/my-outgoing`. Note `w-full` on the page root, the header container and `<main>`.
 
 ```jsx
-import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock, MapPin, AlertTriangle, LayoutTemplate, Send, Save } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
-import ModalShell from './ModalShell';
-import { payText } from './PayLabel';
-import EventLocationPicker from './EventLocationPicker';
-import { draftToPayload } from './LocationFields';
-import { zonedLocalToUtcIso, utcToZonedLocalInput } from '../utils/venueTime';
+import {
+  Calendar, AlertCircle, Briefcase, Check, Search, Filter, ArrowRightLeft, Zap, Info, CalendarDays, AlertTriangle,
+  ListChecks, Send, ChevronRight, RotateCcw, X,
+} from 'lucide-react';
+import TransferModal from '../components/TransferModal';
+import ShiftBoardModal from '../components/ShiftBoardModal';
+import EventListingCard from '../components/EventListingCard';
+import EventListingModal from '../components/EventListingModal';
+import WorkerCalendar from '../components/WorkerCalendar';
+import ShiftDetailsModal from '../components/ShiftDetailsModal';
+import WorkerOffers from '../components/WorkerOffers';
+import RatingBadge from '../components/RatingBadge';
+import { Avatar } from '../components/WorkerProfilePanel';
+import MyShiftCard from '../components/worker/MyShiftCard';
+import DropShiftDialog from '../components/worker/DropShiftDialog';
+import HandoffsPanel from '../components/worker/HandoffsPanel';
+import { PENDING_INVITE_KEY } from './JoinPage';
+import {
+  dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
+} from '../utils/listingFormat';
+import { getCurrentPosition } from '../utils/geo';
 
-const CUSTOM = '__custom__';
-
-const APPROVAL_OPTIONS = [
-  { value: 'venue_default', label: 'Venue default' },
-  { value: 'auto', label: 'Instant booking' },
-  { value: 'manual', label: 'Needs my approval' },
-];
-const POLICY_TEXT = {
-  team_auto: 'your team is booked instantly, everyone else needs approval',
-  manual: 'you approve every request',
-  everyone_auto: 'anyone who picks it up is booked instantly',
-};
-
-const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
-const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
-
-function tipsText(p) {
-  if (!p?.tips_eligible) return '';
-  return p.tip_pool ? 'pooled tips' : 'tips';
-}
-
-function optionLabel(p) {
-  const parts = [payText(p.default_rate, p.default_rate_max)];
-  const t = tipsText(p);
-  if (t) parts.push(t);
-  if (p.hide_rate) parts.push('pay hidden');
-  return `${p.name} — ${parts.filter(Boolean).join(' · ')}`;
-}
-
-function defaultsFor(pos) {
-  return {
-    hourly_rate: pos ? Number(pos.default_rate).toFixed(2) : '25.00',
-    hourly_rate_max: pos?.default_rate_max != null ? Number(pos.default_rate_max).toFixed(2) : '',
-    hide_rate: !!pos?.hide_rate,
-    tips_eligible: !!pos?.tips_eligible,
-    tip_pool: !!pos?.tip_pool,
-  };
-}
-
-// Phase 29.3: plain 'YYYY-MM-DDTHH:MM' arithmetic (no timezone involved)
-function shiftLocal(localValue, ms) {
-  const [d, t] = localValue.split('T');
-  const [y, m, day] = d.split('-').map(Number);
-  const [hh, mm] = (t || '00:00').split(':').map(Number);
-  const out = new Date(Date.UTC(y, m - 1, day, hh, mm) + ms);
-  return out.toISOString().slice(0, 16);
-}
-function localMs(localValue) {
-  const [d, t] = localValue.split('T');
-  const [y, m, day] = d.split('-').map(Number);
-  const [hh, mm] = (t || '00:00').split(':').map(Number);
-  return Date.UTC(y, m - 1, day, hh, mm);
-}
-
-let rowSeq = 0;
-function rowFromPosition(p, withIds = false) {
-  rowSeq += 1;
-  return {
-    key: withIds && p.shift_id ? p.shift_id : `tpl-${rowSeq}`,
-    shift_id: withIds ? p.shift_id || null : null,
-    role_type: p.role_type,
-    custom: false,
-    capacity: p.capacity,
-    hourly_rate: Number(p.hourly_rate).toFixed(2),
-    hourly_rate_max: p.hourly_rate_max != null ? Number(p.hourly_rate_max).toFixed(2) : '',
-    hide_rate: !!p.hide_rate,
-    tips_eligible: !!p.tips_eligible,
-    tip_pool: !!p.tip_pool,
-    role_notes: p.role_notes || '',
-    staff_notes: p.staff_notes || '',
-    approval_mode: p.approval_mode || 'venue_default',
-    booked: withIds ? p.assigned_count || 0 : 0,
-    pending: withIds ? p.pending_count || 0 : 0,
-    showNotes: !!(p.role_notes || p.staff_notes),
-  };
-}
-
-function blankRow(pos) {
-  rowSeq += 1;
-  return {
-    key: `new-${rowSeq}`,
-    shift_id: null,
-    role_type: pos?.name || '',
-    custom: !pos,
-    capacity: 1,
-    ...defaultsFor(pos),
-    role_notes: '',
-    staff_notes: '',
-    approval_mode: 'venue_default',
-    booked: 0,
-    pending: 0,
-    showNotes: false,
-  };
-}
+const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in'];
+const TAB_IDS = ['schedule', 'find', 'calendar', 'transfers'];
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
 
 /**
- * Post / edit an event (Phase 25.2+), and Phase 29.3:
- *   mode 'create'   : "Start from a template" picker; Save as draft or Publish. templateId preselects one.
- *   mode 'edit'     : a draft shows Save draft + Save & publish; a published event shows Save changes.
- *   mode 'template' : edit or create an event template (template = existing one, or null for new).
- *                     Times are just start/end clock times; onSaved(savedTemplate).
- * onSaved(result) gets the saved event (EventDetail, with .status) or template.
+ * Worker home. Phase 29.4 layout:
+ *   Tabs: My shifts (default when you have something coming up) · Find shifts · Calendar · Hand-offs.
+ *   Each shift card has ONE main button (clock in/out, read the update, withdraw, ask to come back)
+ *   and a ⋯ menu for the rest (details, directions, calendar, chat, hand off, drop).
+ *   Tab ids stay 'schedule' | 'find' | 'calendar' | 'transfers' so notification links keep working.
  */
-export default function ShiftEventFormModal({
-  mode = 'create', venue, positions = null, eventId = null, templateId = null, template = null, onClose, onSaved,
-}) {
-  const tz = venue?.timezone;
-  const isEdit = mode === 'edit' && !!eventId;
-  const isTemplate = mode === 'template';
-  const isCreate = !isEdit && !isTemplate;
+export default function WorkerDashboard() {
+  const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(TAB_IDS.includes(urlTab) ? urlTab : null);
+  const [listings, setListings] = useState([]);
+  const [calendar, setCalendar] = useState({ items: [], unread_count: 0 });
+  const [detailRequestId, setDetailRequestId] = useState(null);
+  const [myShifts, setMyShifts] = useState([]);
+  const [incomingTransfers, setIncomingTransfers] = useState([]);
+  const [outgoingTransfers, setOutgoingTransfers] = useState([]);   // Phase 29.4
+  const [activeClockIns, setActiveClockIns] = useState(new Set());
+  const [loading, setLoading] = useState(true);
+  const [clockActionLoading, setClockActionLoading] = useState(null);
+  const [handoffBusy, setHandoffBusy] = useState(null);
+  const [withdrawingId, setWithdrawingId] = useState(null);
+  const [notification, setNotification] = useState(null);
 
-  // ---- Positions: use the prop if given, otherwise load them for this venue ----
-  const [fetchedPositions, setFetchedPositions] = useState(null);
-  const hasPropPositions = Array.isArray(positions) && positions.length > 0;
+  // Find Shifts filters
+  const [search, setSearch] = useState('');
+  const [whenFilter, setWhenFilter] = useState('all');
+  const [roleFilter, setRoleFilter] = useState('ALL');
+  const [venueFilter, setVenueFilter] = useState('ALL');
+  const [instantOnly, setInstantOnly] = useState(false);
+  const [hideRequested, setHideRequested] = useState(false);
+
+  const [openListing, setOpenListing] = useState(null); // { eventId, initial }
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [transferShiftId, setTransferShiftId] = useState(null);
+  const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
+  const [shiftToDrop, setShiftToDrop] = useState(null);
+  const [offers, setOffers] = useState([]);
+  const [offerBusy, setOfferBusy] = useState(null);
+  const navigate = useNavigate();
+
+  const flash = (type, message) => setNotification({ type, message });
+
+  const fetchWorkerData = async (showSpinner = true) => {
+    try {
+      if (showSpinner) setLoading(true);
+      const [listingsRes, myRes, transfersRes, outRes, activeClocksRes, calendarRes, offersRes] = await Promise.all([
+        api.get('/listings'),
+        api.get('/users/me/shifts'),
+        api.get('/transfers/my-incoming'),
+        api.get('/transfers/my-outgoing').catch(() => ({ data: [] })),
+        api.get('/shifts/time-entries/active').catch(() => ({ data: [] })),
+        api.get('/me/calendar').catch(() => ({ data: { items: [], unread_count: 0 } })),
+        api.get('/me/offers').catch(() => ({ data: [] })),
+      ]);
+      setListings(listingsRes.data || []);
+      setOffers(offersRes.data || []);
+      setCalendar({ items: calendarRes.data?.items || [], unread_count: calendarRes.data?.unread_count || 0 });
+      setMyShifts(myRes.data || []);
+      setIncomingTransfers(transfersRes.data || []);
+      setOutgoingTransfers(outRes.data || []);
+      setActiveClockIns(new Set((activeClocksRes.data || []).map((te) => te.shift_id)));
+      // First load: open My shifts when there's something coming up, otherwise Find shifts
+      setActiveTab((prev) => {
+        if (prev) return prev;
+        const upcoming = (myRes.data || []).some((r) => {
+          const st = String(r.status || '').toLowerCase();
+          return UPCOMING_STATUSES.includes(st) && new Date(r.shift?.end_time).getTime() >= Date.now();
+        });
+        return upcoming || (offersRes.data || []).length ? 'schedule' : 'find';
+      });
+    } catch (err) {
+      flash('error', "Couldn't load your shifts. Check your connection and refresh.");
+      setActiveTab((prev) => prev || 'find');
+    } finally {
+      if (showSpinner) setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (hasPropPositions || !venue?.id) return;
-    let active = true;
-    api
-      .get(`/venues/${venue.id}/positions`)
-      .then((res) => active && setFetchedPositions(res.data || []))
-      .catch(() => active && setFetchedPositions([]));
-    return () => {
-      active = false;
-    };
-  }, [hasPropPositions, venue?.id]);
-
-  const activePositions = useMemo(() => {
-    const src = hasPropPositions ? positions : fetchedPositions || [];
-    return src.filter((p) => p.is_active !== false);
-  }, [hasPropPositions, positions, fetchedPositions]);
-  const positionsLoading = !hasPropPositions && fetchedPositions === null;
-  const findPos = (name) => activePositions.find((p) => p.name === name);
-
-  const [loading, setLoading] = useState(isEdit);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [title, setTitle] = useState('');
-  const [start, setStart] = useState('');
-  const [end, setEnd] = useState('');
-  const [notes, setNotes] = useState('');
-  const [staffNotes, setStaffNotes] = useState(''); // Phase 26.2: confirmed staff only
-  // Phase 27: where, clock-in location check, event-specific location notes (confirmed staff only)
-  const [where, setWhere] = useState({ kind: 'venue' });
-  const [geofenceMode, setGeofenceMode] = useState('venue_default');
-  const [locStaffOn, setLocStaffOn] = useState(false);
-  const [locStaffNotes, setLocStaffNotes] = useState('');
-  const [rows, setRows] = useState(() => (isEdit ? [] : isTemplate && template ? template.positions.map((p) => rowFromPosition(p)) : [blankRow(null)]));
-  const [touched, setTouched] = useState(isTemplate && !!template);
-  // Phase 29.3
-  const [eventStatus, setEventStatus] = useState('published');   // edit mode: the event's status
-  const [templates, setTemplates] = useState([]);                  // create mode: the venue's templates
-  const [pickedTemplate, setPickedTemplate] = useState('');
-  const [templateNote, setTemplateNote] = useState('');
-  const [pickerKey, setPickerKey] = useState(0);                   // remounts the location picker after a template fills it
-  const [tplName, setTplName] = useState(template?.name || '');
-  const [tplStart, setTplStart] = useState(template?.start_local || '18:00');
-  const [tplEnd, setTplEnd] = useState(template?.end_local || '23:00');
-
-  // Phase 29.3: template mode starts from the template's own values
-  useEffect(() => {
-    if (!isTemplate || !template) return;
-    setTitle(template.title || '');
-    setNotes(template.notes || '');
-    setStaffNotes(template.staff_notes || '');
-    setWhere(template.location && !template.location.is_archived ? { kind: 'saved', location: template.location } : { kind: 'venue' });
-    setGeofenceMode(template.geofence_mode || 'venue_default');
-    setLocStaffNotes(template.location_staff_notes || '');
-    setLocStaffOn(!!template.location_staff_notes);
-    if (template.location?.is_archived) setTemplateNote(`“${template.location.name}” is archived, so this template now uses the venue address.`);
+    let pendingInvite = null;
+    try {
+      pendingInvite = localStorage.getItem(PENDING_INVITE_KEY);
+    } catch (e) {
+      pendingInvite = null;
+    }
+    if (pendingInvite) {
+      navigate(`/join/${pendingInvite}`, { replace: true });
+      return;
+    }
+    fetchWorkerData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Phase 29.3: the venue's templates, for "Start from a template" (create mode)
-  useEffect(() => {
-    if (!isCreate || !venue?.id) return undefined;
-    let active = true;
-    api
-      .get(`/venues/${venue.id}/event-templates`)
-      .then((res) => {
-        if (!active) return;
-        const list = res.data || [];
-        setTemplates(list);
-        const pre = templateId && list.find((t) => t.id === templateId);
-        if (pre) applyTemplate(pre);
-      })
-      .catch(() => active && setTemplates([]));
-    return () => {
-      active = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCreate, venue?.id, templateId]);
+  // ---- Actions ---------------------------------------------------------------------------
+  const handleOffer = async (offer, action) => {
+    setOfferBusy(offer.offer_id);
+    try {
+      const res = await api.post(`/offers/${offer.offer_id}/${action}`);
+      flash(action === 'accept' ? 'success' : 'info', action === 'accept' ? res.data.message : 'Offer declined.');
+    } catch (err) {
+      flash('error', err.response?.data?.detail || 'Could not update the offer.');
+    } finally {
+      setOfferBusy(null);
+      fetchWorkerData(false);
+    }
+  };
 
-  const applyTemplate = (tpl) => {
-    setPickedTemplate(tpl.id);
-    setTouched(true);
-    setTitle(tpl.title || '');
-    setNotes(tpl.notes || '');
-    setStaffNotes(tpl.staff_notes || '');
-    setGeofenceMode(tpl.geofence_mode || 'venue_default');
-    setLocStaffNotes(tpl.location_staff_notes || '');
-    setLocStaffOn(!!tpl.location_staff_notes);
-    const archived = tpl.location && tpl.location.is_archived;
-    setWhere(tpl.location && !archived ? { kind: 'saved', location: tpl.location } : { kind: 'venue' });
-    setPickerKey((k) => k + 1);
-    setRows(tpl.positions.length ? tpl.positions.map((p) => rowFromPosition(p)) : [blankRow(null)]);
-    // Keep the date already picked (or tomorrow), use the template's clock times
-    const day = start ? start.slice(0, 10) : utcToZonedLocalInput(new Date(Date.now() + 86400000).toISOString(), tz).slice(0, 10);
-    const s = `${day}T${tpl.start_local}`;
-    const e = tpl.overnight ? `${shiftLocal(`${day}T00:00`, 86400000).slice(0, 10)}T${tpl.end_local}` : `${day}T${tpl.end_local}`;
-    setStart(s);
-    setEnd(e);
-    setTemplateNote(
-      `Filled in from “${tpl.name}”. Check the date` +
-      (archived ? `. Its location “${tpl.location.name}” is archived, so the venue address is used.` : '.')
+  const handleWithdraw = async (req) => {
+    try {
+      setWithdrawingId(req.id);
+      await api.post(`/listings/requests/${req.id}/withdraw`);
+      flash('info', 'Request withdrawn.');
+      fetchWorkerData(false);
+    } catch (err) {
+      flash('error', err.response?.data?.detail || 'Could not withdraw the request.');
+    } finally {
+      setWithdrawingId(null);
+    }
+  };
+
+  const handleClockIn = async (shiftId, item) => {
+    try {
+      setClockActionLoading(shiftId);
+      let body = {};
+      if (item?.geofence_on) {
+        flash('info', 'Checking your location…');
+        body = await getCurrentPosition();
+      }
+      const res = await api.post(`/shifts/${shiftId}/clock-in`, body);
+      setActiveClockIns((prev) => new Set([...prev, shiftId]));
+      flash(res.data?.geo_status === 'outside_geofence' ? 'info' : 'success', res.data?.message || 'Clocked in.');
+      fetchWorkerData(false);
+    } catch (err) {
+      flash('error', err.response?.data?.detail || err.message || 'Could not clock in.');
+    } finally {
+      setClockActionLoading(null);
+    }
+  };
+
+  const handleClockOut = async (shiftId, item) => {
+    try {
+      setClockActionLoading(shiftId);
+      const body = item?.geofence_on ? await getCurrentPosition({ timeoutMs: 8000 }).catch(() => ({})) : {};
+      const res = await api.post(`/shifts/${shiftId}/clock-out`, body);
+      setActiveClockIns((prev) => {
+        const next = new Set(prev);
+        next.delete(shiftId);
+        return next;
+      });
+      flash(res.data?.status === 'undone' ? 'info' : 'success', res.data?.message || 'Clocked out.');
+      fetchWorkerData(false);
+    } catch (err) {
+      flash('error', err.response?.data?.detail || 'Could not clock out.');
+    } finally {
+      setClockActionLoading(null);
+    }
+  };
+
+  const handoffAction = async (t, action) => {
+    setHandoffBusy(t.id);
+    try {
+      await api.post(`/transfers/${t.id}/${action === 'accept' ? 'accept' : 'reject'}`);
+      flash(
+        action === 'accept' ? 'success' : 'info',
+        action === 'accept'
+          ? 'Accepted. Your manager still has to approve it before the shift is yours.'
+          : action === 'withdraw'
+            ? 'Hand-off withdrawn. You still have the shift.'
+            : 'Declined. They keep the shift.',
+      );
+      fetchWorkerData(false);
+    } catch (err) {
+      flash('error', err.response?.data?.detail || 'Could not update the hand-off.');
+    } finally {
+      setHandoffBusy(null);
+    }
+  };
+
+  // ---- Derived data ----------------------------------------------------------------------
+  const confirmedShifts = myShifts.filter((s) => ['approved', 'checked_in', 'confirmed'].includes(String(s.status || '').toLowerCase()));
+
+  const calendarByRequest = useMemo(() => {
+    const m = new Map();
+    calendar.items.forEach((i) => m.set(i.request_id, i));
+    return m;
+  }, [calendar.items]);
+  const detailItem = detailRequestId ? calendarByRequest.get(detailRequestId) || null : null;
+  const firstUnread = calendar.items.find((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()) || null;
+
+  const handleAcknowledged = (requestId, seenAt) => {
+    setCalendar((prev) => {
+      const items = prev.items.map((i) =>
+        i.request_id === requestId ? { ...i, needs_ack: false, info_change: null, info_seen_at: seenAt || new Date().toISOString() } : i
+      );
+      const unread = items.filter((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()).length;
+      return { items, unread_count: unread };
+    });
+  };
+
+  const openDetailsForRequest = (req) => {
+    if (calendarByRequest.has(req.id)) setDetailRequestId(req.id);
+    else if (req.shift?.event_id) setOpenListing({ eventId: req.shift.event_id, initial: null });
+  };
+
+  // Deep links from notifications (?tab=, ?request=, ?event=)
+  const [pendingDeepLink, setPendingDeepLink] = useState(null);
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    const request = searchParams.get('request');
+    const event = searchParams.get('event');
+    if (!tab && !request && !event) return;
+    if (tab && TAB_IDS.includes(tab)) setActiveTab(tab);
+    if (event) setOpenListing({ eventId: event, initial: null });
+    if (request) {
+      setPendingDeepLink(request);
+      fetchWorkerData(false);
+    }
+    const next = new URLSearchParams(searchParams);
+    ['tab', 'request', 'event'].forEach((k) => next.delete(k));
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (pendingDeepLink && calendarByRequest.has(pendingDeepLink)) {
+      setDetailRequestId(pendingDeepLink);
+      setPendingDeepLink(null);
+    }
+  }, [pendingDeepLink, calendarByRequest]);
+
+  // Find Shifts
+  const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;
+  const roleOptions = useMemo(
+    () => Array.from(new Set(listings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN').map((p) => p.role_type)))).sort(),
+    [listings]
+  );
+  const venueOptions = useMemo(() => {
+    const m = new Map();
+    listings.forEach((l) => l.venue && m.set(l.venue.id, l.venue.name));
+    return Array.from(m.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [listings]);
+  const filteredListings = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const weekEnd = Date.now() + 7 * 86400000;
+    return listings.filter((l) => {
+      const tz = l.venue?.timezone;
+      if (q) {
+        const hay = [l.title, l.venue?.name, l.venue?.address, l.location?.name, l.location?.address, ...l.positions.map((p) => p.role_type)]
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (whenFilter === 'today' && !isOnDay(l.start_time, tz, 0)) return false;
+      if (whenFilter === 'tomorrow' && !isOnDay(l.start_time, tz, 1)) return false;
+      if (whenFilter === 'week' && new Date(l.start_time).getTime() > weekEnd) return false;
+      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.my_status))) return false;
+      if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
+      if (instantOnly && !l.any_instant) return false;
+      if (hideRequested && l.my_request) return false;
+      return true;
+    });
+  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested]);
+  const listingGroups = useMemo(() => {
+    const groups = [];
+    filteredListings.forEach((l) => {
+      const label = dayGroupLabel(l.start_time, l.venue?.timezone);
+      const last = groups[groups.length - 1];
+      if (last && last.label === label) last.items.push(l);
+      else groups.push({ label, items: [l] });
+    });
+    return groups;
+  }, [filteredListings]);
+  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested;
+  const clearFilters = () => {
+    setSearch('');
+    setWhenFilter('all');
+    setRoleFilter('ALL');
+    setVenueFilter('ALL');
+    setInstantOnly(false);
+    setHideRequested(false);
+  };
+
+  // My shifts: coming up / dropped (can still ask back) / history
+  const nowMs = Date.now();
+  const isUpcomingReq = (req) => {
+    const st = String(req.status || '').toLowerCase();
+    if (!UPCOMING_STATUSES.includes(st)) return false;
+    if (st === 'checked_in') return true;
+    const end = new Date(req.shift?.end_time).getTime();
+    return Number.isNaN(end) ? true : end >= nowMs;
+  };
+  const canAskBack = (req) =>
+    String(req.status || '').toLowerCase() === 'dropped'
+    && new Date(req.shift?.start_time).getTime() > nowMs
+    && String(req.shift?.status || '').toUpperCase() !== 'CANCELLED';
+  const upcomingRequests = myShifts.filter(isUpcomingReq).sort((a, b) => new Date(a.shift?.start_time) - new Date(b.shift?.start_time));
+  const droppedRequests = myShifts.filter(canAskBack).sort((a, b) => new Date(a.shift?.start_time) - new Date(b.shift?.start_time));
+  const historyRequests = myShifts
+    .filter((r) => !isUpcomingReq(r) && !canAskBack(r))
+    .sort((a, b) => new Date(b.shift?.start_time) - new Date(a.shift?.start_time));
+  const needsAnswer = offers.length + incomingTransfers.length;
+
+  const addShiftToCalendar = (req) => {
+    const shift = req.shift;
+    if (!shift) return;
+    downloadIcs({
+      uid: `${req.id}@shiftboard`,
+      title: `${shift.title} — ${shift.role_type || 'Shift'} (${shift.venue?.name || ''})`,
+      start: shift.start_time,
+      end: shift.end_time,
+      location: calendarByRequest.get(req.id) ? whereOf(calendarByRequest.get(req.id)).address : shift.venue?.address,
+      description: [shift.event_notes, shift.description, shift.venue?.arrival_instructions].filter(Boolean).join('\n\n'),
+    });
+  };
+
+  const renderCard = (req) => {
+    const shiftId = req.shift_id || req.shift?.id;
+    const calItem = calendarByRequest.get(req.id);
+    const place = calItem ? whereOf(calItem) : req.shift?.venue;
+    return (
+      <MyShiftCard
+        key={req.id}
+        req={req}
+        calItem={calItem}
+        clockedIn={activeClockIns.has(shiftId)}
+        busy={clockActionLoading === shiftId ? 'clock' : withdrawingId === req.id ? 'withdraw' : null}
+        onDetails={(calItem || req.shift?.event_id) ? () => openDetailsForRequest(req) : null}
+        onClockIn={() => handleClockIn(shiftId, calItem)}
+        onClockOut={() => handleClockOut(shiftId, calItem)}
+        onBoard={() => setActiveDiscussionShift(req.shift)}
+        onHandOff={() => {
+          setTransferShiftId(shiftId);
+          setTransferModalOpen(true);
+        }}
+        onDrop={() => setShiftToDrop(req)}
+        onWithdraw={() => handleWithdraw(req)}
+        onAddCalendar={() => addShiftToCalendar(req)}
+        onDirections={place ? () => window.open(mapsUrl(place), '_blank', 'noopener') : null}
+        onAskBack={req.shift?.event_id ? () => setOpenListing({ eventId: req.shift.event_id, initial: null }) : null}
+      />
     );
   };
 
-  // Phase 29.3: moving the start keeps the event's length (so changing the date moves the end too)
-  const changeStart = (value) => {
-    if (start && end && value && value.length >= 16) {
-      const dur = localMs(end) - localMs(start);
-      if (dur > 0) setEnd(shiftLocal(value, dur));
-    }
-    setStart(value);
-  };
-
-  // Auto-fill the first empty row once the venue's positions arrive (create mode only)
-  useEffect(() => {
-    if (isEdit || touched || activePositions.length === 0) return;
-    setRows((rs) => (rs.length === 1 && !rs[0].role_type ? [blankRow(activePositions[0])] : rs));
-  }, [isEdit, touched, activePositions]);
-
-  useEffect(() => {
-    if (!isEdit) return;
-    setLoading(true);
-    api
-      .get(`/events/${eventId}`)
-      .then((res) => {
-        const ev = res.data;
-        setEventStatus(ev.status || 'published');    // Phase 29.3
-        setTitle(ev.title || '');
-        setStart(utcToZonedLocalInput(ev.start_time, tz));
-        setEnd(utcToZonedLocalInput(ev.end_time, tz));
-        setNotes(ev.notes || '');
-        setStaffNotes(ev.staff_notes || '');
-        setWhere(ev.location ? { kind: 'saved', location: ev.location } : { kind: 'venue' });
-        setGeofenceMode(ev.geofence_mode || 'venue_default');
-        setLocStaffNotes(ev.location_staff_notes || '');
-        setLocStaffOn(!!ev.location_staff_notes);
-        setRows(
-          (ev.positions || []).map((p) => ({
-            key: p.shift_id,
-            shift_id: p.shift_id,
-            role_type: p.role_type,
-            custom: false,
-            capacity: p.capacity,
-            hourly_rate: Number(p.hourly_rate).toFixed(2),
-            hourly_rate_max: p.hourly_rate_max != null ? Number(p.hourly_rate_max).toFixed(2) : '',
-            hide_rate: !!p.hide_rate,
-            tips_eligible: !!p.tips_eligible,
-            tip_pool: !!p.tip_pool,
-            role_notes: p.role_notes || '',
-            staff_notes: p.staff_notes || '',
-            approval_mode: p.approval_mode || 'venue_default',
-            booked: p.assigned_count || 0,
-            pending: p.pending_count || 0,
-            showNotes: !!(p.role_notes || p.staff_notes),
-          }))
-        );
-      })
-      .catch((err) => setError(err.response?.data?.detail || 'Could not load this event.'))
-      .finally(() => setLoading(false));
-  }, [isEdit, eventId, tz]);
-
-  const updateRow = (key, patch) => {
-    setTouched(true);
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-  };
-
-  const pickPosition = (key, value) => {
-    if (value === CUSTOM) {
-      updateRow(key, { custom: true, role_type: '' });
-      return;
-    }
-    const pos = findPos(value);
-    updateRow(key, { custom: false, role_type: value, ...(pos ? defaultsFor(pos) : {}) });
-  };
-
-  const resetToDefault = (key, name) => {
-    const pos = findPos(name);
-    if (pos) updateRow(key, defaultsFor(pos));
-  };
-
-  const addRow = () => {
-    setTouched(true);
-    const used = new Set(rows.map((r) => r.role_type));
-    const next = activePositions.find((p) => !used.has(p.name)) || activePositions[0] || null;
-    setRows((rs) => [...rs, blankRow(next)]);
-  };
-
-  const removeRow = (key) => {
-    setTouched(true);
-    setRows((rs) => rs.filter((r) => r.key !== key));
-  };
-
-  const eventApproval = useMemo(() => {
-    const modes = new Set(rows.map((r) => r.approval_mode));
-    return modes.size === 1 ? [...modes][0] : 'mixed';
-  }, [rows]);
-
-  const setAllApproval = (value) => {
-    if (value === 'mixed') return;
-    setTouched(true);
-    setRows((rs) => rs.map((r) => ({ ...r, approval_mode: value })));
-  };
-
-  const anyBooked = rows.some((r) => (r.booked || 0) + (r.pending || 0) > 0);
-
-  // Phase 27: effective clock-in location check for this event
-  const venueGeoOn = !!venue?.geofence_enabled;
-  const geoOn = geofenceMode === 'on' || (geofenceMode === 'venue_default' && venueGeoOn);
-
-  /** publish: create -> publish now (false = draft); edit of a draft -> also publish after saving. */
-  const handleSubmit = async (publish = true) => {
-    setError('');
-    if (isTemplate && !tplName.trim()) return setError('Give the template a name.');
-    if (!title.trim()) return setError('Give the event a name.');
-    let startIso = null;
-    let endIso = null;
-    if (isTemplate) {
-      if (!tplStart || !tplEnd) return setError('Pick a start and end time.');
-      if (tplStart === tplEnd) return setError("The end time can't be the same as the start time.");
-    } else {
-      if (!start || !end) return setError('Pick a start and end time.');
-      startIso = zonedLocalToUtcIso(start, tz);
-      endIso = zonedLocalToUtcIso(end, tz);
-      if (new Date(endIso) <= new Date(startIso)) return setError('End time must be after the start time.');
-    }
-    if (rows.length === 0) return setError('Add at least one position.');
-
-    const payloadPositions = [];
-    for (const r of rows) {
-      const name = (r.role_type || '').trim();
-      const lo = parseFloat(r.hourly_rate);
-      const hi = r.hourly_rate_max === '' ? null : parseFloat(r.hourly_rate_max);
-      const cap = parseInt(r.capacity, 10) || 1;
-      if (!name) return setError('Pick a position for every row.');
-      if (!lo || lo <= 0) return setError(`${name}: pay must be more than $0.`);
-      if (hi !== null && (Number.isNaN(hi) || hi < lo)) return setError(`${name}: the top of the pay range can't be lower than the bottom.`);
-      if (cap < (r.booked || 0)) return setError(`${name}: ${r.booked} people are already booked, so it needs at least ${r.booked} spots.`);
-      payloadPositions.push({
-        shift_id: r.shift_id || undefined,
-        role_type: name,
-        capacity: cap,
-        hourly_rate: lo,
-        hourly_rate_max: hi !== null && hi > lo ? hi : null,
-        hide_rate: !!r.hide_rate,
-        tips_eligible: !!r.tips_eligible,
-        tip_pool: r.tips_eligible ? !!r.tip_pool : false,
-        role_notes: (r.role_notes || '').trim() || null,
-        staff_notes: (r.staff_notes || '').trim() || null,
-        approval_mode: r.approval_mode,
-      });
-    }
-
-    // Phase 27: where + location check
-    let locationFields = { location_id: null, new_location: null };
-    if (where.kind === 'saved') {
-      locationFields = { location_id: where.location.id, new_location: null };
-    } else if (where.kind === 'new') {
-      const { payload, error: locError } = draftToPayload(where.draft);
-      if (locError) return setError(`Where: ${locError}`);
-      locationFields = { location_id: null, new_location: payload };
-    }
-    const place = where.kind === 'saved' ? where.location : where.kind === 'new' ? locationFields.new_location : null;
-    if (geoOn && place && (place.lat === null || place.lat === undefined)) {
-      return setError('The clock-in location check is on, but this location has no map pin. Add a pin, or turn the check off for this event.');
-    }
-
-    const body = {
-      title: title.trim(),
-      start_time: startIso,
-      end_time: endIso,
-      notes: notes.trim() || null,
-      staff_notes: staffNotes.trim() || null,
-      ...locationFields,
-      geofence_mode: geofenceMode,
-      location_staff_notes: locStaffOn ? locStaffNotes.trim() || null : null,
-      positions: payloadPositions,
-    };
-
-    setSaving(true);
-    try {
-      if (isTemplate) {
-        // Phase 29.3: a typed-in new location is saved to the venue's list first
-        let locationId = locationFields.location_id;
-        if (locationFields.new_location) {
-          const loc = await api.post(`/venues/${venue.id}/locations`, locationFields.new_location);
-          locationId = loc.data.id;
-        }
-        const tplBody = {
-          name: tplName.trim(),
-          title: body.title,
-          start_local: tplStart,
-          end_local: tplEnd,
-          notes: body.notes,
-          staff_notes: body.staff_notes,
-          location_id: locationId,
-          geofence_mode: body.geofence_mode,
-          location_staff_notes: body.location_staff_notes,
-          positions: payloadPositions.map(({ shift_id: _omit, ...p }) => p),
-        };
-        const res = template
-          ? await api.put(`/venues/${venue.id}/event-templates/${template.id}`, tplBody)
-          : await api.post(`/venues/${venue.id}/event-templates`, tplBody);
-        onSaved && onSaved(res.data);
-        return;
-      }
-      let res;
-      let published = false;
-      if (isEdit) {
-        res = await api.put(`/events/${eventId}`, body);
-        if (publish && eventStatus === 'draft') {
-          res = await api.post(`/events/${eventId}/publish`);
-          published = true;
-        }
-      } else {
-        res = await api.post('/events', { ...body, venue_id: venue.id, publish });
-        published = publish;
-      }
-      onSaved && onSaved(res.data, { published });
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not save.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const isDraft = isEdit && eventStatus === 'draft';
-  const primaryCls = 'px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50 inline-flex items-center gap-1.5';
-  const secondaryCls = 'px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 text-sm font-semibold disabled:opacity-50 inline-flex items-center gap-1.5';
-  const footer = (
-    <>
-      <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700 mr-auto">
-        Cancel
-      </button>
-      {isTemplate ? (
-        <button type="button" onClick={() => handleSubmit(false)} disabled={saving} className={primaryCls}>
-          <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save template'}
-        </button>
-      ) : isEdit && !isDraft ? (
-        <button type="button" onClick={() => handleSubmit(false)} disabled={saving || loading} className={primaryCls}>
-          {saving ? 'Saving…' : 'Save changes'}
-        </button>
-      ) : (
-        <>
-          <button type="button" onClick={() => handleSubmit(false)} disabled={saving || loading} className={secondaryCls}
-            title="Only managers can see a draft. Publish it when it's ready.">
-            <Save className="w-4 h-4" /> {isDraft ? 'Save draft' : 'Save as draft'}
-          </button>
-          <button type="button" onClick={() => handleSubmit(true)} disabled={saving || loading} className={primaryCls}
-            title="Workers can see and request it, and your team is told.">
-            <Send className="w-4 h-4" /> {saving ? 'Saving…' : isDraft ? 'Save & publish' : 'Publish'}
-          </button>
-        </>
-      )}
-    </>
-  );
-
-  const modalTitle = isTemplate
-    ? (template ? `Edit template: ${template.name}` : 'New event template')
-    : isDraft ? 'Edit draft' : isEdit ? 'Edit posted shift' : 'Post a shift';
+  const tabs = [
+    { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length },
+    { id: 'find', label: 'Find shifts', icon: Search, count: openListingCount },
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays, badge: calendar.unread_count },
+    { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft, badge: incomingTransfers.length },
+  ];
+  const isWorker = String(user?.role || '').toLowerCase() === 'worker';
+  const chipBtn = 'px-3 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-600 text-xs text-slate-300 inline-flex items-center gap-1.5';
 
   return (
-    <ModalShell
-      title={modalTitle}
-      subtitle={venue?.name}
-      icon={<Calendar className="w-5 h-5 text-emerald-400" />}
-      onClose={onClose}
-      footer={footer}
-    >
-      {error && (
-        <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>
-      )}
-      {loading ? (
-        <p className="text-sm text-slate-500 py-10 text-center">Loading…</p>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* Left: event details */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Phase 29.3: start from a template */}
-            {isCreate && templates.length > 0 && (
-              <div className="p-3 rounded-xl bg-indigo-500/5 border border-indigo-500/30 space-y-2">
-                <label className="flex items-center gap-1 text-xs font-semibold text-indigo-200">
-                  <LayoutTemplate className="w-3.5 h-3.5" /> Start from a template
-                </label>
-                <select
-                  value={pickedTemplate}
-                  onChange={(e) => {
-                    const tpl = templates.find((t) => t.id === e.target.value);
-                    if (tpl) applyTemplate(tpl);
-                  }}
-                  className={inputCls}
-                >
-                  <option value="" disabled>Choose a template…</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name} · {t.start_local}–{t.end_local}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {isDraft && (
-              <p className="text-[11px] text-slate-300 bg-slate-800/60 border border-dashed border-slate-500 rounded-xl p-2.5">
-                This is a <strong>draft</strong>. Workers can't see it until you publish it.
-              </p>
-            )}
-            {templateNote && (
-              <p className="text-[11px] text-indigo-200 bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-2.5">{templateNote}</p>
-            )}
-            {isTemplate && (
-              <div>
-                <label className={labelCls}>Template name *</label>
-                <input value={tplName} onChange={(e) => setTplName(e.target.value)} className={inputCls} placeholder="Friday Jazz" />
-                <p className="text-[10px] text-slate-500 mt-1">What you'll pick from when posting. Workers never see it.</p>
-              </div>
-            )}
-            <div>
-              <label className={labelCls}>Event / shift name *</label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="Friday Gala" />
-            </div>
-            {isTemplate ? (
-              <div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={labelCls}>Starts at ({tz || 'local'}) *</label>
-                    <input type="time" value={tplStart} onChange={(e) => setTplStart(e.target.value)} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Ends at *</label>
-                    <input type="time" value={tplEnd} onChange={(e) => setTplEnd(e.target.value)} className={inputCls} />
-                  </div>
-                </div>
-                <p className="text-[10px] text-slate-500 mt-1">
-                  {tplStart && tplEnd && tplEnd <= tplStart && tplEnd !== tplStart
-                    ? 'Ends the next day (overnight).'
-                    : 'You pick the date each time you post from this template.'}
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
-                <div>
-                  <label className={labelCls}>Starts ({tz || 'local'} time) *</label>
-                  <input type="datetime-local" value={start} onChange={(e) => changeStart(e.target.value)} className={inputCls} />
-                </div>
-                <div>
-                  <label className={labelCls}>Ends ({tz || 'local'} time) *</label>
-                  <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className={inputCls} />
-                </div>
-              </div>
-            )}
-            {/* Phase 27: Where */}
-            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-              <label className="flex items-center gap-1 text-xs font-semibold text-slate-300">
-                <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Where
-              </label>
-              <EventLocationPicker key={pickerKey} venue={venue} value={where} onChange={setWhere} />
-
-              <div>
-                <label className={labelCls}>Clock-in location check</label>
-                <select value={geofenceMode} onChange={(e) => setGeofenceMode(e.target.value)} className={inputCls}>
-                  <option value="venue_default">Venue default ({venueGeoOn ? 'on' : 'off'})</option>
-                  <option value="on">On for this event</option>
-                  <option value="off">Off for this event</option>
-                </select>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  {geoOn
-                    ? 'Workers must be at the location to clock in. A little outside is allowed but flagged for you.'
-                    : 'Workers can clock in from anywhere during the clock-in window.'}
-                </p>
-                {geoOn && where.kind === 'saved' && where.location?.lat == null && (
-                  <p className="text-[11px] text-amber-300 mt-1 flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3" /> This location has no map pin yet. Use “Edit this location” to add one.
-                  </p>
+    <div className="w-full min-h-screen bg-slate-950 text-slate-100 pb-16">
+      {/* Header */}
+      <section className="bg-slate-900 border-b border-slate-800 py-6 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto w-full flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <Avatar person={user} size="w-12 h-12 text-base" />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl sm:text-2xl font-bold text-white truncate">{`${user?.first_name || ''} ${user?.last_name || ''}`.trim() || 'Your shifts'}</h1>
+                {!isWorker && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">Worker preview</span>
                 )}
               </div>
-
-              <div>
-                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={locStaffOn}
-                    onChange={(e) => setLocStaffOn(e.target.checked)}
-                    className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-500"
-                  />
-                  <Lock className="w-3 h-3 text-indigo-300" /> Add event-specific location notes (confirmed staff only)
-                </label>
-                {locStaffOn && (
-                  <textarea
-                    rows={2}
-                    value={locStaffNotes}
-                    onChange={(e) => setLocStaffNotes(e.target.value)}
-                    className={`${inputCls} mt-2`}
-                    placeholder="Only for this event and only booked staff see it. e.g. Gate code 2280 for Saturday, ask for Maria (planner) 555-0142."
-                  />
-                )}
-              </div>
+              {user?.bio && <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{user.bio}</p>}
             </div>
-
-            <div>
-              <label className={labelCls}>Event notes</label>
-              <textarea
-                rows={3}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                className={inputCls}
-                placeholder="Shown to everyone browsing this event. e.g. Load-in through the loading dock at 4pm."
-              />
-            </div>
-            <div>
-              <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
-                <Lock className="w-3 h-3 text-indigo-300" /> Notes for confirmed staff only
-              </label>
-              <textarea
-                rows={2}
-                value={staffNotes}
-                onChange={(e) => setStaffNotes(e.target.value)}
-                className={inputCls}
-                placeholder="Only people you've booked see this. e.g. Door code 4471, park in lot B, ask for Sam on arrival."
-              />
-              {isEdit && !isDraft && (
-                <p className="text-[10px] text-slate-500 mt-1">
-                  Changing the time or any notes flags the shift as “Updated” for everyone booked until they read it.
-                </p>
-              )}
-            </div>
-            {venue?.default_shift_notes && (
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <FileText className="w-3.5 h-3.5" /> Venue notes (added automatically)
-                </div>
-                <p className="text-xs text-slate-300 whitespace-pre-line">{venue.default_shift_notes}</p>
-                <p className="text-[10px] text-slate-500 mt-1">Change these in Venue Settings.</p>
-              </div>
-            )}
-            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-              <label className={labelCls}>Approval for every position</label>
-              <select value={eventApproval} onChange={(e) => setAllApproval(e.target.value)} className={inputCls}>
-                {APPROVAL_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-                <option value="mixed" disabled>Mixed (set per position)</option>
-              </select>
-              <p className="text-[11px] text-slate-500 flex items-start gap-1">
-                <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                <span>
-                  Venue default means {POLICY_TEXT[venue?.approval_policy] || POLICY_TEXT.team_auto}. You can also set each position on the right.
-                </span>
-              </p>
-            </div>
-            {isEdit && anyBooked && (
-              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
-                People are already booked or waiting on this event. They'll see the new time and details.
-              </p>
-            )}
           </div>
-
-          {/* Right: positions */}
-          <div className="lg:col-span-3 space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                <Users className="w-4 h-4 text-emerald-400" /> Positions
-              </h4>
-              <button
-                type="button"
-                onClick={addRow}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add position
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={chipBtn.replace('hover:border-slate-600', '')}>
+              <RatingBadge rating={user?.aggregate_rating ?? user?.rating_average} count={user?.rating_count} />
+            </span>
+            <button type="button" onClick={() => setActiveTab('schedule')} className={chipBtn}>
+              <b className="text-white">{upcomingRequests.length}</b> coming up
+            </button>
+            {needsAnswer > 0 && (
+              <button type="button" onClick={() => setActiveTab(offers.length ? 'schedule' : 'transfers')}
+                className={`${chipBtn} border-amber-500/50 text-amber-200`}>
+                <b className="text-amber-100">{needsAnswer}</b> waiting for your answer
               </button>
-            </div>
-
-            {!positionsLoading && activePositions.length === 0 && (
-              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
-                This venue has no positions set up yet. Add them in Venue Settings → Positions & pay to get dropdowns with pay filled in. You can still type a position below.
-              </p>
             )}
-
-            {rows.map((r) => {
-              const locked = (r.booked || 0) + (r.pending || 0) > 0;
-              const pos = findPos(r.role_type);
-              const inList = !!pos;
-              const showSelect = activePositions.length > 0 && !r.custom;
-              const def = pos ? defaultsFor(pos) : null;
-              const differsFromDefault =
-                def &&
-                (Number(def.hourly_rate) !== Number(r.hourly_rate) ||
-                  String(def.hourly_rate_max || '') !== String(r.hourly_rate_max || '') ||
-                  def.hide_rate !== r.hide_rate ||
-                  def.tips_eligible !== r.tips_eligible ||
-                  def.tip_pool !== r.tip_pool);
-
-              return (
-                <div key={r.key} className="p-3 rounded-xl border border-slate-700 bg-slate-800/40 space-y-3">
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="flex-1 min-w-[12rem]">
-                      <label className={labelCls}>Position</label>
-                      {showSelect ? (
-                        <select
-                          value={inList ? r.role_type : r.role_type ? `__legacy__${r.role_type}` : ''}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            if (v.startsWith('__legacy__')) return;
-                            pickPosition(r.key, v);
-                          }}
-                          className={inputCls}
-                        >
-                          {!r.role_type && <option value="" disabled>Choose a position…</option>}
-                          {!inList && r.role_type && (
-                            <option value={`__legacy__${r.role_type}`}>{r.role_type} (not in venue list)</option>
-                          )}
-                          {activePositions.map((p) => (
-                            <option key={p.id || p.name} value={p.name}>{optionLabel(p)}</option>
-                          ))}
-                          <option value={CUSTOM}>Other (type a name)…</option>
-                        </select>
-                      ) : (
-                        <div className="space-y-1">
-                          <input
-                            value={r.role_type}
-                            onChange={(e) => updateRow(r.key, { role_type: e.target.value })}
-                            className={inputCls}
-                            placeholder={positionsLoading ? 'Loading positions…' : 'e.g. Coat Check'}
-                            disabled={positionsLoading}
-                          />
-                          {activePositions.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => pickPosition(r.key, activePositions[0].name)}
-                              className="text-[11px] text-emerald-400 hover:text-emerald-300"
-                            >
-                              ← Pick from venue positions
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    <div className="w-20">
-                      <label className={labelCls}>Spots</label>
-                      <input
-                        type="number"
-                        min={Math.max(1, r.booked || 0)}
-                        value={r.capacity}
-                        onChange={(e) => updateRow(r.key, { capacity: e.target.value })}
-                        className={inputCls}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeRow(r.key)}
-                      disabled={locked || rows.length <= 1}
-                      title={locked ? 'People are booked or waiting on this position' : 'Remove position'}
-                      className="p-2.5 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-30 disabled:hover:bg-transparent"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {pos && (
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                      <span>
-                        Venue default: {payText(pos.default_rate, pos.default_rate_max)}
-                        {tipsText(pos) ? ` · ${tipsText(pos)}` : ''}
-                        {pos.hide_rate ? ' · pay hidden' : ''}
-                      </span>
-                      {differsFromDefault && (
-                        <button
-                          type="button"
-                          onClick={() => resetToDefault(r.key, r.role_type)}
-                          className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
-                        >
-                          <RotateCcw className="w-3 h-3" /> Reset to venue default
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {isEdit && (r.booked > 0 || r.pending > 0) && (
-                    <p className="text-[11px] text-slate-400">{r.booked} booked · {r.pending} waiting</p>
-                  )}
-
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="w-28">
-                      <label className={labelCls}>Pay from</label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
-                        <input
-                          type="number" step="0.5" min="0"
-                          value={r.hourly_rate}
-                          onChange={(e) => updateRow(r.key, { hourly_rate: e.target.value })}
-                          className={`${inputCls} pl-6`}
-                        />
-                      </div>
-                    </div>
-                    <div className="w-28">
-                      <label className={labelCls}>to (optional)</label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
-                        <input
-                          type="number" step="0.5" min="0"
-                          value={r.hourly_rate_max}
-                          onChange={(e) => updateRow(r.key, { hourly_rate_max: e.target.value })}
-                          className={`${inputCls} pl-6`}
-                          placeholder="—"
-                        />
-                      </div>
-                    </div>
-                    <span className="text-xs text-slate-400 pb-2.5">/hr</span>
-                    <label className="flex items-center gap-2 text-xs text-slate-300 pb-2.5 ml-auto">
-                      <input
-                        type="checkbox"
-                        checked={r.hide_rate}
-                        onChange={(e) => updateRow(r.key, { hide_rate: e.target.checked })}
-                        className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500"
-                      />
-                      <EyeOff className="w-3.5 h-3.5" /> Hide pay from workers
-                    </label>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-4">
-                    <label className="flex items-center gap-2 text-xs text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={r.tips_eligible}
-                        onChange={(e) => updateRow(r.key, { tips_eligible: e.target.checked, tip_pool: e.target.checked ? r.tip_pool : false })}
-                        className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
-                      />
-                      Tips
-                    </label>
-                    {r.tips_eligible && (
-                      <label className="flex items-center gap-2 text-xs text-amber-300">
-                        <input
-                          type="checkbox"
-                          checked={r.tip_pool}
-                          onChange={(e) => updateRow(r.key, { tip_pool: e.target.checked })}
-                          className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500"
-                        />
-                        Tip pool
-                      </label>
-                    )}
-                    <div className="ml-auto flex items-center gap-2">
-                      <span className="text-xs text-slate-400">Approval</span>
-                      <select
-                        value={r.approval_mode}
-                        onChange={(e) => updateRow(r.key, { approval_mode: e.target.value })}
-                        className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
-                      >
-                        {APPROVAL_OPTIONS.map((o) => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  {r.showNotes ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className={labelCls}>Notes for {r.role_type || 'this position'}</label>
-                        <textarea
-                          rows={2}
-                          value={r.role_notes}
-                          onChange={(e) => updateRow(r.key, { role_notes: e.target.value })}
-                          className={inputCls}
-                          placeholder="Everyone sees this. e.g. Bring a wine key. Black apron provided."
-                        />
-                      </div>
-                      <div>
-                        <label className="flex items-center gap-1 text-xs font-semibold text-slate-300 mb-1">
-                          <Lock className="w-3 h-3 text-indigo-300" /> Confirmed {r.role_type || 'staff'} only
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={r.staff_notes}
-                          onChange={(e) => updateRow(r.key, { staff_notes: e.target.value })}
-                          className={inputCls}
-                          placeholder="Only booked people see this. e.g. POS login 2231, bar lead is Jess."
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => updateRow(r.key, { showNotes: true })}
-                      className="text-xs text-emerald-400 hover:text-emerald-300"
-                    >
-                      + Add notes for this position (public or staff-only)
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+            <button type="button" onClick={() => setActiveTab('find')} className={chipBtn}>
+              <b className="text-white">{openListingCount}</b> open to pick up
+            </button>
           </div>
         </div>
-      )}
-    </ModalShell>
-  );
-}
-```
+      </section>
 
----
+      <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-6">
+        {notification && (
+          <div className={`mb-5 p-3.5 rounded-xl border flex items-start justify-between gap-3 ${
+            notification.type === 'success'
+              ? 'bg-emerald-950/80 border-emerald-700 text-emerald-200'
+              : notification.type === 'error'
+                ? 'bg-rose-950/80 border-rose-700 text-rose-200'
+                : 'bg-indigo-950/80 border-indigo-700 text-indigo-200'
+          }`}>
+            <div className="flex items-start gap-2">
+              {notification.type === 'success' ? <Check className="w-5 h-5 text-emerald-400 flex-shrink-0" /> : <AlertCircle className="w-5 h-5 flex-shrink-0" />}
+              <span className="text-sm font-medium">{notification.message}</span>
+            </div>
+            <button type="button" onClick={() => setNotification(null)} aria-label="Dismiss" className="p-1 rounded-lg hover:bg-white/10">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
-## C2. NEW FILE `frontend/src/components/EventTemplatesPanel.jsx`
+        {!isWorker && (
+          <div className="mb-5 p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs flex items-start gap-2">
+            <Info className="w-4 h-4 text-indigo-300 flex-shrink-0 mt-0.5" />
+            <span>
+              <b>Worker preview.</b> You're seeing this page exactly as a worker would: hidden pay and staff-only notes stay
+              hidden unless you're booked on that position. Your manager screens still show full pay.
+            </span>
+          </div>
+        )}
 
-```jsx
-import React, { useEffect, useState } from 'react';
-import { LayoutTemplate, Plus, Pencil, Trash2, Send, MapPin, Clock, Users, Moon } from 'lucide-react';
-import api from '../api/client';
-import ShiftEventFormModal from './ShiftEventFormModal';
-import { payText } from './PayLabel';
-
-/**
- * Phase 29.3: Venue Settings → Event templates.
- * A venue's reusable event setups: times, where, notes and positions. "Use" opens Post a Shift filled in.
- * Props: venue, onError(msg), onUseTemplate(template) (optional; hidden when not given, e.g. from the admin console)
- */
-export default function EventTemplatesPanel({ venue, onError, onUseTemplate }) {
-  const [templates, setTemplates] = useState(null);
-  const [editing, setEditing] = useState(null);     // null | { template: obj | null }
-  const [confirmId, setConfirmId] = useState(null);
-  const [busyId, setBusyId] = useState(null);
-  const [flash, setFlash] = useState('');
-
-  const load = async () => {
-    try {
-      const res = await api.get(`/venues/${venue.id}/event-templates`);
-      setTemplates(res.data || []);
-    } catch (err) {
-      setTemplates([]);
-      onError(err.response?.data?.detail || 'Could not load templates.');
-    }
-  };
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [venue.id]);
-
-  const remove = async (tpl) => {
-    setBusyId(tpl.id);
-    try {
-      await api.delete(`/venues/${venue.id}/event-templates/${tpl.id}`);
-      setConfirmId(null);
-      setFlash(`Deleted “${tpl.name}”.`);
-      load();
-    } catch (err) {
-      onError(err.response?.data?.detail || 'Could not delete the template.');
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-        <p className="text-xs text-slate-400 max-w-xl">
-          Save the events you run again and again: the name, times, where, notes and positions with pay. When you post a
-          shift, pick a template, choose the date, and publish (or save it as a draft). You can also save any posted event
-          as a template from its ⋯ menu.
-        </p>
-        <button type="button" onClick={() => setEditing({ template: null })}
-          className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 flex-shrink-0 self-start">
-          <Plus className="w-4 h-4" /> New template
-        </button>
-      </div>
-
-      {flash && (
-        <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-700 text-emerald-200 text-xs flex justify-between gap-2">
-          <span>{flash}</span>
-          <button type="button" onClick={() => setFlash('')} className="underline">Dismiss</button>
-        </div>
-      )}
-
-      {templates === null ? (
-        <p className="text-xs text-slate-500">Loading…</p>
-      ) : templates.length === 0 ? (
-        <div className="text-center py-10 rounded-xl border border-dashed border-slate-700 bg-slate-950/50">
-          <LayoutTemplate className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-          <p className="text-sm text-slate-300 font-semibold">No templates yet</p>
-          <p className="text-xs text-slate-500 mt-1">Create one here, or open a posted event's ⋯ menu and choose “Save as template”.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {templates.map((t) => {
-            const spots = t.positions.reduce((n, p) => n + (p.capacity || 0), 0);
-            return (
-              <div key={t.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-white truncate">{t.name}</div>
-                    {t.title !== t.name && <div className="text-[11px] text-slate-400 truncate">Posts as “{t.title}”</div>}
-                  </div>
-                  <LayoutTemplate className="w-4 h-4 text-indigo-300 flex-shrink-0" />
+        {calendar.unread_count > 0 && firstUnread && (
+          <div className="mb-5 p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-black text-amber-100">
+                  {calendar.unread_count === 1 ? "1 of your shifts has info you haven't read" : `${calendar.unread_count} of your shifts have info you haven't read`}
                 </div>
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400">
-                  <span className="inline-flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> {t.start_local}–{t.end_local}
-                    {t.overnight && <Moon className="w-3 h-3 text-indigo-300" title="Ends the next day" />}
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    {t.location ? (
-                      <span className={t.location.is_archived ? 'text-amber-300' : 'text-emerald-300'}>
-                        {t.location.name}{t.location.is_archived ? ' (archived)' : ''}
-                      </span>
-                    ) : 'Venue address'}
-                  </span>
-                  <span className="inline-flex items-center gap-1"><Users className="w-3 h-3" /> {spots} spot{spots === 1 ? '' : 's'}</span>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {t.positions.map((p, i) => (
-                    <span key={`${p.role_type}-${i}`} className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-semibold">
-                      {p.capacity}× {p.role_type} · {payText(p.hourly_rate, p.hourly_rate_max)}
-                    </span>
-                  ))}
-                </div>
-                <div className="flex items-center gap-1.5 mt-auto pt-1">
-                  {onUseTemplate && (
-                    <button type="button" onClick={() => onUseTemplate(t)}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1">
-                      <Send className="w-3 h-3" /> Use
-                    </button>
-                  )}
-                  <button type="button" onClick={() => setEditing({ template: t })}
-                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1">
-                    <Pencil className="w-3 h-3" /> Edit
-                  </button>
-                  {confirmId === t.id ? (
-                    <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-rose-200">
-                      Delete?
-                      <button type="button" disabled={busyId === t.id} onClick={() => remove(t)}
-                        className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold disabled:opacity-50">Yes</button>
-                      <button type="button" onClick={() => setConfirmId(null)}
-                        className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300">No</button>
-                    </span>
-                  ) : (
-                    <button type="button" onClick={() => setConfirmId(t.id)} title="Delete template"
-                      className="ml-auto p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
+                <div className="text-xs text-amber-200/80">Notes or times can change after you book. Open the shift and tap “Got it”.</div>
               </div>
+            </div>
+            <button type="button" onClick={() => setDetailRequestId(firstUnread.request_id)}
+              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black whitespace-nowrap">
+              Review now
+            </button>
+          </div>
+        )}
+
+        {/* Tabs: 2×2 on phones so none are hidden */}
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 border-b border-slate-800 pb-4">
+          {tabs.map((t) => {
+            const Icon = t.icon;
+            const on = activeTab === t.id;
+            return (
+              <button key={t.id} type="button" onClick={() => setActiveTab(t.id)}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition inline-flex items-center justify-center gap-1.5 ${
+                  on ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}>
+                <Icon className="w-3.5 h-3.5" />
+                <span>{t.label}</span>
+                {t.count !== undefined && <span className={on ? 'text-slate-900' : 'text-slate-500'}>{t.count}</span>}
+                {t.badge > 0 && (
+                  <span className="min-w-[1.25rem] h-5 px-1 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black inline-flex items-center justify-center">{t.badge}</span>
+                )}
+              </button>
             );
           })}
         </div>
+
+        {/* Offers get answered on My shifts; elsewhere a slim reminder */}
+        {offers.length > 0 && activeTab !== 'schedule' && (
+          <button type="button" onClick={() => setActiveTab('schedule')}
+            className="mt-4 w-full p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/5 text-left text-sm text-indigo-100 flex items-center gap-2 hover:bg-indigo-500/10">
+            <Send className="w-4 h-4 text-indigo-300" />
+            <span className="flex-1">{plural(offers.length, 'shift')} offered to you. Answer on My shifts.</span>
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        )}
+
+        {activeTab === null && <div className="py-20 text-center text-slate-500 text-xs">Loading your shifts…</div>}
+
+        {/* My shifts */}
+        {activeTab === 'schedule' && (
+          <div className="mt-2 space-y-6">
+            <WorkerOffers offers={offers} busyId={offerBusy} onAccept={(o) => handleOffer(o, 'accept')} onDecline={(o) => handleOffer(o, 'decline')} />
+            <section className="space-y-3">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-4">Coming up</h2>
+              {loading ? (
+                <div className="py-12 text-center text-slate-500 text-xs">Loading…</div>
+              ) : upcomingRequests.length === 0 ? (
+                <div className="text-center py-12 bg-slate-900/40 rounded-2xl border border-slate-800">
+                  <Calendar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                  <h3 className="text-sm font-semibold text-slate-300">Nothing coming up</h3>
+                  <button type="button" onClick={() => setActiveTab('find')} className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 font-semibold">
+                    Find a shift →
+                  </button>
+                </div>
+              ) : (
+                upcomingRequests.map(renderCard)
+              )}
+            </section>
+
+            {droppedRequests.length > 0 && (
+              <section className="space-y-3">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <RotateCcw className="w-3.5 h-3.5" /> Dropped · you can still ask to come back
+                </h2>
+                <p className="text-[11px] text-slate-500 -mt-1">Your manager has to approve it, and they'll see why you can make it now.</p>
+                {droppedRequests.map(renderCard)}
+              </section>
+            )}
+
+            {historyRequests.length > 0 && (
+              <details className="group pt-1">
+                <summary className="cursor-pointer select-none text-xs font-bold uppercase tracking-wider text-slate-400 hover:text-white">
+                  Past & closed ({historyRequests.length})
+                </summary>
+                <div className="mt-4 space-y-3 opacity-80">{historyRequests.map(renderCard)}</div>
+              </details>
+            )}
+          </div>
+        )}
+
+        {/* Find shifts */}
+        {activeTab === 'find' && (
+          <div className="mt-6">
+            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-3 sm:p-4 space-y-3">
+              <div className="flex flex-col lg:flex-row gap-3">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search events, venues, positions"
+                    className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1 overflow-x-auto">
+                  {[{ id: 'all', label: 'All dates' }, { id: 'today', label: 'Today' }, { id: 'tomorrow', label: 'Tomorrow' }, { id: 'week', label: 'Next 7 days' }].map((w) => (
+                    <button key={w.id} type="button" onClick={() => setWhenFilter(w.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${whenFilter === w.id ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}
+                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-emerald-500">
+                  <option value="ALL">All positions</option>
+                  {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <select value={venueFilter} onChange={(e) => setVenueFilter(e.target.value)}
+                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-emerald-500">
+                  <option value="ALL">All venues</option>
+                  {venueOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+                <button type="button" onClick={() => setInstantOnly((v) => !v)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1 transition ${
+                    instantOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                  <Zap className="w-3.5 h-3.5" /> Instant book
+                </button>
+                <button type="button" onClick={() => setHideRequested((v) => !v)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                    hideRequested ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                  Hide ones I've requested
+                </button>
+                {filtersActive && (
+                  <button type="button" onClick={clearFilters} className="text-xs text-slate-400 underline hover:text-white ml-auto">Clear filters</button>
+                )}
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="py-20 text-center text-slate-500 text-xs">Loading open shifts…</div>
+            ) : filteredListings.length === 0 ? (
+              <div className="mt-6 text-center py-20 bg-slate-900/40 rounded-2xl border border-slate-800">
+                <Briefcase className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-slate-300">{listings.length === 0 ? 'No shifts open right now' : 'Nothing matches these filters'}</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {listings.length === 0 ? "Check back soon. You'll get a notification when a venue you work with posts a shift." : 'Try clearing a filter or two.'}
+                </p>
+              </div>
+            ) : (
+              <div className="mt-6 space-y-8">
+                {listingGroups.map((g) => (
+                  <section key={g.label}>
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
+                      <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                      {g.label}
+                      <span className="text-slate-600 font-semibold normal-case tracking-normal">· {plural(g.items.length, 'event')}</span>
+                    </h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
+                      {g.items.map((l) => (
+                        <EventListingCard key={l.event_id} listing={l} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Calendar */}
+        {activeTab === 'calendar' && (
+          <div className="mt-6">
+            {loading ? (
+              <div className="py-20 text-center text-slate-500 text-xs">Loading your calendar…</div>
+            ) : (
+              <WorkerCalendar
+                items={calendar.items}
+                openListings={listings}
+                onSelectItem={(item) => setDetailRequestId(item.request_id)}
+                onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Hand-offs */}
+        {activeTab === 'transfers' && (
+          <div className="mt-6">
+            <HandoffsPanel
+              incoming={incomingTransfers}
+              outgoing={outgoingTransfers}
+              busyId={handoffBusy}
+              onAccept={(t) => handoffAction(t, 'accept')}
+              onDecline={(t) => handoffAction(t, 'decline')}
+              onWithdraw={(t) => handoffAction(t, 'withdraw')}
+            />
+          </div>
+        )}
+      </main>
+
+      {detailItem && (
+        <ShiftDetailsModal
+          key={detailItem.request_id}
+          item={detailItem}
+          onClose={() => setDetailRequestId(null)}
+          onAcknowledged={handleAcknowledged}
+          onOpenBoard={(shiftLike) => setActiveDiscussionShift(shiftLike)}
+        />
       )}
 
-      {editing && (
-        <ShiftEventFormModal
-          mode="template"
-          venue={venue}
-          template={editing.template}
-          onClose={() => setEditing(null)}
-          onSaved={(saved) => {
-            setEditing(null);
-            setFlash(`Saved “${saved.name}”.`);
-            load();
+      {openListing && (
+        <EventListingModal
+          eventId={openListing.eventId}
+          initial={openListing.initial}
+          onClose={() => setOpenListing(null)}
+          onChanged={() => fetchWorkerData(false)}
+          onGoToSchedule={() => {
+            setOpenListing(null);
+            setActiveTab('schedule');
+          }}
+        />
+      )}
+
+      {transferModalOpen && (
+        <TransferModal
+          isOpen={transferModalOpen}
+          onClose={() => setTransferModalOpen(false)}
+          myConfirmedShifts={confirmedShifts}
+          preselectedShiftId={transferShiftId}
+          onTransferSuccess={() => {
+            flash('success', "Hand-off sent. Once they accept and your manager approves, it's theirs. Until then it's still yours.");
+            fetchWorkerData(false);
+          }}
+        />
+      )}
+
+      {activeDiscussionShift && (
+        <ShiftBoardModal
+          shiftId={activeDiscussionShift.id}
+          shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.venue?.name || ''})`}
+          currentUserRole={user?.role}
+          onClose={() => setActiveDiscussionShift(null)}
+        />
+      )}
+
+      {shiftToDrop && (
+        <DropShiftDialog
+          req={shiftToDrop}
+          onClose={() => setShiftToDrop(null)}
+          onDropped={(message) => {
+            flash('success', message);
+            fetchWorkerData(false);
           }}
         />
       )}
@@ -2551,67 +1790,329 @@ export default function EventTemplatesPanel({ venue, onError, onUseTemplate }) {
 
 ---
 
-## C3. NEW FILE `frontend/src/components/ConfirmDialog.jsx`
+## C2. NEW FILE `frontend/src/components/worker/MyShiftCard.jsx`
+
+```jsx
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Timer, Info, Navigation, CalendarPlus, MessageSquare, ArrowRightLeft, LogOut, MoreHorizontal, AlertTriangle,
+  Clock, Undo2, Check, RotateCcw,
+} from 'lucide-react';
+import PayLabel from '../PayLabel';
+import TipBadge from '../TipBadge';
+import { fmtTime, fmtTimeRange, fmtShortDate } from '../../utils/venueTime';
+import { STATUS_LABELS, PENDING_STATUSES } from '../../utils/listingFormat';
+
+const SOURCE_LABELS = {
+  manager_assign: 'Assigned by your manager',
+  manager_manual: 'Approved by your manager',
+  offer: 'You accepted an offer',
+  transfer: 'Handed to you by a teammate',
+  venue_whitelist: 'Booked instantly (team)',
+  venue_everyone_auto: 'Booked instantly',
+  shift_auto_confirm: 'Booked instantly',
+  rating_threshold: 'Booked instantly (your rating)',
+};
+
+function dateParts(value, tz) {
+  const d = new Date(value);
+  const make = (opts) => {
+    try {
+      return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: tz || undefined }).format(d);
+    } catch (e) {
+      return new Intl.DateTimeFormat('en-US', opts).format(d);
+    }
+  };
+  return { month: make({ month: 'short' }).toUpperCase(), day: make({ day: 'numeric' }), weekday: make({ weekday: 'short' }) };
+}
+
+function Menu({ items }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+  const shown = items.filter(Boolean);
+  if (!shown.length) return null;
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-label="More actions" aria-expanded={open}
+        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
+        <MoreHorizontal className="w-4 h-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-30 w-60 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
+          {shown.map((it) => (
+            <button key={it.label} type="button" disabled={it.disabled}
+              onClick={() => { setOpen(false); it.onClick(); }}
+              className={`w-full text-left px-3 py-2 text-xs inline-flex items-start gap-2 hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent ${it.danger ? 'text-rose-300' : 'text-slate-200'}`}>
+              <it.icon className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span>
+                {it.label}
+                {it.hint && <span className="block text-[10px] text-slate-500">{it.hint}</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const btn = 'px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50';
+
+/**
+ * Phase 29.4: One of my shifts (My shifts tab). The one thing to do now is the big button;
+ * everything else lives in the ⋯ menu.
+ * Props: req, calItem (calendar item for booked shifts), clockedIn, busy ('clock' | 'withdraw' | null),
+ *        onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw, onAddCalendar, onDirections, onAskBack
+ */
+export default function MyShiftCard({
+  req, calItem, clockedIn = false, busy = null, onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw,
+  onAddCalendar, onDirections, onAskBack,
+}) {
+  const shift = req.shift || {};
+  const tz = shift.venue?.timezone;
+  const st = String(req.status || '').toLowerCase();
+  const isBooked = ['approved', 'confirmed'].includes(st);
+  const isCheckedIn = st === 'checked_in' || clockedIn;
+  const isPending = PENDING_STATUSES.includes(st);
+  const isCompleted = st === 'completed';
+  const isDropped = st === 'dropped';
+  const now = Date.now();
+  const startMs = new Date(shift.start_time).getTime();
+  const endMs = new Date(shift.end_time).getTime();
+  const ended = now >= endMs;
+  const hoursLeft = (startMs - now) / 3600000;
+  const canDrop = isBooked && !isCheckedIn && hoursLeft >= 24;
+  const opensAt = calItem?.clock_in_opens_at ? new Date(calItem.clock_in_opens_at) : null;
+  const tooEarly = !!opensAt && now < opensAt.getTime();
+  const needsAck = !!calItem?.needs_ack;
+  const shiftCancelled = String(shift.status || '').toUpperCase() === 'CANCELLED';
+  const canAskBack = isDropped && startMs > now && !shiftCancelled && onAskBack;
+  const { month, day, weekday } = dateParts(shift.start_time, tz);
+
+  const chip = isCheckedIn
+    ? ['Clocked in', 'bg-sky-500/15 text-sky-300 border-sky-500/40']
+    : isBooked
+      ? ['Confirmed', 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30']
+      : isPending
+        ? ['Waiting for the manager', 'bg-amber-500/15 text-amber-300 border-amber-500/30']
+        : isCompleted
+          ? ['Worked', 'bg-slate-800 text-slate-300 border-slate-700']
+          : isDropped
+            ? ['You dropped this', 'bg-rose-500/10 text-rose-300 border-rose-500/30']
+            : [STATUS_LABELS[st] || st, 'bg-slate-800 text-slate-400 border-slate-700'];
+
+  // The one main action
+  let primary = null;
+  if (isCheckedIn) {
+    primary = (
+      <button type="button" onClick={onClockOut} disabled={busy === 'clock'} className={`${btn} bg-rose-600 hover:bg-rose-500 text-white`}>
+        <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : 'Clock out'}
+      </button>
+    );
+  } else if (isBooked && needsAck && (ended || tooEarly)) {
+    primary = (
+      <button type="button" onClick={onDetails} className={`${btn} bg-amber-500 hover:bg-amber-400 text-slate-950`}>
+        <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the shift notes'}
+      </button>
+    );
+  } else if (isBooked && needsAck) {
+    // Clock-in is open: never hide it behind "read the notes"
+    primary = (
+      <>
+        <button type="button" onClick={onDetails} className={`${btn} bg-amber-500/15 hover:bg-amber-500 text-amber-200 hover:text-slate-950 border border-amber-500/40`}>
+          <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the notes'}
+        </button>
+        <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
+          <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
+        </button>
+      </>
+    );
+  } else if (isBooked && !ended && !tooEarly) {
+    primary = (
+      <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
+        <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
+      </button>
+    );
+  } else if (isBooked && tooEarly) {
+    primary = (
+      <span className={`${btn} bg-slate-800 text-slate-400 border border-slate-700 font-semibold`} title="Clock-in opens shortly before your shift starts">
+        <Clock className="w-4 h-4" /> Clock-in opens {fmtShortDate(opensAt, tz) !== fmtShortDate(new Date(), tz) ? `${fmtShortDate(opensAt, tz)}, ` : ''}{fmtTime(opensAt, tz)}
+      </span>
+    );
+  } else if (isBooked && ended) {
+    primary = <span className="text-[11px] text-slate-500 italic">Shift over. Ask your manager to add your hours.</span>;
+  } else if (isPending) {
+    primary = (
+      <button type="button" onClick={onWithdraw} disabled={busy === 'withdraw'}
+        className={`${btn} border border-rose-500/50 text-rose-300 hover:bg-rose-500/10 font-semibold`}>
+        <Undo2 className="w-4 h-4" /> {busy === 'withdraw' ? 'Withdrawing…' : 'Withdraw request'}
+      </button>
+    );
+  } else if (canAskBack) {
+    primary = (
+      <button type="button" onClick={onAskBack} className={`${btn} bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40`}>
+        <RotateCcw className="w-4 h-4" /> Ask to come back
+      </button>
+    );
+  } else if (isCompleted) {
+    primary = <span className="text-xs text-emerald-400 font-semibold inline-flex items-center gap-1"><Check className="w-4 h-4" /> Worked</span>;
+  }
+
+  const menu = [
+    onDetails && { label: 'Details & notes', icon: Info, onClick: onDetails },
+    (isBooked || isCheckedIn) && onDirections && { label: 'Directions', icon: Navigation, onClick: onDirections },
+    isBooked && !ended && { label: 'Add to my calendar', icon: CalendarPlus, onClick: onAddCalendar },
+    (isBooked || isCheckedIn || isCompleted) && { label: 'Shift chat', icon: MessageSquare, onClick: onBoard },
+    isBooked && !isCheckedIn && !ended && { label: 'Hand off to a teammate', icon: ArrowRightLeft, onClick: onHandOff },
+    isBooked && !isCheckedIn && !ended && {
+      label: 'Drop shift', icon: LogOut, onClick: onDrop, danger: true, disabled: !canDrop,
+      hint: canDrop ? null : 'Not within 24 hours of the start. Hand it off or message your manager.',
+    },
+  ];
+
+  const reasonLine = req.status_reason && ['cancelled', 'removed', 'no_show', 'withdrawn', 'dropped', 'rejected'].includes(st);
+
+  return (
+    <div className={`bg-slate-900 border rounded-2xl p-4 shadow-lg flex gap-4 ${
+      isCheckedIn ? 'border-sky-500/50' : needsAck && isBooked ? 'border-amber-500/50' : 'border-slate-800'}`}>
+      <div className="flex-shrink-0 w-14 h-fit rounded-xl bg-slate-950 border border-slate-800 text-center py-1.5">
+        <div className="text-[10px] font-bold text-emerald-400 tracking-wider">{month}</div>
+        <div className="text-xl font-black text-white leading-none">{day}</div>
+        <div className="text-[10px] text-slate-400 mt-0.5">{weekday}</div>
+      </div>
+      <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-center gap-3">
+        <div className="flex-1 min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${chip[1]}`}>{chip[0]}</span>
+            {req.previous_drop_at && (isBooked || isPending) && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-slate-800 text-slate-300 border-slate-600">After a drop</span>
+            )}
+            {(isBooked || isCheckedIn) && SOURCE_LABELS[req.approval_source] && (
+              <span className="text-[10px] text-slate-500">{SOURCE_LABELS[req.approval_source]}</span>
+            )}
+          </div>
+          <h3 className="text-base font-bold text-white leading-snug">{shift.title}</h3>
+          <p className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-semibold text-slate-200">{shift.role_type}</span>
+            <span>·</span>
+            <span>{shift.venue?.name}</span>
+            <span>·</span>
+            <PayLabel rate={shift.hourly_rate} rateMax={shift.hourly_rate_max} className="text-emerald-400 font-semibold" />
+            <TipBadge shift={shift} />
+          </p>
+          <p className="text-xs text-slate-300 inline-flex items-center gap-1">
+            <Clock className="w-3.5 h-3.5 text-emerald-400" /> {fmtTimeRange(shift.start_time, shift.end_time, tz)}
+          </p>
+          {isPending && req.notes && <p className="text-[11px] text-slate-400">Your note: <span className="text-slate-300">{req.notes}</span></p>}
+          {reasonLine && <p className="text-[11px] text-rose-300">Reason: {req.status_reason}</p>}
+        </div>
+        <div className="flex items-center gap-2 md:justify-end flex-wrap">
+          {primary}
+          <Menu items={menu} />
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## C3. NEW FILE `frontend/src/components/worker/DropShiftDialog.jsx`
 
 ```jsx
 import React, { useState } from 'react';
-import { AlertTriangle, HelpCircle } from 'lucide-react';
-import ModalShell from './ModalShell';
+import { AlertTriangle, LogOut } from 'lucide-react';
+import api from '../../api/client';
+import ModalShell from '../ModalShell';
+import PayLabel from '../PayLabel';
+import { fmtDateTime } from '../../utils/venueTime';
+
+const LATE_DROP_HOURS = 72;   // matches backend reliability (dropped with < 72h notice = late drop)
 
 /**
- * Phase 29.3: A small yes/no dialog, optionally with one text field.
- * onConfirm(value) may throw; the error is shown and the dialog stays open.
- * input: { label, placeholder, initial, required } (optional)
+ * Phase 29.4: Drop a booked shift (replaces the old hand-built confirm box).
+ * Optional reason goes to the managers. Explains the late-drop rule and that coming back needs approval.
+ * Props: req (ShiftRequestResponse), onClose, onDropped(message)
  */
-export default function ConfirmDialog({
-  title, message, confirmLabel = 'Confirm', danger = false, input = null, onConfirm, onClose,
-}) {
-  const [value, setValue] = useState(input?.initial || '');
-  const [saving, setSaving] = useState(false);
+export default function DropShiftDialog({ req, onClose, onDropped }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const shift = req.shift || {};
+  const hoursLeft = (new Date(shift.start_time).getTime() - Date.now()) / 3600000;
+  const late = hoursLeft < LATE_DROP_HOURS;
 
   const submit = async () => {
+    setBusy(true);
     setError('');
-    if (input?.required && !value.trim()) return setError(`${input.label || 'This'} is required.`);
-    setSaving(true);
     try {
-      await onConfirm(value.trim());
+      await api.post(`/shifts/${req.shift_id || shift.id}/drop`, { reason: reason.trim() || null });
+      onDropped('Shift dropped. Your manager has been told and the spot is open again.');
       onClose();
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Something went wrong.');
+      setError(err.response?.data?.detail || 'Could not drop this shift.');
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   };
 
   return (
     <ModalShell
-      title={title}
-      icon={danger ? <AlertTriangle className="w-5 h-5 text-rose-400" /> : <HelpCircle className="w-5 h-5 text-emerald-400" />}
+      title="Drop this shift?"
+      icon={<LogOut className="w-5 h-5 text-rose-400" />}
       onClose={onClose}
       maxWidth="max-w-md"
       footer={(
         <>
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-            Go back
+          <button type="button" onClick={onClose} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
+            Keep it
           </button>
-          <button type="button" onClick={submit} disabled={saving}
-            className={`px-5 py-2 rounded-xl text-sm font-bold disabled:opacity-50 ${danger ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'}`}>
-            {saving ? 'Working…' : confirmLabel}
+          <button type="button" onClick={submit} disabled={busy}
+            className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold disabled:opacity-50">
+            {busy ? 'Dropping…' : 'Drop shift'}
           </button>
         </>
       )}
     >
-      {error && <div className="mb-3 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>}
-      {message && <p className="text-sm text-slate-300">{message}</p>}
-      {input && (
-        <label className="block text-xs font-semibold text-slate-300 mt-3">
-          {input.label}
-          <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder={input.placeholder || ''}
-            onKeyDown={(e) => e.key === 'Enter' && submit()}
-            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500" />
+      <div className="space-y-3">
+        {error && <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-sm">{error}</div>}
+        <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
+          <p className="font-bold text-white">{shift.title}</p>
+          <p className="text-slate-400">
+            {shift.venue?.name} · {shift.role_type} · <PayLabel rate={shift.hourly_rate} rateMax={shift.hourly_rate_max} />
+          </p>
+          <p className="text-slate-500">{fmtDateTime(shift.start_time, shift.venue?.timezone)}</p>
+        </div>
+        {late && (
+          <p className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5 flex gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+            <span>It starts in less than {LATE_DROP_HOURS} hours, so this counts as a late drop on your reliability score.</span>
+          </p>
+        )}
+        <label className="block text-xs font-semibold text-slate-300">
+          Tell your manager why (optional)
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value.slice(0, 500))}
+            rows={2}
+            placeholder="e.g. My car broke down"
+            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+          />
         </label>
-      )}
+        <p className="text-[11px] text-slate-500">
+          The spot opens for other workers straight away. If you can make it after all, you can ask to come back from
+          My shifts. Your manager has to approve it.
+        </p>
+      </div>
     </ModalShell>
   );
 }
@@ -2619,715 +2120,836 @@ export default function ConfirmDialog({
 
 ---
 
-## C4. `frontend/src/components/VenueSettingsModal.jsx` (EDITS)
-New **Event templates** tab; new optional props `initialTab` and `onUseTemplate`.
+## C4. NEW FILE `frontend/src/components/worker/HandoffsPanel.jsx`
 
-**Edit 1.** Find:
 ```jsx
-import ModalShell from './ModalShell';
-import VenueLocationsPanel from './VenueLocationsPanel';
-import { TIMEZONE_OPTIONS } from '../utils/venueTime';
+import React from 'react';
+import { ArrowRightLeft, Check, X, Inbox, Send, MessageSquareQuote } from 'lucide-react';
+import PayLabel from '../PayLabel';
+import TipBadge from '../TipBadge';
+import { fmtDateTime } from '../../utils/venueTime';
 
-```
-Replace with:
-```jsx
-import ModalShell from './ModalShell';
-import VenueLocationsPanel from './VenueLocationsPanel';
-import EventTemplatesPanel from './EventTemplatesPanel';
-import { TIMEZONE_OPTIONS } from '../utils/venueTime';
+const OUT_STATUS = {
+  pending_worker_acceptance: ['Waiting for them', 'text-amber-300'],
+  pending_manager_approval: ['They accepted · waiting for the manager', 'text-amber-300'],
+  approved: ['Done · they have the shift', 'text-emerald-300'],
+  declined: ['They said no · you still have the shift', 'text-slate-400'],
+  denied: ['Manager said no · you still have the shift', 'text-slate-400'],
+  cancelled_by_sender: ['You withdrew it', 'text-slate-500'],
+};
+const WAITING = ['pending_worker_acceptance', 'pending_manager_approval'];
+const RECENT_DAYS = 14;
 
-```
-
-**Edit 2.** Find:
-```jsx
+function ShiftLine({ shift }) {
+  return (
+    <>
+      <h3 className="text-sm font-bold text-white mt-1">{shift?.title}</h3>
+      <p className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+        <span className="font-semibold text-slate-200">{shift?.role_type}</span>
+        <span>·</span>
+        <span>{shift?.venue?.name}</span>
+        <span>·</span>
+        <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} className="text-emerald-400 font-semibold" />
+        <TipBadge shift={shift} />
+      </p>
+      <p className="text-xs text-slate-500 mt-0.5">{fmtDateTime(shift?.start_time, shift?.venue?.timezone)}</p>
+    </>
+  );
 }
 
-export default function VenueSettingsModal({ mode = 'edit', venue = null, showManagerEmail = false, onClose, onSaved }) {
-  const isEdit = mode === 'edit' && !!venue?.id;
-  const [tab, setTab] = useState('details');
-  const [form, setForm] = useState(emptyForm(venue));
-  const [saving, setSaving] = useState(false);
-```
-Replace with:
-```jsx
+/**
+ * Phase 29.4: Hand-offs tab. Incoming (accept / decline) and the ones I sent (withdraw while waiting).
+ * Props: incoming[], outgoing[] (ShiftTransferResponse), busyId, onAccept(t), onDecline(t), onWithdraw(t)
+ */
+export default function HandoffsPanel({ incoming = [], outgoing = [], busyId, onAccept, onDecline, onWithdraw }) {
+  const cutoff = Date.now() - RECENT_DAYS * 86400000;
+  const sent = outgoing.filter((t) => WAITING.includes(t.status) || new Date(t.updated_at).getTime() >= cutoff);
+
+  return (
+    <div className="space-y-8">
+      <section className="space-y-3">
+        <h2 className="text-sm font-bold text-white flex items-center gap-2">
+          <Inbox className="w-4 h-4 text-amber-400" /> Offered to you by teammates ({incoming.length})
+        </h2>
+        {incoming.length === 0 ? (
+          <p className="text-xs text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 text-center">
+            When a teammate wants to hand you one of their shifts, it shows up here.
+          </p>
+        ) : incoming.map((t) => (
+          <div key={t.id} className="p-4 bg-slate-900 border border-amber-500/30 rounded-2xl flex flex-col md:flex-row md:items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-400">
+                <strong className="text-white">{t.from_worker?.first_name} {t.from_worker?.last_name}</strong> wants to hand you this shift
+              </p>
+              <ShiftLine shift={t.shift} />
+              {t.notes && (
+                <p className="mt-2 text-[11px] text-amber-100 bg-amber-500/5 border border-amber-500/30 rounded-lg px-2 py-1 inline-flex gap-1">
+                  <MessageSquareQuote className="w-3 h-3 text-amber-300 flex-shrink-0 mt-0.5" /> “{t.notes}”
+                </p>
+              )}
+              <p className="text-[10px] text-slate-500 mt-1">If you accept, your manager still has to approve it.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => onDecline(t)} disabled={busyId === t.id}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50">
+                <X className="w-3.5 h-3.5" /> Decline
+              </button>
+              <button type="button" onClick={() => onAccept(t)} disabled={busyId === t.id}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+                <Check className="w-3.5 h-3.5" /> {busyId === t.id ? 'Working…' : 'Accept'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-bold text-white flex items-center gap-2">
+          <Send className="w-4 h-4 text-slate-400" /> Sent by you
+          <span className="text-[11px] font-normal text-slate-500">(last {RECENT_DAYS} days)</span>
+        </h2>
+        {sent.length === 0 ? (
+          <p className="text-xs text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 text-center flex flex-col items-center gap-1">
+            <ArrowRightLeft className="w-5 h-5 text-slate-600" />
+            To hand off a shift, open it in My shifts and choose “Hand off to a teammate” from its ⋯ menu.
+          </p>
+        ) : sent.map((t) => {
+          const [label, tone] = OUT_STATUS[t.status] || [t.status, 'text-slate-400'];
+          const waiting = WAITING.includes(t.status);
+          return (
+            <div key={t.id} className={`p-4 bg-slate-900 border rounded-2xl flex flex-col md:flex-row md:items-center gap-3 ${waiting ? 'border-slate-700' : 'border-slate-800 opacity-80'}`}>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-slate-400">
+                  To <strong className="text-white">{t.to_worker?.first_name} {t.to_worker?.last_name}</strong>
+                  <span className={`ml-2 font-semibold ${tone}`}>{label}</span>
+                </p>
+                <ShiftLine shift={t.shift} />
+              </div>
+              {waiting && (
+                <button type="button" onClick={() => onWithdraw(t)} disabled={busyId === t.id}
+                  className="px-3.5 py-2 rounded-xl border border-rose-500/50 text-rose-300 hover:bg-rose-500/10 text-xs font-semibold disabled:opacity-50 self-start md:self-auto">
+                  {busyId === t.id ? 'Withdrawing…' : 'Withdraw'}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </section>
+    </div>
+  );
 }
-
-// Phase 29.3: initialTab ('details' | 'positions' | 'locations' | 'templates'); onUseTemplate(template) shows "Use" on templates
-export default function VenueSettingsModal({
-  mode = 'edit', venue = null, showManagerEmail = false, initialTab = 'details', onUseTemplate = null, onClose, onSaved,
-}) {
-  const isEdit = mode === 'edit' && !!venue?.id;
-  const [tab, setTab] = useState(isEdit ? initialTab : 'details');
-  const [form, setForm] = useState(emptyForm(venue));
-  const [saving, setSaving] = useState(false);
-```
-
-**Edit 3.** Find:
-```jsx
-
-  const tabs = isEdit ? (
-    <div className="flex gap-2">
-      {[{ id: 'details', label: 'Details' }, { id: 'positions', label: 'Positions & pay' }, { id: 'locations', label: 'Locations' }].map((t) => (
-        <button key={t.id} type="button" onClick={() => setTab(t.id)}
-          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-```
-Replace with:
-```jsx
-
-  const tabs = isEdit ? (
-    <div className="flex flex-wrap gap-2">
-      {[
-        { id: 'details', label: 'Details' },
-        { id: 'positions', label: 'Positions & pay' },
-        { id: 'locations', label: 'Locations' },
-        { id: 'templates', label: 'Event templates' },   // Phase 29.3
-      ].map((t) => (
-        <button key={t.id} type="button" onClick={() => setTab(t.id)}
-          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-```
-
-**Edit 4.** Find:
-```jsx
-      ) : tab === 'locations' ? (
-        <VenueLocationsPanel venue={venue} onError={setError} />
-      ) : (
-        <div className="space-y-4">
-```
-Replace with:
-```jsx
-      ) : tab === 'locations' ? (
-        <VenueLocationsPanel venue={venue} onError={setError} />
-      ) : tab === 'templates' ? (
-        <EventTemplatesPanel venue={venue} onError={setError} onUseTemplate={onUseTemplate} />
-      ) : (
-        <div className="space-y-4">
 ```
 
 ---
 
-## C5. `frontend/src/components/PostedShiftsBoard.jsx` (EDITS)
+## C5. `frontend/src/components/TransferModal.jsx` (FULL FILE REPLACEMENT)
+Same props as before.
 
-**Edit 1.** Find:
 ```jsx
-import { enUS } from 'date-fns/locale';
-import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
 import api from '../api/client';
-import TipBadge from './TipBadge';
-```
-Replace with:
-```jsx
-import { enUS } from 'date-fns/locale';
-import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin, Send, Undo2, Trash2, LayoutTemplate, FilePen } from 'lucide-react';
-import api from '../api/client';
-import TipBadge from './TipBadge';
-```
+import { ArrowRightLeft, AlertCircle, Info } from 'lucide-react';
+import ModalShell from './ModalShell';
+import { fmtShortDate, fmtDateTime } from '../utils/venueTime';
+import PayLabel from './PayLabel';
 
-**Edit 2.** Find:
-```jsx
-const SCOPES = [
-  { id: 'upcoming', label: 'Upcoming' },
-  { id: 'past', label: 'Past' },
-  { id: 'all', label: 'All' },
-```
-Replace with:
-```jsx
-const SCOPES = [
-  { id: 'upcoming', label: 'Upcoming' },
-  { id: 'drafts', label: 'Drafts' },       // Phase 29.3
-  { id: 'past', label: 'Past' },
-  { id: 'all', label: 'All' },
-```
+/**
+ * Hand off one of my booked shifts to a teammate (they accept, then the manager approves).
+ * Phase 29.4: ModalShell (Esc closes it) and "hand off" wording everywhere.
+ * Props: isOpen, onClose, myConfirmedShifts (ShiftRequestResponse[]), preselectedShiftId, onTransferSuccess()
+ */
+export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [], preselectedShiftId = null, onTransferSuccess }) {
+  const [selectedShiftId, setSelectedShiftId] = useState(preselectedShiftId || '');
+  const [eligibleWorkers, setEligibleWorkers] = useState([]);
+  const [selectedWorkerId, setSelectedWorkerId] = useState('');
+  const [loadingWorkers, setLoadingWorkers] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState(null);
 
-**Edit 3.** Find:
-```jsx
-  onOpenedEvent,
-  onDataChanged,           // Phase 29: after assign / offer / rating (parent reloads, which bumps refreshKey)
-}) {
-  const [scope, setScope] = useState('upcoming');
-```
-Replace with:
-```jsx
-  onOpenedEvent,
-  onDataChanged,           // Phase 29: after assign / offer / rating (parent reloads, which bumps refreshKey)
-  onPublishEvent,          // Phase 29.3: (ev) draft -> live
-  onUnpublishEvent,        // Phase 29.3: (ev) live -> draft
-  onDeleteDraft,           // Phase 29.3: (ev)
-  onSaveTemplate,          // Phase 29.3: (ev)
-}) {
-  const [scope, setScope] = useState('upcoming');
-```
+  useEffect(() => {
+    if (preselectedShiftId) {
+      setSelectedShiftId(preselectedShiftId);
+    } else if (myConfirmedShifts.length > 0 && !selectedShiftId) {
+      setSelectedShiftId(myConfirmedShifts[0].shift_id || myConfirmedShifts[0].shift?.id || '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preselectedShiftId, myConfirmedShifts]);
 
-**Edit 4.** Find:
-```jsx
-            eventPropGetter={(e) => ({
-              style: {
-                backgroundColor: e.resource.total_requested > 0 ? '#b45309' : '#059669',
-                borderColor: e.resource.total_requested > 0 ? '#f59e0b' : '#10b981',
-                color: '#ffffff',
-                borderRadius: '6px',
-```
-Replace with:
-```jsx
-            eventPropGetter={(e) => ({
-              style: {
-                backgroundColor: e.resource.status === 'draft' ? '#334155' : e.resource.total_requested > 0 ? '#b45309' : '#059669',
-                borderColor: e.resource.status === 'draft' ? '#94a3b8' : e.resource.total_requested > 0 ? '#f59e0b' : '#10b981',
-                borderStyle: e.resource.status === 'draft' ? 'dashed' : 'solid',
-                color: '#ffffff',
-                borderRadius: '6px',
-```
+  useEffect(() => {
+    if (!isOpen || !selectedShiftId) return undefined;
+    let active = true;
+    setLoadingWorkers(true);
+    setError(null);
+    api
+      .get(`/transfers/eligible-workers/${selectedShiftId}`)
+      .then((res) => {
+        if (!active) return;
+        const list = res.data || [];
+        setEligibleWorkers(list);
+        setSelectedWorkerId(list.length ? list[0].id : '');
+      })
+      .catch(() => active && setError('Could not load teammates for this shift.'))
+      .finally(() => active && setLoadingWorkers(false));
+    return () => {
+      active = false;
+    };
+  }, [isOpen, selectedShiftId]);
 
-**Edit 5.** Find:
-```jsx
-          <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-          <p className="text-xs text-slate-400">
-            {scope === 'upcoming' ? 'No upcoming shifts posted for this venue.' : 'No shifts found.'}
-          </p>
-        </div>
-```
-Replace with:
-```jsx
-          <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-          <p className="text-xs text-slate-400">
-            {scope === 'upcoming' ? 'No upcoming shifts posted for this venue.'
-              : scope === 'drafts' ? 'No drafts. Use “Save as draft” when posting a shift to prepare it before workers can see it.'
-              : 'No shifts found.'}
-          </p>
-        </div>
-```
+  if (!isOpen) return null;
 
-**Edit 6.** Find:
-```jsx
-                {items.map((ev) => {
-                  const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
-                  return (
-                    <div key={ev.event_key} className={`bg-slate-950 border rounded-xl overflow-visible ${ev.cancelled ? 'border-rose-900/60 opacity-70' : 'border-slate-800'}`}>
-                      <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
-                        <div>
-                          <div className="text-sm font-bold text-white">{ev.title}</div>
-                          {ev.cancelled && (
-                            <div className="text-[11px] text-rose-300">Cancelled{ev.cancel_reason ? `: ${ev.cancel_reason}` : ''}</div>
-```
-Replace with:
-```jsx
-                {items.map((ev) => {
-                  const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
-                  const isDraft = ev.status === 'draft';          // Phase 29.3
-                  const upcoming = new Date(ev.start_time) > new Date();
-                  const nobody = ev.total_assigned === 0 && ev.total_requested === 0 && !ev.positions.some((p) => (p.offers || []).some((o) => o.status === 'pending'));
-                  return (
-                    <div key={ev.event_key} className={`bg-slate-950 border rounded-xl overflow-visible ${ev.cancelled ? 'border-rose-900/60 opacity-70' : isDraft ? 'border-dashed border-slate-500' : 'border-slate-800'}`}>
-                      <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
-                        <div>
-                          <div className="text-sm font-bold text-white flex flex-wrap items-center gap-2">
-                            {ev.title}
-                            {isDraft && (
-                              <span title="Only managers can see a draft" className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-500 inline-flex items-center gap-1">
-                                <FilePen className="w-3 h-3" /> Draft · not visible to workers
-                              </span>
-                            )}
-                          </div>
-                          {ev.cancelled && (
-                            <div className="text-[11px] text-rose-300">Cancelled{ev.cancel_reason ? `: ${ev.cancel_reason}` : ''}</div>
-```
+  const currentShiftObj = myConfirmedShifts.find((item) => (item.shift_id || item.shift?.id) === selectedShiftId)?.shift;
 
-**Edit 7.** Find:
-```jsx
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 self-start md:self-auto relative">
-                          <button
-                            type="button"
-```
-Replace with:
-```jsx
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto relative">
-                          <button
-                            type="button"
-```
-
-**Edit 8.** Find:
-```jsx
-                            <Eye className="w-3.5 h-3.5" /> Details
-                          </button>
-                          {onEditEvent && ev.event_id && !ev.cancelled && (
-                            <button
-```
-Replace with:
-```jsx
-                            <Eye className="w-3.5 h-3.5" /> Details
-                          </button>
-                          {isDraft && onPublishEvent && !ev.cancelled && (
-                            <button
-                              type="button"
-                              onClick={() => onPublishEvent(ev)}
-                              disabled={!upcoming}
-                              title={upcoming ? 'Workers can see and request it, and your team is told' : 'The start time has passed. Edit the date first.'}
-                              className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition inline-flex items-center gap-1.5 disabled:opacity-40"
-                            >
-                              <Send className="w-3.5 h-3.5" /> Publish
-                            </button>
-                          )}
-                          {onEditEvent && ev.event_id && !ev.cancelled && (
-                            <button
-```
-
-**Edit 9.** Find:
-```jsx
-                          {menuKey === ev.event_key && (
-                            <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
-                              {onTimesheet && (
-                                <button type="button" onClick={() => { setMenuKey(null); onTimesheet(ev); }}
-                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
-```
-Replace with:
-```jsx
-                          {menuKey === ev.event_key && (
-                            <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
-                              {onTimesheet && !isDraft && (
-                                <button type="button" onClick={() => { setMenuKey(null); onTimesheet(ev); }}
-                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
-```
-
-**Edit 10.** Find:
-```jsx
-                                </button>
-                              )}
-                              {onCancelEvent && !ev.cancelled && new Date(ev.start_time) > new Date() && (
-                                <button type="button" onClick={() => { setMenuKey(null); onCancelEvent(ev); }}
-                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
-```
-Replace with:
-```jsx
-                                </button>
-                              )}
-                              {onSaveTemplate && (
-                                <button type="button" onClick={() => { setMenuKey(null); onSaveTemplate(ev); }}
-                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
-                                  <LayoutTemplate className="w-3.5 h-3.5" /> Save as template
-                                </button>
-                              )}
-                              {onUnpublishEvent && !isDraft && !ev.cancelled && upcoming && nobody && (
-                                <button type="button" onClick={() => { setMenuKey(null); onUnpublishEvent(ev); }}
-                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
-                                  <Undo2 className="w-3.5 h-3.5" /> Move back to drafts
-                                </button>
-                              )}
-                              {onDeleteDraft && isDraft && (
-                                <button type="button" onClick={() => { setMenuKey(null); onDeleteDraft(ev); }}
-                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
-                                  <Trash2 className="w-3.5 h-3.5" /> Delete draft
-                                </button>
-                              )}
-                              {onCancelEvent && !isDraft && !ev.cancelled && new Date(ev.start_time) > new Date() && (
-                                <button type="button" onClick={() => { setMenuKey(null); onCancelEvent(ev); }}
-                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
-```
-
-**Edit 11.** Find:
-```jsx
-                                {pos.status === 'CANCELLED' && <span className="text-[10px] text-rose-300">cancelled</span>}
-                              </div>
-                              <div className="md:col-span-3 flex items-center gap-1.5 text-emerald-400 font-semibold">
-                                <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
-                                {pos.hide_rate && <EyeOff className="w-3 h-3 text-slate-500" title="Pay hidden from workers" />}
-```
-Replace with:
-```jsx
-                                {pos.status === 'CANCELLED' && <span className="text-[10px] text-rose-300">cancelled</span>}
-                              </div>
-                              <div className="md:col-span-3 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0 text-emerald-400 font-semibold whitespace-nowrap">
-                                <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
-                                {pos.hide_rate && <EyeOff className="w-3 h-3 text-slate-500" title="Pay hidden from workers" />}
-```
-
----
-
-## C6. `frontend/src/components/EventRosterModal.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
-          </div>
-        )}
-        {event.positions.map((pos) => {
-          const isFull = pos.assigned.length >= pos.capacity;
-          const canStaff = venueId && !event.cancelled && pos.status !== 'CANCELLED' && !isFull && !ended;
-          return (
-            <div key={pos.shift_id} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-```
-Replace with:
-```jsx
-          </div>
-        )}
-        {event.status === 'draft' && (
-          <div className="p-3 rounded-xl text-xs border border-dashed border-slate-500 bg-slate-800/50 text-slate-200">
-            This is a <strong>draft</strong>. Workers can't see it, and you can't assign or offer spots until it's published.
-          </div>
-        )}
-        {event.positions.map((pos) => {
-          const isFull = pos.assigned.length >= pos.capacity;
-          const isDraft = event.status === 'draft';   // Phase 29.3: publish before staffing
-          const canStaff = venueId && !event.cancelled && !isDraft && pos.status !== 'CANCELLED' && !isFull && !ended;
-          return (
-            <div key={pos.shift_id} className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-```
-
-**Edit 2.** Find:
-```jsx
-                  </button>
-                )}
-                {onCancelPosition && !event.cancelled && pos.status !== 'CANCELLED' && (
-                  <button type="button" onClick={() => onCancelPosition(pos, event)}
-                    className="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-300 text-xs border border-rose-600/30 inline-flex items-center gap-1">
-```
-Replace with:
-```jsx
-                  </button>
-                )}
-                {onCancelPosition && !event.cancelled && !isDraft && pos.status !== 'CANCELLED' && (
-                  <button type="button" onClick={() => onCancelPosition(pos, event)}
-                    className="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-300 text-xs border border-rose-600/30 inline-flex items-center gap-1">
-```
-
----
-
-## C7. `frontend/src/components/DuplicateEventModal.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  const dates = useMemo(() => {
-```
-Replace with:
-```jsx
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const sourceDraft = event.status === 'draft';               // Phase 29.3: copies of a draft are drafts
-  const [asDraft, setAsDraft] = useState(sourceDraft);
-
-  const dates = useMemo(() => {
-```
-
-**Edit 2.** Find:
-```jsx
-    setSaving(true);
+  const handleSubmit = async () => {
+    if (!selectedShiftId || !selectedWorkerId || submitting) return;
     try {
-      const res = await api.post(`/events/${event.event_id}/duplicate`, { dates });
-      onDone && onDone(res.data.count);
+      setSubmitting(true);
+      setError(null);
+      await api.post('/transfers/propose', {
+        shift_id: selectedShiftId,
+        to_worker_id: selectedWorkerId,
+        notes: notes.trim() || undefined,
+      });
+      if (onTransferSuccess) onTransferSuccess();
       onClose();
     } catch (err) {
-```
-Replace with:
-```jsx
-    setSaving(true);
-    try {
-      const res = await api.post(`/events/${event.event_id}/duplicate`, { dates, as_draft: asDraft });
-      onDone && onDone(res.data.count, asDraft);
-      onClose();
-    } catch (err) {
-```
-
-**Edit 3.** Find:
-```jsx
-      <button type="button" onClick={submit} disabled={saving}
-        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
-        {saving ? 'Copying…' : `Create ${dates.length} ${dates.length === 1 ? 'copy' : 'copies'}`}
-      </button>
-    </>
-```
-Replace with:
-```jsx
-      <button type="button" onClick={submit} disabled={saving}
-        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
-        {saving ? 'Copying…' : `Create ${dates.length} ${asDraft ? 'draft ' : ''}${dates.length === 1 ? 'copy' : 'copies'}`}
-      </button>
-    </>
-```
-
-**Edit 4.** Find:
-```jsx
-        )}
-      </div>
-      <p className="text-[11px] text-slate-500 mt-3">
-        Same start time ({timeZone || 'venue'} time), positions, pay, notes and approval settings. Nobody is booked on the copies.
-```
-Replace with:
-```jsx
-        )}
-      </div>
-      <label className={`mt-3 flex items-start gap-2 text-xs ${sourceDraft ? 'text-slate-500' : 'text-slate-300'}`}>
-        <input type="checkbox" checked={asDraft} disabled={sourceDraft} onChange={(e) => setAsDraft(e.target.checked)}
-          className="mt-0.5 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
-        <span>
-          Create the copies as drafts (workers can't see them until you publish each one)
-          {sourceDraft && <span className="block text-[10px]">This event is a draft, so its copies are drafts too.</span>}
-        </span>
-      </label>
-      <p className="text-[11px] text-slate-500 mt-3">
-        Same start time ({timeZone || 'venue'} time), positions, pay, notes and approval settings. Nobody is booked on the copies.
-```
-
----
-
-## C8. `frontend/src/pages/VenueManagerDashboard.jsx` (EDITS)
-Publish / Move back to drafts / Delete draft / Save as template handlers, the **Templates** header button, and template **Use** → Post a Shift.
-
-**Edit 1.** Find:
-```jsx
-import api from '../api/client';
-import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X,
-} from 'lucide-react';
-import PostedShiftsBoard from '../components/PostedShiftsBoard';
-```
-Replace with:
-```jsx
-import api from '../api/client';
-import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X, LayoutTemplate,
-} from 'lucide-react';
-import PostedShiftsBoard from '../components/PostedShiftsBoard';
-```
-
-**Edit 2.** Find:
-```jsx
-import ReasonDialog from '../components/ReasonDialog';
-import DuplicateEventModal from '../components/DuplicateEventModal';
-import TimesheetModal from '../components/TimesheetModal';
-import TeamModal from '../components/TeamModal';
-```
-Replace with:
-```jsx
-import ReasonDialog from '../components/ReasonDialog';
-import DuplicateEventModal from '../components/DuplicateEventModal';
-import ConfirmDialog from '../components/ConfirmDialog';
-import TimesheetModal from '../components/TimesheetModal';
-import TeamModal from '../components/TeamModal';
-```
-
-**Edit 3.** Find:
-```jsx
-  const [venuePositions, setVenuePositions] = useState([]);
-  const [showVenueSettings, setShowVenueSettings] = useState(false);
-  const [eventForm, setEventForm] = useState(null); // { mode: 'create' } | { mode: 'edit', eventId }
-  const [reasonDialog, setReasonDialog] = useState(null);
-  const [dupEvent, setDupEvent] = useState(null);
-```
-Replace with:
-```jsx
-  const [venuePositions, setVenuePositions] = useState([]);
-  const [showVenueSettings, setShowVenueSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('details');   // Phase 29.3
-  const [confirmDialog, setConfirmDialog] = useState(null);    // Phase 29.3
-  const [eventForm, setEventForm] = useState(null); // { mode: 'create', templateId? } | { mode: 'edit', eventId }
-  const [reasonDialog, setReasonDialog] = useState(null);
-  const [dupEvent, setDupEvent] = useState(null);
-```
-
-**Edit 4.** Find:
-```jsx
-    });
-
-  const askCancelPosition = (pos, ev) =>
-    setReasonDialog({
-```
-Replace with:
-```jsx
-    });
-
-  // Phase 29.3: drafts and templates
-  const publishEvent = async (ev) => {
-    setActionLoading(`publish-${ev.event_id}`);
-    try {
-      await api.post(`/events/${ev.event_id}/publish`);
-      afterChange(`Published “${ev.title}”. Workers can see it and your team has been told.`);
-    } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Could not publish.' });
+      setError(err.response?.data?.detail || 'Could not send the hand-off.');
     } finally {
-      setActionLoading(null);
+      setSubmitting(false);
     }
   };
 
-  const askUnpublish = (ev) =>
-    setConfirmDialog({
-      title: 'Move back to drafts?',
-      message: `Workers will stop seeing “${ev.title}” until you publish it again. Nobody has requested it yet.`,
-      confirmLabel: 'Move to drafts',
-      onConfirm: async () => {
-        await api.post(`/events/${ev.event_id}/unpublish`);
-        afterChange(`“${ev.title}” is a draft again.`);
-      },
-    });
+  const selectCls = 'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500';
 
-  const askDeleteDraft = (ev) =>
-    setConfirmDialog({
-      title: 'Delete this draft?',
-      message: `“${ev.title}” and its positions will be deleted. Nobody was told about it, so nobody is affected.`,
-      confirmLabel: 'Delete draft',
-      danger: true,
-      onConfirm: async () => {
-        await api.delete(`/events/${ev.event_id}`);
-        afterChange('Draft deleted.');
-      },
-    });
+  return (
+    <ModalShell
+      title="Hand off a shift"
+      icon={<ArrowRightLeft className="w-5 h-5 text-amber-400" />}
+      onClose={onClose}
+      maxWidth="max-w-lg"
+      footer={(
+        <>
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!selectedShiftId || !selectedWorkerId || submitting || eligibleWorkers.length === 0}
+            className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold disabled:opacity-40"
+          >
+            {submitting ? 'Sending…' : 'Send hand-off'}
+          </button>
+        </>
+      )}
+    >
+      <div className="space-y-4">
+        {error && (
+          <div className="p-3 bg-rose-950/80 border border-rose-800 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+        <label className="block text-xs font-semibold text-slate-300">
+          Shift
+          <select value={selectedShiftId} onChange={(e) => setSelectedShiftId(e.target.value)} className={`${selectCls} mt-1`}>
+            {myConfirmedShifts.map((req) => {
+              const s = req.shift;
+              const id = req.shift_id || s?.id;
+              return (
+                <option key={id} value={id}>
+                  {s?.title} ({s?.role_type}) · {fmtShortDate(s?.start_time, s?.venue?.timezone)}
+                </option>
+              );
+            })}
+          </select>
+        </label>
 
-  const askSaveTemplate = (ev) =>
-    setConfirmDialog({
-      title: 'Save as a template',
-      message: 'Saves the times, where, notes and positions (with pay) so you can post this event again in a few clicks. Dates and people are not saved.',
-      confirmLabel: 'Save template',
-      input: { label: 'Template name', placeholder: 'e.g. Friday Jazz', initial: ev.title, required: true },
-      onConfirm: async (name) => {
-        await api.post(`/events/${ev.event_id}/save-as-template`, { name });
-        setNotification({ type: 'success', message: `Saved the template “${name}”. Pick it next time you post a shift.` });
-      },
-    });
+        {currentShiftObj && (
+          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1 text-slate-300">
+            <p className="font-bold text-white">{currentShiftObj.title}</p>
+            <p className="text-slate-400">
+              {currentShiftObj.venue?.name} · {currentShiftObj.role_type} ·{' '}
+              <PayLabel rate={currentShiftObj.hourly_rate} rateMax={currentShiftObj.hourly_rate_max} />
+            </p>
+            <p className="text-slate-500 text-[11px]">{fmtDateTime(currentShiftObj.start_time, currentShiftObj.venue?.timezone)}</p>
+          </div>
+        )}
 
-  const openTemplates = () => {
-    setSettingsTab('templates');
-    setShowVenueSettings(true);
-  };
+        <label className="block text-xs font-semibold text-slate-300">
+          Hand it to
+          {loadingWorkers ? (
+            <div className="text-xs text-slate-500 py-2 font-normal">Finding teammates who are free…</div>
+          ) : eligibleWorkers.length === 0 ? (
+            <div className="text-xs text-slate-400 bg-slate-950 p-3 rounded-xl border border-slate-800 mt-1 font-normal">
+              Nobody on this venue's team is free for this shift. You can still drop it (more than 24 hours before it starts), or message your manager.
+            </div>
+          ) : (
+            <select value={selectedWorkerId} onChange={(e) => setSelectedWorkerId(e.target.value)} className={`${selectCls} mt-1`}>
+              {eligibleWorkers.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.first_name} {w.last_name} · {w.rating_count ? `★ ${Number(w.aggregate_rating || 0).toFixed(1)}` : 'New'}
+                </option>
+              ))}
+            </select>
+          )}
+        </label>
 
-  const askCancelPosition = (pos, ev) =>
-    setReasonDialog({
+        <label className="block text-xs font-semibold text-slate-300">
+          Note for them and your manager (optional)
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value.slice(0, 500))}
+            placeholder="e.g. Family thing came up. Thanks for covering!"
+            rows={2}
+            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 resize-none"
+          />
+        </label>
+
+        <p className="text-[11px] text-slate-400 bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-xl flex gap-2">
+          <Info className="w-3.5 h-3.5 text-amber-300 flex-shrink-0 mt-0.5" />
+          <span>
+            They accept first, then your manager approves. <b className="text-slate-200">You stay on the shift until the manager approves.</b>{' '}
+            You can withdraw it from the Hand-offs tab while it's waiting.
+          </span>
+        </p>
+      </div>
+    </ModalShell>
+  );
+}
+```
+
+---
+
+## C6. `frontend/src/components/EventListingModal.jsx` (EDITS)
+Ask to come back: reason required, the button label, and a banner.
+
+**Edit 1.** Find:
+```jsx
+
+// Statuses on a position that the server will refuse to re-open.
+const LOCKED_POSITION_STATUSES = ['rejected', 'removed', 'no_show', 'dropped', 'transferred', 'cancelled'];
+
+function pickDefault(listing, prev) {
+```
+Replace with:
+```jsx
+
+// Statuses on a position that the server will refuse to re-open.
+const LOCKED_POSITION_STATUSES = ['rejected', 'removed', 'no_show', 'transferred', 'cancelled'];   // Phase 29.4: 'dropped' can ask back
+const ASK_BACK_MIN = 5;
+
+function pickDefault(listing, prev) {
+```
+
+**Edit 2.** Find:
+```jsx
+  const selectedIsMine = selected && mine && selected.shift_id === mine.shift_id;
+  const bookedPosition = isBooked ? listing.positions.find((p) => p.shift_id === mine.shift_id) : null;
+
+  const addToCalendar = () =>
+```
+Replace with:
+```jsx
+  const selectedIsMine = selected && mine && selected.shift_id === mine.shift_id;
+  const bookedPosition = isBooked ? listing.positions.find((p) => p.shift_id === mine.shift_id) : null;
+  // Phase 29.4: they dropped a position in this event -> asking back needs a reason and the manager's OK
+  const askingBack = !!listing.dropped_here && !isBooked;
+  const noteOk = !askingBack || note.trim().length >= ASK_BACK_MIN;
+
+  const addToCalendar = () =>
+```
+
+**Edit 3.** Find:
+```jsx
+      const label = isWaiting
+        ? `Switch to ${selected.role_type}`
+        : selected.booking === 'instant'
+        ? 'Book instantly'
+```
+Replace with:
+```jsx
+      const label = isWaiting
+        ? `Switch to ${selected.role_type}`
+        : askingBack
+        ? 'Ask to come back'
+        : selected.booking === 'instant'
+        ? 'Book instantly'
+```
+
+**Edit 4.** Find:
+```jsx
+          type="button"
+          onClick={() => sendRequest(isWaiting)}
+          disabled={submitting || !listing.can_request || selected.status !== 'OPEN'}
+          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+```
+Replace with:
+```jsx
+          type="button"
+          onClick={() => sendRequest(isWaiting)}
+          disabled={submitting || !listing.can_request || selected.status !== 'OPEN' || !noteOk}
+          title={noteOk ? undefined : 'Tell the manager why you can make it now'}
+          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
 ```
 
 **Edit 5.** Find:
 ```jsx
-              <Plus className="w-4 h-4" /> Post a Shift
-            </button>
-            <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
-              <UserPlus className="w-4 h-4 text-emerald-400" /> Team
-            </button>
-            <button type="button" onClick={() => setShowVenueSettings(true)} disabled={!venueDetails} className={headerBtn}>
-              <Settings className="w-4 h-4 text-amber-400" /> Settings
-            </button>
+          {result.type === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />}
+          <span>{result.message}</span>
+        </div>
+      )}
 ```
 Replace with:
 ```jsx
-              <Plus className="w-4 h-4" /> Post a Shift
-            </button>
-            <button type="button" onClick={openTemplates} disabled={!venueDetails} className={headerBtn}>
-              <LayoutTemplate className="w-4 h-4 text-indigo-300" /> Templates
-            </button>
-            <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
-              <UserPlus className="w-4 h-4 text-emerald-400" /> Team
-            </button>
-            <button type="button" onClick={() => { setSettingsTab('details'); setShowVenueSettings(true); }} disabled={!venueDetails} className={headerBtn}>
-              <Settings className="w-4 h-4 text-amber-400" /> Settings
-            </button>
+          {result.type === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />}
+          <span>{result.message}</span>
+        </div>
+      )}
+
+      {askingBack && !listing.cancelled && !listing.started && (
+        <div className="mb-4 p-3 rounded-xl border border-slate-600 bg-slate-800/60 text-slate-200 text-xs flex items-start gap-2">
+          <Info className="w-4 h-4 flex-shrink-0 text-slate-300" />
+          <span>
+            You dropped a shift at this event. You can ask to come back: tell the manager why you can make it now.
+            It always needs their approval, and until they say yes the drop still counts on your reliability.
+          </span>
+        </div>
+      )}
 ```
 
 **Edit 6.** Find:
 ```jsx
-              onCancelEvent={askCancelEvent}
-              onDuplicateEvent={(ev) => setDupEvent(ev)}
-              onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
-              onRemovePerson={askRemovePerson}
+                      {ps && (
+                        <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
+                          You: {STATUS_LABELS[ps] || ps}
+                          {p.my_status_reason ? ` — ${p.my_status_reason}` : ''}
+                        </p>
 ```
 Replace with:
 ```jsx
-              onCancelEvent={askCancelEvent}
-              onDuplicateEvent={(ev) => setDupEvent(ev)}
-              onPublishEvent={publishEvent}
-              onUnpublishEvent={askUnpublish}
-              onDeleteDraft={askDeleteDraft}
-              onSaveTemplate={askSaveTemplate}
-              onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
-              onRemovePerson={askRemovePerson}
+                      {ps && (
+                        <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
+                          {ps === 'dropped' ? 'You dropped this' : `You: ${STATUS_LABELS[ps] || ps}`}
+                          {p.my_status_reason ? ` — ${p.my_status_reason}` : ''}
+                        </p>
 ```
 
 **Edit 7.** Find:
 ```jsx
-          mode={eventForm.mode}
-          eventId={eventForm.eventId}
-          venue={venueDetails}
-          positions={venuePositions}
-          onClose={() => setEventForm(null)}
-          onSaved={() => {
-            setEventForm(null);
-            fetchVenueData(currentVenueId);
-            setNotification({
-              type: 'success',
-              message: eventForm.mode === 'edit' ? 'Event updated.' : 'Event and shifts published.',
-            });
-            loadVenuePositions(currentVenueId);
+          {showNoteBox && (
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">Note for the manager (optional)</label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value.slice(0, 500))}
+                rows={2}
+                placeholder="e.g. 3 years behind the bar, can stay late"
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+              />
 ```
 Replace with:
 ```jsx
-          mode={eventForm.mode}
-          eventId={eventForm.eventId}
-          templateId={eventForm.templateId}
-          venue={venueDetails}
-          positions={venuePositions}
-          onClose={() => setEventForm(null)}
-          onSaved={(saved, info = {}) => {
-            setEventForm(null);
-            fetchVenueData(currentVenueId);
-            setNotification({
-              type: 'success',
-              message: saved?.status === 'draft'
-                ? 'Draft saved. Only managers can see it. Publish it from Posted Shifts when it’s ready.'
-                : info.published
-                  ? 'Published. Workers can see it and your team has been told.'
-                  : 'Event updated.',
-            });
-            loadVenuePositions(currentVenueId);
+          {showNoteBox && (
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${askingBack ? 'text-amber-200' : 'text-slate-400'}`}>
+                {askingBack ? 'Why you can make it now (required)' : 'Note for the manager (optional)'}
+              </label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value.slice(0, 500))}
+                rows={2}
+                placeholder={askingBack ? 'e.g. My appointment moved, I can do the full shift' : 'e.g. 3 years behind the bar, can stay late'}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+              />
 ```
 
-**Edit 8.** Find:
-```jsx
+---
 
-      {reasonDialog && <ReasonDialog {...reasonDialog} onClose={() => setReasonDialog(null)} />}
-      {dupEvent && (
-        <DuplicateEventModal
-          event={dupEvent}
-          timeZone={tz}
-          onClose={() => setDupEvent(null)}
-          onDone={(count) => afterChange(`Created ${count} ${count === 1 ? 'copy' : 'copies'}.`)}
-        />
-      )}
+## C7. `frontend/src/components/EventListingCard.jsx` (EDITS)
+
+**Edit 1.** Find:
+```jsx
+                )}
+                <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
+                {p.my_status && <span className="text-[10px] text-amber-300">• you</span>}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
 ```
 Replace with:
 ```jsx
-
-      {reasonDialog && <ReasonDialog {...reasonDialog} onClose={() => setReasonDialog(null)} />}
-      {confirmDialog && <ConfirmDialog {...confirmDialog} onClose={() => setConfirmDialog(null)} />}
-      {dupEvent && (
-        <DuplicateEventModal
-          event={dupEvent}
-          timeZone={tz}
-          onClose={() => setDupEvent(null)}
-          onDone={(count, asDraft) => afterChange(`Created ${count} ${asDraft ? 'draft ' : ''}${count === 1 ? 'copy' : 'copies'}.`)}
-        />
-      )}
+                )}
+                <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
+                {p.my_status && (
+                  <span className={`text-[10px] whitespace-nowrap ${p.my_status === 'dropped' ? 'text-rose-300' : 'text-amber-300'}`}>
+                    • {p.my_status === 'dropped' ? 'you dropped' : 'you'}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
 ```
 
-**Edit 9.** Find:
+**Edit 2.** Find:
 ```jsx
-          mode="edit"
-          venue={venueDetails}
-          onClose={() => {
-            setShowVenueSettings(false);
+        </span>
+        <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
+          {mine ? 'View details' : 'View & request'}
+          <ChevronRight className="w-4 h-4" />
+        </span>
 ```
 Replace with:
 ```jsx
-          mode="edit"
-          venue={venueDetails}
-          initialTab={settingsTab}
-          onUseTemplate={(tpl) => {
-            setShowVenueSettings(false);
-            loadVenuePositions(currentVenueId);
-            setEventForm({ mode: 'create', templateId: tpl.id });
+        </span>
+        <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
+          {mine ? 'View details' : listing.dropped_here ? 'Ask to come back' : 'View & request'}
+          <ChevronRight className="w-4 h-4" />
+        </span>
+```
+
+---
+
+## C8. `frontend/src/utils/listingFormat.js` (EDIT)
+
+**Edit 1.** Find:
+```js
+  completed: 'Completed',
+  rejected: 'Not selected',
+  dropped: 'Released',
+  transferred: 'Handed off',
+  cancelled: 'Cancelled by venue',
+```
+Replace with:
+```js
+  completed: 'Completed',
+  rejected: 'Not selected',
+  dropped: 'You dropped this',
+  transferred: 'Handed off',
+  cancelled: 'Cancelled by venue',
+```
+
+---
+
+# PART D: Frontend, manager
+
+## D1. `frontend/src/components/ManagerQueues.jsx` (EDITS)
+
+**Edit 1.** Find:
+```jsx
+import React from 'react';
+import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight } from 'lucide-react';
+import RatingBadge from './RatingBadge';
+import ReliabilityBadge from './ReliabilityBadge';
+```
+Replace with:
+```jsx
+import React from 'react';
+import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight, RotateCcw } from 'lucide-react';
+import RatingBadge from './RatingBadge';
+import ReliabilityBadge from './ReliabilityBadge';
+```
+
+**Edit 2.** Find:
+```jsx
+                  </button>
+                </div>
+                {req.notes && (
+                  <div className="text-[11px] text-amber-100 bg-amber-500/5 border border-amber-500/30 rounded-lg px-2 py-1 flex gap-1">
+```
+Replace with:
+```jsx
+                  </button>
+                </div>
+                {req.previous_drop_at && (
+                  <div className="text-[11px] text-rose-100 bg-rose-500/10 border border-rose-500/40 rounded-lg px-2 py-1 flex gap-1">
+                    <RotateCcw className="w-3 h-3 text-rose-300 flex-shrink-0 mt-0.5" />
+                    <span>Dropped this event on {fmtDate(req.previous_drop_at, timeZone)} and is asking back. Needs your OK.</span>
+                  </div>
+                )}
+                {req.notes && (
+                  <div className="text-[11px] text-amber-100 bg-amber-500/5 border border-amber-500/30 rounded-lg px-2 py-1 flex gap-1">
+```
+
+---
+
+## D2. `frontend/src/components/ReviewModal.jsx` (EDIT)
+
+**Edit 1.** Find:
+```jsx
+            </div>
+          )}
+          <div className={`p-3 rounded-xl border text-sm ${note ? 'bg-amber-500/5 border-amber-500/40 text-amber-50' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>
+            <div className="text-[11px] font-semibold uppercase tracking-wider mb-1 inline-flex items-center gap-1 text-amber-300">
+              <MessageSquareQuote className="w-3.5 h-3.5" /> {isTransfer ? 'Their note' : 'Note with the request'}
+            </div>
+            <div className="whitespace-pre-line">{note ? `“${note}”` : 'No note.'}</div>
+```
+Replace with:
+```jsx
+            </div>
+          )}
+          {!isTransfer && d.previous_drop_at && (
+            <div className="p-3 rounded-xl border border-rose-500/40 bg-rose-500/10 text-sm text-rose-100">
+              <div className="font-bold text-rose-200">Dropped this event on {fmtDateTime(d.previous_drop_at, timeZone)}</div>
+              <div className="text-xs mt-0.5">They're asking to come back. Their reason is below. Approving books them. If they work the shift, the earlier drop stops counting against their reliability.</div>
+            </div>
+          )}
+          <div className={`p-3 rounded-xl border text-sm ${note ? 'bg-amber-500/5 border-amber-500/40 text-amber-50' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>
+            <div className="text-[11px] font-semibold uppercase tracking-wider mb-1 inline-flex items-center gap-1 text-amber-300">
+              <MessageSquareQuote className="w-3.5 h-3.5" /> {isTransfer ? 'Their note' : d.previous_drop_at ? 'Why they can make it now' : 'Note with the request'}
+            </div>
+            <div className="whitespace-pre-line">{note ? `“${note}”` : 'No note.'}</div>
+```
+
+---
+
+## D3. `frontend/src/components/EventRosterModal.jsx` (EDITS)
+The Dropped list, **Book back…** (uses the Phase 29.3 `ConfirmDialog`), and the flags.
+
+**Edit 1.** Find:
+```jsx
+import React, { useState } from 'react';
+import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle, MapPin, Send, Clock } from 'lucide-react';
+import api from '../api/client';
+import ModalShell from './ModalShell';
+import RatingBadge from './RatingBadge';
+import RateWorker from './RateWorker';
+import StaffPositionModal from './StaffPositionModal';
+import TipBadge from './TipBadge';
+import ReliabilityBadge from './ReliabilityBadge';
+```
+Replace with:
+```jsx
+import React, { useState } from 'react';
+import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle, MapPin, Send, Clock, RotateCcw, LogOut } from 'lucide-react';
+import api from '../api/client';
+import ModalShell from './ModalShell';
+import RatingBadge from './RatingBadge';
+import RateWorker from './RateWorker';
+import StaffPositionModal from './StaffPositionModal';
+import ConfirmDialog from './ConfirmDialog';
+import TipBadge from './TipBadge';
+import ReliabilityBadge from './ReliabilityBadge';
+```
+
+**Edit 2.** Find:
+```jsx
+  const [flash, setFlash] = useState(null);           // Phase 29: { type, text }
+  const [withdrawing, setWithdrawing] = useState(null);
+  if (!event) return null;
+  const ended = new Date(event.end_time).getTime() < Date.now();
+```
+Replace with:
+```jsx
+  const [flash, setFlash] = useState(null);           // Phase 29: { type, text }
+  const [withdrawing, setWithdrawing] = useState(null);
+  const [bookBack, setBookBack] = useState(null);     // Phase 29.4: { person, pos }
+  if (!event) return null;
+  const ended = new Date(event.end_time).getTime() < Date.now();
+```
+
+**Edit 3.** Find:
+```jsx
+                                <div className="text-[10px] text-slate-500">{SOURCE_LABEL[p.approval_source]}</div>
+                              )}
+                              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
+                                {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
+```
+Replace with:
+```jsx
+                                <div className="text-[10px] text-slate-500">{SOURCE_LABEL[p.approval_source]}</div>
+                              )}
+                              {p.previous_drop_at && (
+                                <div className="text-[10px] text-rose-300 inline-flex items-center gap-1" title={p.rebook_reason || ''}>
+                                  <RotateCcw className="w-3 h-3" /> Back after dropping on {fmtDate(p.previous_drop_at, timeZone)}
+                                  {p.rebook_reason ? ` · “${p.rebook_reason}”` : ''}
+                                </div>
+                              )}
+                              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
+                                {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
+```
+
+**Edit 4.** Find:
+```jsx
+                              <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">Requested {p.requested_at ? fmtDateTime(p.requested_at, timeZone) : ''}</div>
+                              {p.note && (
+                                <div className="text-[11px] text-slate-300 mt-1 italic whitespace-pre-line">“{p.note}”</div>
+```
+Replace with:
+```jsx
+                              <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">Requested {p.requested_at ? fmtDateTime(p.requested_at, timeZone) : ''}</div>
+                              {p.previous_drop_at && (
+                                <div className="text-[11px] text-rose-300 mt-0.5 inline-flex items-center gap-1">
+                                  <RotateCcw className="w-3 h-3" /> Dropped this event on {fmtDate(p.previous_drop_at, timeZone)}, asking back
+                                </div>
+                              )}
+                              {p.note && (
+                                <div className="text-[11px] text-slate-300 mt-1 italic whitespace-pre-line">“{p.note}”</div>
+```
+
+**Edit 5.** Find:
+```jsx
+                  )}
+                </div>
+
+                {pos.offers && pos.offers.length > 0 && (
+```
+Replace with:
+```jsx
+                  )}
+                </div>
+
+                {pos.dropped && pos.dropped.length > 0 && (
+                  <div>
+                    <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <LogOut className="w-3.5 h-3.5 text-rose-400" /> Dropped ({pos.dropped.length})
+                    </div>
+                    <div className="space-y-2">
+                      {pos.dropped.map((p) => (
+                        <div key={p.request_id} className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-200">{p.first_name} {p.last_name}</div>
+                            <div className="text-[11px] text-slate-500">
+                              Dropped {p.dropped_at ? fmtDateTime(p.dropped_at, timeZone) : ''}
+                              {p.drop_reason ? ` · “${p.drop_reason}”` : ''}
+                            </div>
+                          </div>
+                          {venueId && !event.cancelled && !ended && pos.status !== 'CANCELLED' && event.status !== 'draft' && (
+                            <button type="button" onClick={() => setBookBack({ person: p, pos })}
+                              disabled={pos.assigned.length >= pos.capacity}
+                              title={pos.assigned.length >= pos.capacity ? 'Position is full' : 'Book them back on this position'}
+                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-slate-700 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
+                              <RotateCcw className="w-3 h-3" /> Book back…
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {pos.offers && pos.offers.length > 0 && (
+```
+
+**Edit 6.** Find:
+```jsx
+        })}
+      </div>
+      {staffPos && (
+        <StaffPositionModal
+```
+Replace with:
+```jsx
+        })}
+      </div>
+      {bookBack && (
+        <ConfirmDialog
+          title={`Book ${bookBack.person.first_name} back?`}
+          message={`${bookBack.person.first_name} dropped ${bookBack.pos.role_type} on this event. Booking them back is logged with your reason, and they're told they're booked.`}
+          confirmLabel="Book back"
+          input={{ label: 'Reason (required)', placeholder: 'e.g. They sorted out their conflict', required: true }}
+          onConfirm={async (reason) => {
+            if (reason.length < 5) throw new Error('Add a slightly longer reason.');
+            const res = await api.post(`/shifts/${bookBack.pos.shift_id}/assign`, { worker_id: bookBack.person.worker_id, reason });
+            setFlash({ type: 'success', text: res.data.message });
+            if (onChanged) onChanged();
           }}
-          onClose={() => {
-            setShowVenueSettings(false);
+          onClose={() => setBookBack(null)}
+        />
+      )}
+      {staffPos && (
+        <StaffPositionModal
+```
+
+---
+
+## D4. `frontend/src/components/StaffPositionModal.jsx` (EDITS)
+An inline reason when assigning someone who dropped. They can't be ticked for offers.
+
+**Edit 1.** Find:
+```jsx
+  }, [position.shift_id, debouncedQ]);
+
+  const selectable = (c) => (c.available || c.requested_this) && !c.offered;
+  const toggle = (c) => {
+    if (!selectable(c)) return;
+```
+Replace with:
+```jsx
+  }, [position.shift_id, debouncedQ]);
+
+  const selectable = (c) => (c.available || c.requested_this) && !c.offered && !(c.dropped_at && !c.requested_this);   // Phase 29.4
+  const toggle = (c) => {
+    if (!selectable(c)) return;
+```
+
+**Edit 2.** Find:
+```jsx
+  };
+
+  const assign = async (c) => {
+    setBusy(`assign-${c.worker_id}`);
+    setError('');
+    try {
+      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id });
+      onDone(res.data.message);
+    } catch (err) {
+```
+Replace with:
+```jsx
+  };
+
+  const [reasonFor, setReasonFor] = useState(null);   // Phase 29.4: candidate who dropped this event
+  const [reason, setReason] = useState('');
+
+  const assign = async (c, why = null) => {
+    // Phase 29.4: someone who dropped this event needs a reason (unless they asked back themselves)
+    if (c.dropped_at && !c.requested_this && why === null) {
+      setReasonFor(c.worker_id);
+      setReason('');
+      return;
+    }
+    setBusy(`assign-${c.worker_id}`);
+    setError('');
+    try {
+      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id, reason: why || undefined });
+      onDone(res.data.message);
+    } catch (err) {
+```
+
+**Edit 3.** Find:
+```jsx
+                      </div>
+                    )}
+                  </div>
+                  <button
+```
+Replace with:
+```jsx
+                      </div>
+                    )}
+                    {c.dropped_at && (
+                      <div className="text-[11px] text-rose-300 mt-0.5">
+                        Dropped this event on {new Date(c.dropped_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        {c.drop_reason ? ` · “${c.drop_reason}”` : ''}. {c.requested_this ? 'They asked to come back.' : 'Assign needs a reason; offers skip them.'}
+                      </div>
+                    )}
+                    {reasonFor === c.worker_id && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 w-full">
+                        <input autoFocus value={reason} onChange={(e) => setReason(e.target.value.slice(0, 500))}
+                          onKeyDown={(e) => e.key === 'Enter' && reason.trim().length >= 5 && assign(c, reason.trim())}
+                          placeholder="Why are you booking them back?"
+                          className="flex-1 min-w-[12rem] px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500" />
+                        <button type="button" onClick={() => assign(c, reason.trim())} disabled={reason.trim().length < 5 || busy !== null}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40">Book back</button>
+                        <button type="button" onClick={() => setReasonFor(null)} className="text-xs text-slate-400 hover:text-white">Cancel</button>
+                      </div>
+                    )}
+                  </div>
+                  <button
 ```
 
 ---
@@ -3344,32 +2966,12 @@ docker compose up -d --build
 * **Keep current data:**
 ```bash
 docker compose exec -T database psql -U shiftboard_user -d shiftboard <<'SQL'
-ALTER TABLE shift_events ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'published';
-ALTER TABLE shift_events ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
-UPDATE shift_events SET published_at = created_at WHERE published_at IS NULL;
-
-CREATE TABLE IF NOT EXISTS event_templates (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
-    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    name VARCHAR(120) NOT NULL,
-    title VARCHAR(255) NOT NULL,
-    start_local VARCHAR(5) NOT NULL,
-    end_local VARCHAR(5) NOT NULL,
-    notes TEXT,
-    staff_notes TEXT,
-    location_id UUID REFERENCES venue_locations(id) ON DELETE SET NULL,
-    geofence_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
-    location_staff_notes TEXT,
-    positions JSONB NOT NULL DEFAULT '[]'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_event_templates_venue ON event_templates(venue_id);
+ALTER TABLE shift_requests ADD COLUMN IF NOT EXISTS previous_drop_at TIMESTAMPTZ;
+ALTER TABLE shift_requests ADD COLUMN IF NOT EXISTS rebook_reason TEXT;
 SQL
 docker compose up -d --build
 ```
-(Use the database service name, user and DB from `docker-compose.yml` if they differ.) Existing events all stay published.
+(Use the database service name, user and DB from `docker-compose.yml` if they differ.)
 
 If the page is blank or shows "Invalid hook call" after the rebuild:
 ```bash
@@ -3378,41 +2980,37 @@ docker compose exec frontend rm -rf node_modules/.vite && docker compose restart
 then hard-refresh.
 
 ### Checklist
-Sign in as the venue manager (or as an admin with the venue picked).
+**As a worker** with an upcoming booking:
+1. **Landing and tabs:**
+   * `/worker` opens on **My shifts**.
+   * The tabs read My shifts · Find shifts · Calendar · Hand-offs.
+   * On a phone all four are visible in a 2×2 grid.
+2. **Cards:**
+   * Each shift shows a date tile, status, role · venue · pay, the times, **one** main button and a ⋯ menu.
+   * A shift starting within the clock-in window shows **Clock in**. If it has unread notes, **Read the notes** sits next to it and doesn't replace it.
+3. **⋯ menu:**
+   * It lists Details & notes, Directions, Add to my calendar, Shift chat, Hand off to a teammate and Drop shift.
+   * Inside 24 h, Drop is greyed out with the reason.
+4. **Drop:**
+   * Drop a shift 3+ days out with a reason. The dialog closes with Esc and warns about late drops inside 72 h.
+   * The manager's bell shows the drop **with the reason**.
+5. **Ask back:**
+   * The dropped shift shows under "Dropped · you can still ask to come back". **Ask to come back** opens the event.
+   * The reason box is required, and the button stays disabled until you type 5+ characters.
+   * Send it: it shows "Waiting for the manager" and "After a drop", **even at a team venue that normally books instantly**.
+6. **Find shifts:** the dropped event's card shows "• you dropped" and "Ask to come back". No position in it shows Instant book.
+7. **Hand-offs:**
+   * Propose a hand-off from ⋯. Under **Hand-offs → Sent by you** it shows "Waiting for them", and **Withdraw** works.
+   * An incoming hand-off shows the teammate's note.
 
-1. **Save as draft:**
-   * **Post a Shift**, fill it in, then **Save as draft**. The banner says "Draft saved…".
-   * The card has a dashed border and **Draft · not visible to workers**, plus a green **Publish** button.
-   * The **Drafts** filter shows only drafts.
-2. **Workers can't see it:**
-   * As a worker on the team, the draft isn't in the shift list, on the venue's public page or in the bell.
-   * Asking the API for the draft as a worker (`GET /api/listings/<draft id>`) returns 404.
-3. **No staffing on drafts:** the draft's **Details** says it's a draft and shows no **Assign / Offer** or **Cancel position**.
-4. **Edit a draft:**
-   * The modal is titled "Edit draft", with **Save draft** and **Save & publish**.
-   * Changing the time doesn't mark anything "Updated".
-5. **Publish:**
-   * Click **Publish** on the card. The banner says your team has been told.
-   * Team members get "New shift at …", and the event appears for workers.
-   * The Activity log shows "Saved a draft…" and then "Published…".
-6. **Move back to drafts:**
-   * On a published event nobody has touched, ⋯ → **Move back to drafts** hides it again.
-   * Once someone has requested it, that menu item is gone. The API refuses it too.
-7. **Delete draft:** ⋯ → **Delete draft** removes it. The log says "Deleted the draft …".
-8. **Past draft:** a draft whose start has passed has a disabled Publish button. Editing the date fixes it.
-9. **Duplicate:**
-   * ⋯ → Duplicate / repeat has **Create the copies as drafts**. With it ticked, the copies appear under Drafts and nobody is told.
-   * For a draft the box is ticked and locked.
-10. **Templates tab:**
-    * **Templates** in the header, or Settings → **Event templates**.
-    * **New template**: name "Friday Jazz", 18:00–23:30, two positions, then **Save template**. It appears as a card.
-    * An end time earlier than the start shows a moon icon (overnight).
-11. **Use a template:**
-    * **Use** on the card opens Post a Shift filled in: name, times on tomorrow's date, notes and positions.
-    * Change the date: the end time moves with it. Then publish or save a draft.
-12. **Start from a template:** in a fresh Post a Shift, the purple **Start from a template** box fills everything in when you pick one.
-13. **Save as template:** ⋯ → **Save as template** on any event asks for a name, then the template appears in the tab with the event's times.
-14. **Edit and delete a template:** **Edit** opens the same form with name and clock times; **Delete** asks "Delete?" inline. Neither changes events already posted.
-15. **Admin:**
-    * From the admin console's venue drawer → Settings, the Event templates tab is there (no **Use** button).
-    * Overview numbers don't count drafts.
+**As the manager:**
+
+8. **Queue and review:** the ask-back request shows a red "Dropped this event on … and is asking back". **Review** shows the flag and "Why they can make it now".
+9. **Roster:**
+   * The event's **Dropped** list shows who dropped, when and why.
+   * **Book back…** asks for a reason, then books them. The roster shows "Back after dropping on … · "reason"", and the activity log says "booked back after a drop".
+10. **Assign / Offer:**
+    * Search someone who dropped the event. They show "Dropped this event on…".
+    * **Assign** asks for a reason inline.
+    * Ticking them for an offer isn't possible, and the API skips them anyway.
+11. **Reliability:** someone who drops inside 72 h and then asks back still shows the late drop until they actually work the shift.

@@ -27,6 +27,7 @@ from src.models import (
 from src.schemas import AssignCandidate, OfferCreateResult, OfferSkip, WorkerOffer
 from src.services.booking import (
     _load_shift_locked, as_utc, PENDING_STATUSES, BOOKED_STATUSES, ACTIVE_STATUSES,
+    prior_drop_in_event, REBOOK_REASON_MIN,
 )
 from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
 from src.services.reliability import compute_reliability
@@ -36,9 +37,8 @@ from src.auth import normalize_role
 logger = logging.getLogger("shiftboard.staffing")
 
 MAX_OFFER_PEOPLE = 5
-REASSIGNABLE_STATUSES = ("withdrawn", "rejected", "cancelled", "removed")
+REASSIGNABLE_STATUSES = ("withdrawn", "rejected", "cancelled", "removed", "dropped")   # Phase 29.4: dropped = with a reason
 HISTORY_MESSAGES = {
-    "dropped": "dropped this shift earlier",
     "no_show": "was marked a no-show on this shift",
     "transferred": "handed this shift off earlier",
     "completed": "already completed this shift",
@@ -61,6 +61,7 @@ async def _book_locked(
     source: str,
     approved_by: Optional[UUID],
     who: str,
+    rebook_reason: Optional[str] = None,
 ) -> ShiftRequest:
     """
     Books `worker` on the (already locked) `shift`. Does NOT commit.
@@ -128,6 +129,21 @@ async def _book_locked(
             if st not in REASSIGNABLE_STATUSES and st not in PENDING_STATUSES:
                 raise HTTPException(status_code=400, detail=f"Already on this position (status: {st}).")
 
+    # Phase 29.4: booking back someone who dropped this event needs the manager's reason
+    # (approving their own "ask to come back" request is fine: they already gave one)
+    prior_drop = await prior_drop_in_event(db, worker.id, shift)
+    asked_back = target is not None and (target.status or "").lower() in PENDING_STATUSES and target.previous_drop_at is not None
+    reason = (rebook_reason or "").strip()[:500]
+    if prior_drop is not None and not asked_back:
+        if you:
+            raise HTTPException(status_code=400, detail="You dropped a shift at this event earlier. Ask the manager to book you back.")
+        if len(reason) < REBOOK_REASON_MIN:
+            when = as_utc(prior_drop).strftime("%b %-d")
+            raise HTTPException(
+                status_code=400,
+                detail=f"{who} dropped this event on {when}. Add a short reason to book them back.",
+            )
+
     # Overlapping booking elsewhere
     overlap = await db.scalar(
         select(Shift.title)
@@ -163,9 +179,13 @@ async def _book_locked(
     target.check_in_verified = False
     target.check_out_time = None
     target.check_out_verified = False
-    target.dropped_at = None
+    # Phase 29.4: dropped_at is kept on purpose (history + reliability if this booking doesn't happen)
     target.status_reason = None
     target.pay_rate = None
+    if prior_drop is not None:
+        target.previous_drop_at = prior_drop
+        if not asked_back:
+            target.rebook_reason = reason
     await db.flush()
 
     # Offers: this person's pending offer for this position is settled; if now full, the rest are 'filled'
@@ -183,15 +203,19 @@ async def _book_locked(
     return target
 
 
-async def assign_worker(db: AsyncSession, manager: User, shift_id: UUID, worker_id: UUID) -> Tuple[UUID, str]:
-    """Manager books a specific person. Commits. Returns (request_id, message)."""
+async def assign_worker(
+    db: AsyncSession, manager: User, shift_id: UUID, worker_id: UUID, reason: Optional[str] = None,
+) -> Tuple[UUID, str]:
+    """Manager books a specific person. Commits. Returns (request_id, message).
+    Phase 29.4: `reason` is required when the person dropped this event earlier."""
     try:
         shift = await _load_shift_locked(db, shift_id)
         worker = await db.scalar(select(User).where(User.id == worker_id))
         if worker is None:
             raise HTTPException(status_code=404, detail="Person not found.")
         name = full_name(worker)
-        req = await _book_locked(db, shift, worker, source="manager_assign", approved_by=manager.id, who=name)
+        req = await _book_locked(db, shift, worker, source="manager_assign", approved_by=manager.id, who=name,
+                                 rebook_reason=reason)
         req_id = req.id
         role = shift.role_type
         await db.commit()
@@ -247,6 +271,9 @@ async def create_offers(
                 continue
             if c.offered:
                 skipped.append(OfferSkip(worker_id=wid, name=name, reason="Already has an offer for this position."))
+                continue
+            if c.dropped_at is not None and not c.requested_this:                     # Phase 29.4
+                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Dropped this event earlier. Use Assign with a reason."))
                 continue
             if not c.available and not c.requested_this:
                 skipped.append(OfferSkip(worker_id=wid, name=name, reason=c.reason or "Not available."))
@@ -426,6 +453,19 @@ async def list_candidates(
     for wid, sid, st, role in (await db.execute(ev_q)).all():
         in_event[wid].append((sid, (st or "").lower(), role))
 
+    # Phase 29.4: who dropped this event (Assign needs a reason; offers skip them)
+    drop_q = (
+        select(ShiftRequest.worker_id, ShiftRequest.dropped_at, ShiftRequest.status, ShiftRequest.status_reason)
+        .join(Shift, Shift.id == ShiftRequest.shift_id)
+        .where(ShiftRequest.worker_id.in_(ids), ShiftRequest.dropped_at.isnot(None),
+               func.lower(ShiftRequest.status).notin_(ACTIVE_STATUSES))
+    )
+    drop_q = drop_q.where(Shift.event_id == shift.event_id) if shift.event_id else drop_q.where(Shift.id == shift.id)
+    dropped = {}
+    for wid, dat, st, why in (await db.execute(drop_q)).all():
+        if wid not in dropped or dat > dropped[wid][0]:
+            dropped[wid] = (dat, why if (st or "").lower() == "dropped" else None)
+
     history = {wid: (st or "").lower() for wid, st in (await db.execute(
         select(ShiftRequest.worker_id, ShiftRequest.status).where(
             ShiftRequest.shift_id == shift.id, ShiftRequest.worker_id.in_(ids)
@@ -502,6 +542,8 @@ async def list_candidates(
             requested_this=requested_this,
             offered=wid in offered,
             venue_shifts=int(worked.get(wid, 0)),
+            dropped_at=dropped[wid][0] if wid in dropped else None,
+            drop_reason=dropped[wid][1] if wid in dropped else None,
         ))
     out.sort(key=lambda c: (
         not c.requested_this, not c.available, not c.position_match, not c.on_team,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight } from 'lucide-react';
+import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight, RotateCcw } from 'lucide-react';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
@@ -60,6 +60,12 @@ export function ApprovalQueueCard({ requests, reliabilityMap = {}, timeZone, act
                     </div>
                   </button>
                 </div>
+                {req.previous_drop_at && (
+                  <div className="text-[11px] text-rose-100 bg-rose-500/10 border border-rose-500/40 rounded-lg px-2 py-1 flex gap-1">
+                    <RotateCcw className="w-3 h-3 text-rose-300 flex-shrink-0 mt-0.5" />
+                    <span>Dropped this event on {fmtDate(req.previous_drop_at, timeZone)} and is asking back. Needs your OK.</span>
+                  </div>
+                )}
                 {req.notes && (
                   <div className="text-[11px] text-amber-100 bg-amber-500/5 border border-amber-500/30 rounded-lg px-2 py-1 flex gap-1">
                     <MessageSquareQuote className="w-3 h-3 text-amber-300 flex-shrink-0 mt-0.5" />

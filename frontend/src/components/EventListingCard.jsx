@@ -133,7 +133,11 @@ export default function EventListingCard({ listing, onOpen }) {
                   <ShieldCheck className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Needs approval" />
                 )}
                 <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
-                {p.my_status && <span className="text-[10px] text-amber-300">• you</span>}
+                {p.my_status && (
+                  <span className={`text-[10px] whitespace-nowrap ${p.my_status === 'dropped' ? 'text-rose-300' : 'text-amber-300'}`}>
+                    • {p.my_status === 'dropped' ? 'you dropped' : 'you'}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
                 <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-slate-200 font-semibold" hiddenText="—" />
@@ -167,7 +171,7 @@ export default function EventListingCard({ listing, onOpen }) {
           {listing.any_instant && <span className="text-emerald-400 font-semibold"> · Instant book</span>}
         </span>
         <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
-          {mine ? 'View details' : 'View & request'}
+          {mine ? 'View details' : listing.dropped_here ? 'Ask to come back' : 'View & request'}
           <ChevronRight className="w-4 h-4" />
         </span>
       </div>

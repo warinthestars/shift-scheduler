@@ -225,6 +225,10 @@ async def reject_shift_transfer(
         )
         is_manager = bool(mgr)
 
+    # Phase 29.4: only a hand-off that's still waiting can be declined / withdrawn / denied
+    if (transfer.status or "").lower() not in ("pending_worker_acceptance", "pending_manager_approval"):
+        raise HTTPException(status_code=400, detail="This hand-off is already settled.")
+
     if current_user.id == transfer.to_worker_id:
         transfer.status = "declined"
     elif current_user.id == transfer.from_worker_id:

@@ -14,7 +14,8 @@ import {
 } from '../utils/listingFormat';
 
 // Statuses on a position that the server will refuse to re-open.
-const LOCKED_POSITION_STATUSES = ['rejected', 'removed', 'no_show', 'dropped', 'transferred', 'cancelled'];
+const LOCKED_POSITION_STATUSES = ['rejected', 'removed', 'no_show', 'transferred', 'cancelled'];   // Phase 29.4: 'dropped' can ask back
+const ASK_BACK_MIN = 5;
 
 function pickDefault(listing, prev) {
   if (!listing) return null;
@@ -147,6 +148,9 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
   const selected = listing.positions.find((p) => p.shift_id === selectedId) || null;
   const selectedIsMine = selected && mine && selected.shift_id === mine.shift_id;
   const bookedPosition = isBooked ? listing.positions.find((p) => p.shift_id === mine.shift_id) : null;
+  // Phase 29.4: they dropped a position in this event -> asking back needs a reason and the manager's OK
+  const askingBack = !!listing.dropped_here && !isBooked;
+  const noteOk = !askingBack || note.trim().length >= ASK_BACK_MIN;
 
   const addToCalendar = () =>
     downloadIcs({
@@ -206,6 +210,8 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
     } else if (!selectedIsMine) {
       const label = isWaiting
         ? `Switch to ${selected.role_type}`
+        : askingBack
+        ? 'Ask to come back'
         : selected.booking === 'instant'
         ? 'Book instantly'
         : 'Send request';
@@ -213,7 +219,8 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
         <button
           type="button"
           onClick={() => sendRequest(isWaiting)}
-          disabled={submitting || !listing.can_request || selected.status !== 'OPEN'}
+          disabled={submitting || !listing.can_request || selected.status !== 'OPEN' || !noteOk}
+          title={noteOk ? undefined : 'Tell the manager why you can make it now'}
           className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
         >
           {selected.booking === 'instant' && <Zap className="w-4 h-4" />}
@@ -260,6 +267,16 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
         >
           {result.type === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />}
           <span>{result.message}</span>
+        </div>
+      )}
+
+      {askingBack && !listing.cancelled && !listing.started && (
+        <div className="mb-4 p-3 rounded-xl border border-slate-600 bg-slate-800/60 text-slate-200 text-xs flex items-start gap-2">
+          <Info className="w-4 h-4 flex-shrink-0 text-slate-300" />
+          <span>
+            You dropped a shift at this event. You can ask to come back: tell the manager why you can make it now.
+            It always needs their approval, and until they say yes the drop still counts on your reliability.
+          </span>
         </div>
       )}
 
@@ -409,7 +426,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                       {p.role_notes && <p className="text-[11px] text-slate-400 mt-1.5 whitespace-pre-line">{p.role_notes}</p>}
                       {ps && (
                         <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
-                          You: {STATUS_LABELS[ps] || ps}
+                          {ps === 'dropped' ? 'You dropped this' : `You: ${STATUS_LABELS[ps] || ps}`}
                           {p.my_status_reason ? ` — ${p.my_status_reason}` : ''}
                         </p>
                       )}
@@ -439,12 +456,14 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
 
           {showNoteBox && (
             <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">Note for the manager (optional)</label>
+              <label className={`block text-[11px] font-semibold mb-1 ${askingBack ? 'text-amber-200' : 'text-slate-400'}`}>
+                {askingBack ? 'Why you can make it now (required)' : 'Note for the manager (optional)'}
+              </label>
               <textarea
                 value={note}
                 onChange={(e) => setNote(e.target.value.slice(0, 500))}
                 rows={2}
-                placeholder="e.g. 3 years behind the bar, can stay late"
+                placeholder={askingBack ? 'e.g. My appointment moved, I can do the full shift' : 'e.g. 3 years behind the bar, can stay late'}
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
               />
               <div className="text-[10px] text-slate-500 text-right">{note.length}/500</div>

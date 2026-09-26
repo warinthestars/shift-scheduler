@@ -11,6 +11,7 @@ from src.models import (
     User, RequestStatus, TimeEntry, ShiftBoardMessage, ShiftEvent
 )
 from src.schemas import (
+    DropShiftBody,                                            # Phase 29.4
     ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
     CheckInRequest, CheckOutRequest, TimeEntryResponse,
     ShiftBoardMessageCreate, ShiftBoardMessageResponse,
@@ -247,7 +248,7 @@ async def update_shift_request_status(
         shift_req.status = "approved"
         shift_req.approval_source = "manager_manual"
         shift_req.approved_by_user_id = current_user.id
-        shift_req.approved_at = datetime.utcnow()
+        shift_req.approved_at = datetime.now(timezone.utc)      # Phase 29.4: was a naive utcnow()
         # Phase 26.1: booked on this position -> close their other waiting requests in the event
         await withdraw_other_pending_in_event(
             db, shift_req.worker_id, shift.event_id, shift.id,
@@ -383,6 +384,7 @@ async def check_out_shift(
 @router.post("/{shift_id}/drop")
 async def drop_shift(
     shift_id: UUID,
+    body: Optional[DropShiftBody] = None,                     # Phase 29.4: optional reason for the manager
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -431,6 +433,7 @@ async def drop_shift(
         # Step 1: Update status of worker's ShiftRequest record to "dropped"
         shift_req.status = "dropped"
         shift_req.dropped_at = now_utc
+        shift_req.status_reason = ((body.reason or "").strip()[:500] or None) if body else None   # Phase 29.4
 
         # Step 2: Decrement spots_filled
         shift.spots_filled = max(0, (shift.spots_filled or 1) - 1)
@@ -448,7 +451,8 @@ async def drop_shift(
 
     # Phase 29.1: managers hear about drops right away (after commit; never raises)
     await notify_events.shift_dropped(shift_req.id)
-    await activity.for_request("shift_dropped", shift_req.id, current_user.id)
+    await activity.for_request("shift_dropped", shift_req.id, current_user.id,
+                               f"“{shift_req.status_reason}”" if shift_req.status_reason else "")   # Phase 29.4: with their reason
 
     return {
         "detail": "Shift successfully dropped.",

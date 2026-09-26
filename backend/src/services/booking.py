@@ -9,6 +9,10 @@ Rules
   transaction, so a double tap or two workers at once can't overbook or double-request.
 * A position can be requested again only after the worker WITHDREW it. Drops, rejections,
   removals, no-shows and hand-offs stay on record (they feed reliability).
+* Phase 29.4: a worker who DROPPED a position in this event can ask to come back (same or another
+  position). They must say why, it always waits for a manager, and the request carries
+  previous_drop_at + rebook_reason. dropped_at is kept on the row so the drop still counts for
+  reliability unless they end up working the shift.
 """
 import logging
 from datetime import datetime, timezone
@@ -32,16 +36,29 @@ PENDING_STATUSES = ("pending", "pending_manager_approval")
 BOOKED_STATUSES = ("approved", "confirmed", "checked_in")
 ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
 ACTIVE_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES
-REREQUESTABLE_STATUSES = ("withdrawn",)
+REREQUESTABLE_STATUSES = ("withdrawn", "dropped")      # Phase 29.4: dropped = ask to come back
 BLOCKED_MESSAGES = {
     "rejected": "The venue already passed on your request for this position. You can request a different position.",
     "removed": "The venue removed you from this shift.",
     "no_show": "You were marked as a no-show for this shift.",
     "cancelled": "This position was cancelled.",
-    "dropped": "You dropped this shift earlier, so it can't be picked back up here. Message the manager if they still need you.",
     "transferred": "You handed this shift off earlier.",
 }
 NOTE_MAX = 500
+
+
+REBOOK_REASON_MIN = 5
+
+
+async def prior_drop_in_event(db: AsyncSession, worker_id, shift: Shift) -> Optional[datetime]:
+    """Phase 29.4: the latest time this worker dropped a position in this event (or this shift), if ever."""
+    q = (
+        select(func.max(ShiftRequest.dropped_at))
+        .join(Shift, Shift.id == ShiftRequest.shift_id)
+        .where(ShiftRequest.worker_id == worker_id, ShiftRequest.dropped_at.isnot(None))
+    )
+    q = q.where(Shift.event_id == shift.event_id) if shift.event_id else q.where(Shift.id == shift.id)
+    return await db.scalar(q)
 
 
 def as_utc(dt: datetime) -> datetime:
@@ -137,6 +154,16 @@ async def request_position(
                     detail=f"You're already booked as {role} for this event. Drop or hand off that shift before picking a different position.",
                 )
 
+        # --- Phase 29.4: coming back after a drop needs a reason and a manager ---------------
+        prior_drop = await prior_drop_in_event(db, worker.id, shift)
+        clean_note = _clean_note(note)
+        if prior_drop is not None and (not clean_note or len(clean_note) < REBOOK_REASON_MIN):
+            raise HTTPException(
+                status_code=400,
+                detail="You dropped a shift at this event earlier. Tell the manager why you can make it now. "
+                       "They have to approve it.",
+            )
+
         # --- Earlier history on this exact position ---------------------------------------
         existing = await db.scalar(
             select(ShiftRequest).where(
@@ -159,6 +186,8 @@ async def request_position(
 
         decision, source = await evaluate_shift_request(db=db, worker=worker, shift=shift, venue=shift.venue)
         status_val = (decision.value if hasattr(decision, "value") else str(decision)).lower()
+        if prior_drop is not None:                     # Phase 29.4: never instant after a drop
+            status_val, source = "pending", None
         now = datetime.now(timezone.utc)
 
         if replaced is not None:
@@ -180,10 +209,12 @@ async def request_position(
             req.check_in_verified = False
             req.check_out_time = None
             req.check_out_verified = False
-            req.dropped_at = None
+            # Phase 29.4: dropped_at is kept (the drop still counts unless they work the shift)
             req.status_reason = None
             req.pay_rate = None
             req.notes = _clean_note(note)
+            req.previous_drop_at = prior_drop
+            req.rebook_reason = clean_note if prior_drop is not None else None
             req.created_at = now
         else:
             req = ShiftRequest(
@@ -193,6 +224,8 @@ async def request_position(
                 approval_source=source,
                 approved_at=now if status_val == "approved" else None,
                 notes=_clean_note(note),
+                previous_drop_at=prior_drop,                                    # Phase 29.4
+                rebook_reason=clean_note if prior_drop is not None else None,
             )
             db.add(req)
 
@@ -210,7 +243,8 @@ async def request_position(
     # Phase 28: tell the venue's managers a request is waiting (runs after the commit; never raises)
     if status_val != "approved":
         await notify_events.request_pending(req_id)
-    await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id)   # Phase 29.1
+    await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id,
+                               f"asking back after dropping · “{clean_note}”" if prior_drop is not None else "")   # Phase 29.1 / 29.4
     return req_id
 
 

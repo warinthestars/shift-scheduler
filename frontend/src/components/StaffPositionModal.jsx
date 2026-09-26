@@ -44,7 +44,7 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
     };
   }, [position.shift_id, debouncedQ]);
 
-  const selectable = (c) => (c.available || c.requested_this) && !c.offered;
+  const selectable = (c) => (c.available || c.requested_this) && !c.offered && !(c.dropped_at && !c.requested_this);   // Phase 29.4
   const toggle = (c) => {
     if (!selectable(c)) return;
     setSelected((prev) => {
@@ -54,11 +54,20 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
     });
   };
 
-  const assign = async (c) => {
+  const [reasonFor, setReasonFor] = useState(null);   // Phase 29.4: candidate who dropped this event
+  const [reason, setReason] = useState('');
+
+  const assign = async (c, why = null) => {
+    // Phase 29.4: someone who dropped this event needs a reason (unless they asked back themselves)
+    if (c.dropped_at && !c.requested_this && why === null) {
+      setReasonFor(c.worker_id);
+      setReason('');
+      return;
+    }
     setBusy(`assign-${c.worker_id}`);
     setError('');
     try {
-      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id });
+      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id, reason: why || undefined });
       onDone(res.data.message);
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not assign.');
@@ -212,6 +221,23 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
                     {c.reason && (
                       <div className="text-[11px] text-amber-300 mt-0.5 inline-flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" /> {c.reason}
+                      </div>
+                    )}
+                    {c.dropped_at && (
+                      <div className="text-[11px] text-rose-300 mt-0.5">
+                        Dropped this event on {new Date(c.dropped_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        {c.drop_reason ? ` · “${c.drop_reason}”` : ''}. {c.requested_this ? 'They asked to come back.' : 'Assign needs a reason; offers skip them.'}
+                      </div>
+                    )}
+                    {reasonFor === c.worker_id && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 w-full">
+                        <input autoFocus value={reason} onChange={(e) => setReason(e.target.value.slice(0, 500))}
+                          onKeyDown={(e) => e.key === 'Enter' && reason.trim().length >= 5 && assign(c, reason.trim())}
+                          placeholder="Why are you booking them back?"
+                          className="flex-1 min-w-[12rem] px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500" />
+                        <button type="button" onClick={() => assign(c, reason.trim())} disabled={reason.trim().length < 5 || busy !== null}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40">Book back</button>
+                        <button type="button" onClick={() => setReasonFor(null)} className="text-xs text-slate-400 hover:text-white">Cancel</button>
                       </div>
                     )}
                   </div>

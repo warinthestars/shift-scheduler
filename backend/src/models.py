@@ -375,6 +375,8 @@ class ShiftRequest(Base):
     notes = Column(Text, nullable=True)
     dropped_at = Column(DateTime(timezone=True), nullable=True)
     status_reason = Column(Text, nullable=True)
+    previous_drop_at = Column(DateTime(timezone=True), nullable=True)   # Phase 29.4: rebooked / asking back after a drop
+    rebook_reason = Column(Text, nullable=True)                         # Phase 29.4
     pay_rate = Column(Numeric(10, 2), nullable=True)
     info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)

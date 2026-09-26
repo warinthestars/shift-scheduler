@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import Shift, ShiftRequest, TimeEntry
@@ -49,7 +49,11 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
         .join(Shift, ShiftRequest.shift_id == Shift.id)
         .where(
             ShiftRequest.worker_id.in_(worker_ids),
-            func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped", "no_show")),
+            or_(
+                func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped", "no_show")),
+                # Phase 29.4: dropped, then asked back / was booked back but it didn't happen -> still a drop
+                and_(ShiftRequest.dropped_at.isnot(None), func.lower(ShiftRequest.status) != "transferred"),
+            ),
         )
     )).all()
 
@@ -72,7 +76,7 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
             st["no_show"] += 1
             continue
 
-        if status_l == "dropped":
+        if status_l == "dropped" or (dropped_at is not None and status_l not in COMMITTED_STATUSES + ("no_show",)):
             d = _aware(dropped_at)
             if d is not None and (start - d) < LATE_DROP_WINDOW:
                 st["late_drop"] += 1
