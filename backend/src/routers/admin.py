@@ -11,6 +11,7 @@ from src.models import Venue, Shift, User, ShiftRequest, UserRole, VenueManager,
 from src.schemas import VenueResponse, UserResponse, UserCreateAdmin, UserUpdateAdmin, AdminPasswordReset, AdminPasswordResetResponse
 from src.auth import require_admin, get_password_hash, normalize_role
 from src.serializers import auth_source_for
+from src.services.always_admin import is_always_admin_email
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 VALID_ROLES = ("worker", "venue_manager", "platform_admin")
@@ -236,6 +237,11 @@ async def update_admin_user(
             raise HTTPException(status_code=400, detail="You cannot change your own role.")
         if is_self and user_update.is_active is False:
             raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
+        if is_always_admin_email(user.email) and (new_role != "platform_admin" or user_update.is_active is False):
+            raise HTTPException(
+                status_code=400,
+                detail="This account is listed in ALWAYS_ADMIN_EMAILS and must stay an active Platform Admin. Remove it from the secrets file first."
+            )
 
         losing_admin = old_role == "platform_admin" and (role_changed or user_update.is_active is False)
         if losing_admin:
@@ -376,6 +382,11 @@ async def delete_admin_user(
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
+    if is_always_admin_email(user.email):
+        raise HTTPException(
+            status_code=400,
+            detail="This account is listed in ALWAYS_ADMIN_EMAILS and cannot be deleted. Remove it from the secrets file first."
+        )
 
     if normalize_role(user.role) == "platform_admin":
         admin_count = await db.scalar(

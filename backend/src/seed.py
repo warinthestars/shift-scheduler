@@ -11,6 +11,7 @@ from src.models import (
 )
 from src.services.venue_positions import ensure_default_positions
 from src.services.shift_events import backfill_missing_events
+from src.services.always_admin import sync_always_admins
 
 logger = logging.getLogger("shiftboard.seed")
 
@@ -82,6 +83,16 @@ async def seed_initial_data(db: AsyncSession):
         await db.rollback()
         print(f"Error seeding super admin: {e}")
         logger.error(f"Error seeding super admin: {e}", exc_info=True)
+
+    # --------------------------------------------------------------------------
+    # 1b. Phase 28.1: ALWAYS_ADMIN_EMAILS sync (upgrade existing listed users)
+    # --------------------------------------------------------------------------
+    try:
+        promoted = await sync_always_admins(db)
+        if promoted:
+            logger.info(f"ALWAYS_ADMIN_EMAILS: upgraded {promoted} existing user(s) to platform_admin")
+    except Exception as e:
+        logger.error(f"Error syncing ALWAYS_ADMIN_EMAILS: {e}", exc_info=True)
 
     # --------------------------------------------------------------------------
     # 2. Demo Venue Seeding ("The Hippodrome")

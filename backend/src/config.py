@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     FIREBASE_AUTH_PROVIDERS: str = os.getenv("FIREBASE_AUTH_PROVIDERS", "")
     ALLOW_SELF_REGISTRATION: bool = os.getenv("ALLOW_SELF_REGISTRATION", "true").lower() in ("true", "1", "yes")
     SHOW_DEMO_LOGINS: bool = os.getenv("SHOW_DEMO_LOGINS", "false").lower() in ("true", "1", "yes")
+    # Phase 28.1: emails that are always platform admins (comma-separated)
+    ALWAYS_ADMIN_EMAILS: str = os.getenv("ALWAYS_ADMIN_EMAILS", "")
 
     # CORS
     CORS_ORIGINS: str = os.getenv(
