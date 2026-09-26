@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models import Shift, ShiftEvent, ShiftRequest, Venue, TimeEntry, User
 from src.schemas import WorkerCalendarItem, WorkerCalendarResponse, ListingVenue
 from src.services.booking import as_utc, ASSIGNED_STATUSES, PENDING_STATUSES
+from src.services.locations import load_locations, to_listing_location, geofence_on
+from src.services.clock import auto_close_open_entries, clock_in_opens_at
 
 CALENDAR_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES + ("cancelled", "removed", "no_show")
 DEFAULT_PAST = timedelta(days=60)
@@ -41,10 +43,12 @@ def info_change_text(event: Optional[ShiftEvent], shift: Shift) -> Optional[str]
     return " · ".join(parts) or None
 
 
-def has_any_notes(venue: Optional[Venue], event: Optional[ShiftEvent], shift: Shift) -> bool:
+def has_any_notes(venue: Optional[Venue], event: Optional[ShiftEvent], shift: Shift, location=None) -> bool:
     values = [shift.description, shift.staff_notes]
     if event is not None:
-        values += [event.notes, event.staff_notes]
+        values += [event.notes, event.staff_notes, event.location_staff_notes]   # Phase 27
+    if location is not None:
+        values.append(location.notes)                                             # Phase 27
     if venue is not None:
         values += [venue.default_shift_notes, venue.dress_code, venue.arrival_instructions]
     return any((v or "").strip() for v in values)
@@ -74,6 +78,7 @@ async def build_worker_calendar(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
 ) -> WorkerCalendarResponse:
+    await auto_close_open_entries(db, worker_id=user.id)   # Phase 27
     now = datetime.now(timezone.utc)
     range_start = as_utc(start) if start else now - DEFAULT_PAST
     range_end = as_utc(end) if end else now + DEFAULT_FUTURE
@@ -108,13 +113,14 @@ async def build_worker_calendar(
         select(Venue).where(Venue.id.in_(venue_ids))
     )).scalars().all()}
 
-    open_entries = set((await db.execute(
-        select(TimeEntry.shift_id).where(
+    open_entries = dict((await db.execute(
+        select(TimeEntry.shift_id, TimeEntry.id).where(
             TimeEntry.worker_id == user.id,
             TimeEntry.shift_id.in_([s.id for s in shifts]),
             TimeEntry.clock_out_time.is_(None),
         )
-    )).scalars().all())
+    )).all())
+    locations = await load_locations(db, [e.location_id for e in events.values()])   # Phase 27
 
     items: List[WorkerCalendarItem] = []
     for req, s in rows:
@@ -129,12 +135,14 @@ async def build_worker_calendar(
 
         show_pay = booked or not s.hide_rate
         ev_staff = event.staff_notes if event is not None else None
+        location = locations.get(event.location_id) if event is not None and event.location_id else None
+        loc_staff = event.location_staff_notes if event is not None else None
         updated = latest_info_update(event, s)
         seen = req.info_seen_at
         booked_at = req.approved_at or req.created_at
         flag = needs_ack(
             booked=booked,
-            has_notes=has_any_notes(venue, event, s),
+            has_notes=has_any_notes(venue, event, s, location),
             updated_at=updated,
             seen_at=seen,
             booked_at=booked_at,
@@ -168,9 +176,14 @@ async def build_worker_calendar(
                 lat=float(venue.lat) if venue.lat is not None else None,
                 lng=float(venue.lng) if venue.lng is not None else None,
                 dress_code=venue.dress_code,
-                arrival_instructions=venue.arrival_instructions,
+                arrival_instructions=venue.arrival_instructions if booked else None,   # Phase 27: booked only
                 default_shift_notes=venue.default_shift_notes,
             ),
+            location=to_listing_location(location),
+            location_staff_notes=loc_staff if booked else None,
+            geofence_on=geofence_on(event, venue),
+            clock_in_opens_at=clock_in_opens_at(s, venue),
+            time_entry_id=open_entries.get(s.id),
             hourly_rate=float(s.hourly_rate) if (show_pay and s.hourly_rate is not None) else None,
             hourly_rate_max=float(s.hourly_rate_max) if (show_pay and s.hourly_rate_max is not None) else None,
             pay_rate=float(req.pay_rate) if (booked and req.pay_rate is not None) else None,
@@ -180,12 +193,14 @@ async def build_worker_calendar(
             role_notes=s.description,
             event_staff_notes=ev_staff if booked else None,
             position_staff_notes=s.staff_notes if booked else None,
-            staff_notes_locked=(not booked) and bool((ev_staff or "").strip() or (s.staff_notes or "").strip()),
+            staff_notes_locked=(not booked) and bool(
+                (ev_staff or "").strip() or (s.staff_notes or "").strip() or (loc_staff or "").strip()
+            ),
             info_change=change,
             info_updated_at=updated,
             info_seen_at=seen,
             needs_ack=flag,
-            clocked_in=(status == "checked_in") or (s.id in open_entries),
+            clocked_in=s.id in open_entries,
             cancelled=(event is not None and event.cancelled_at is not None) or (s.status or "").upper() == "CANCELLED",
             cancel_reason=(event.cancel_reason if event is not None and event.cancelled_at is not None else s.cancel_reason),
         ))

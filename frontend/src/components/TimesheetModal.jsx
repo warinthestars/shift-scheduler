@@ -3,6 +3,34 @@ import { ClipboardList, Plus, Pencil, Trash2, Check, X, Clock, DollarSign, Alert
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { fmtDate, fmtTimeRange, fmtTime, fmtShortDate, utcToZonedLocalInput, zonedLocalToUtcIso } from '../utils/venueTime';
+import { GEO_LABELS, metersText } from '../utils/listingFormat';
+
+// Phase 27: small flags on each time entry
+const GEO_CHIP = {
+  on_site: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+  outside_geofence: 'bg-amber-500/15 text-amber-200 border-amber-500/40',
+  manager: 'bg-indigo-500/10 text-indigo-200 border-indigo-500/30',
+  auto: 'bg-rose-500/10 text-rose-200 border-rose-500/40',
+};
+
+function EntryFlags({ e }) {
+  const chips = [];
+  const geo = (status, distance, prefix) => {
+    if (!status || status === 'not_checked') return;
+    const text = `${prefix}: ${GEO_LABELS[status] || status}${status === 'outside_geofence' && distance != null ? ` · ${metersText(distance)}` : ''}`;
+    chips.push(<span key={prefix} className={`px-1.5 py-0.5 rounded border text-[10px] ${GEO_CHIP[status] || 'bg-slate-800 text-slate-300 border-slate-700'}`}>{text}</span>);
+  };
+  geo(e.clock_in_geo_status, e.clock_in_distance_m, 'In');
+  if (!e.auto_closed) geo(e.clock_out_geo_status, e.clock_out_distance_m, 'Out');
+  if (e.auto_closed) {
+    chips.push(<span key="auto" className={`px-1.5 py-0.5 rounded border text-[10px] ${GEO_CHIP.auto}`}>Auto-closed — check hours</span>);
+  }
+  if (e.late_minutes > 0) {
+    chips.push(<span key="late" className="px-1.5 py-0.5 rounded border text-[10px] bg-amber-500/10 text-amber-300 border-amber-500/30">Late {e.late_minutes} min</span>);
+  }
+  if (!chips.length) return null;
+  return <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">{chips}</span>;
+}
 
 const STATUS = {
   approved: { label: 'Confirmed', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
@@ -176,6 +204,7 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
                           {fmtShortDate(e.clock_in_time, tz)} · {fmtTime(e.clock_in_time, tz)} → {e.clock_out_time ? fmtTime(e.clock_out_time, tz) : <span className="text-amber-300">still clocked in</span>}
                           <span className="text-slate-500"> · {e.hours.toFixed(2)} h</span>
                           {e.edited && <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 text-[10px] border border-amber-500/30">edited</span>}
+                          <EntryFlags e={e} />
                         </span>
                         <span className="flex items-center gap-1">
                           <button type="button" title="Edit"

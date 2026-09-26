@@ -16,6 +16,8 @@ from src.services.shift_events import (
     create_event_with_positions, update_event, build_event_detail, cancel_shifts, duplicate_event,
 )
 from src.services.timesheets import build_timesheet
+from src.services import notify_events
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/events", tags=["Events"])
 
@@ -46,7 +48,9 @@ async def create_event(
     if not await can_manage_venue(db, current_user, venue.id):
         raise HTTPException(status_code=403, detail="You don't manage this venue.")
     event = await create_event_with_positions(db, venue, current_user, data)
-    return await build_event_detail(db, event)
+    detail = await build_event_detail(db, event)
+    await notify_events.new_event_posted(event.id)          # Phase 28: tell the venue's team
+    return detail
 
 
 @router.get("/{event_id}", response_model=EventDetail)
@@ -66,10 +70,13 @@ async def edit_event(
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
+    since = datetime.now(timezone.utc)                      # Phase 28
     event = await _load_managed_event(db, event_id, current_user)
     await update_event(db, event, data)
     await db.refresh(event)
-    return await build_event_detail(db, event)
+    detail = await build_event_detail(db, event)
+    await notify_events.event_updated(event_id, since)      # Phase 28: tell booked people what changed
+    return detail
 
 
 @router.post("/{event_id}/cancel")
@@ -80,8 +87,10 @@ async def cancel_event(
     db: AsyncSession = Depends(get_db)
 ):
     """Phase 26: Cancel the whole event. Everyone booked or waiting is marked cancelled with the reason."""
+    since = datetime.now(timezone.utc)                      # Phase 28
     event = await _load_managed_event(db, event_id, current_user)
     affected = await cancel_shifts(db, event, None, body.reason)
+    await notify_events.shifts_cancelled(event_id, since)   # Phase 28
     return {"detail": "Event cancelled.", "people_affected": affected}
 
 
@@ -94,8 +103,10 @@ async def cancel_position(
     db: AsyncSession = Depends(get_db)
 ):
     """Phase 26: Cancel one position. If it was the last open position, the event is cancelled too."""
+    since = datetime.now(timezone.utc)                      # Phase 28
     event = await _load_managed_event(db, event_id, current_user)
     affected = await cancel_shifts(db, event, [shift_id], body.reason)
+    await notify_events.shifts_cancelled(event_id, since)   # Phase 28
     return {"detail": "Position cancelled.", "people_affected": affected}
 
 
@@ -110,6 +121,8 @@ async def duplicate(
     event = await _load_managed_event(db, event_id, current_user)
     venue = await _venue_for(db, event.venue_id)
     created = await duplicate_event(db, event, venue, current_user, body.dates)
+    for ev in created:
+        await notify_events.new_event_posted(ev.id)         # Phase 28
     return DuplicateEventResult(created_event_ids=[e.id for e in created], count=len(created))
 
 

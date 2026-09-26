@@ -30,6 +30,8 @@ from src.services.venue_positions import ensure_default_positions, clean_venue_p
 from src.services.venue_public import build_directory, build_profile, build_public_events
 from src.services.shift_views import to_shift_responses
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
+from src.services.clock import auto_close_open_entries, late_minutes as clock_late_minutes
+from src.services.locations import load_locations
 
 router = APIRouter(prefix="/api/venues", tags=["Venues"])
 
@@ -531,8 +533,10 @@ async def export_venue_payroll_csv(
     """
     Phase 19: Hour Tracking & Payroll CSV Export.
     Calculates hours worked for workers at this venue.
+    Phase 27: adds work location, clock-in/out location check, late minutes and auto-closed flags.
     """
     await verify_venue_manager_access(venue_id, current_user, db)
+    await auto_close_open_entries(db, venue_id=venue_id)
 
     query = (
         select(TimeEntry, User, Shift, ShiftRequest)
@@ -555,11 +559,31 @@ async def export_venue_payroll_csv(
             .where(TimeEntryEdit.time_entry_id.in_(entry_ids), TimeEntryEdit.action.in_(("edit", "add")))
         )).scalars().all())
 
+    # Phase 27: where each event was held
+    ev_ids = {r[2].event_id for r in records if r[2].event_id}
+    ev_loc = {}
+    if ev_ids:
+        ev_loc = dict((await db.execute(
+            select(ShiftEvent.id, ShiftEvent.location_id).where(ShiftEvent.id.in_(ev_ids))
+        )).all())
+    locations = await load_locations(db, ev_loc.values())
+    geo_label = {
+        "on_site": "On site", "outside_geofence": "Outside geofence", "not_checked": "Not checked",
+        "manager": "Manager entry", "auto": "Auto-closed",
+    }
+
+    def geo_text(status_value, distance):
+        if not status_value:
+            return ""
+        label = geo_label.get(status_value, status_value)
+        return f"{label} ({distance} m)" if (status_value == "outside_geofence" and distance is not None) else label
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Worker Name", "Email", "Shift Title", "Role", "Date", "Clock In", "Clock Out", "Total Hours",
+        "Worker Name", "Email", "Shift Title", "Role", "Date", "Work Location", "Clock In", "Clock Out", "Total Hours",
         "Hourly Rate", "Gross Pay", "Tips Eligible", "Tip Pool", "Edited",
+        "Clock-In Location Check", "Clock-Out Location Check", "Late (min)", "Auto-Closed",
     ])
 
     for entry, worker, shift, req in records:
@@ -575,12 +599,19 @@ async def export_venue_payroll_csv(
             hours = (entry.clock_out_time - entry.clock_in_time).total_seconds() / 3600.0
         else:
             hours = 0.0
+        loc = locations.get(ev_loc.get(shift.event_id)) if shift.event_id else None
         writer.writerow([
-            worker_name, worker.email or "", shift.title or "", shift.role_type or "", shift_date, clock_in, clock_out,
+            worker_name, worker.email or "", shift.title or "", shift.role_type or "", shift_date,
+            loc.name if loc is not None else "Venue",
+            clock_in, clock_out,
             f"{hours:.2f}", f"{rate:.2f}", f"{hours * rate:.2f}",
             "Yes" if shift.tips_eligible else "No",
             "Yes" if shift.tip_pool else "No",
             "Yes" if entry.id in edited_ids else "No",
+            geo_text(entry.clock_in_geo_status, entry.clock_in_distance_m),
+            geo_text(entry.clock_out_geo_status, entry.clock_out_distance_m),
+            clock_late_minutes(entry.clock_in_time, shift.start_time) or "",
+            "Yes" if entry.auto_closed else "No",
         ])
 
     output.seek(0)
@@ -807,11 +838,13 @@ async def get_venue_events(
             event_notes[ev_obj.id] = ev_obj.notes
             event_cancel[ev_obj.id] = (ev_obj.cancelled_at is not None, ev_obj.cancel_reason)
     venue_obj = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    event_locations = await load_locations(db, [e.location_id for e in event_objs.values()])   # Phase 27
 
     # Phase 26.2: has each booked person read the latest info?
     for s in shifts:
         ev_obj = event_objs.get(s.event_id) if s.event_id else None
-        notes_exist = has_any_notes(venue_obj, ev_obj, s)
+        ev_location = event_locations.get(ev_obj.location_id) if ev_obj is not None and ev_obj.location_id else None
+        notes_exist = has_any_notes(venue_obj, ev_obj, s, ev_location)
         updated = latest_info_update(ev_obj, s)
         for person in assigned_by_shift[s.id]:
             seen_at, booked_at = ack_by_request.get(person.request_id, (None, None))
@@ -834,6 +867,11 @@ async def get_venue_events(
                 "end_time": s.end_time,
                 "description": event_notes.get(s.event_id) if s.event_id else None,
                 "staff_notes": event_objs[s.event_id].staff_notes if s.event_id in event_objs else None,
+                "location_name": (
+                    event_locations[event_objs[s.event_id].location_id].name
+                    if s.event_id in event_objs and event_objs[s.event_id].location_id in event_locations
+                    else None
+                ),
                 "cancelled": event_cancel.get(s.event_id, (False, None))[0] if s.event_id else False,
                 "cancel_reason": event_cancel.get(s.event_id, (False, None))[1] if s.event_id else None,
                 "positions": [],

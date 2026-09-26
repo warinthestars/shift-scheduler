@@ -172,3 +172,39 @@ export function calendarTone(item) {
   return { key: 'booked', chip: 'bg-emerald-500/20 text-emerald-100 border-emerald-500/60', dot: 'bg-emerald-400', label: 'Confirmed' };
 }
 
+
+// ---- Phase 27: where the work happens -----------------------------------------------------
+
+/**
+ * The place a worker should go: the event's saved location if it has one, otherwise the venue.
+ * Works for EventListing and WorkerCalendarItem (both have `venue` and optional `location`).
+ */
+export function whereOf(item) {
+  const loc = item?.location;
+  if (loc) {
+    return {
+      name: loc.name,
+      address: loc.address,
+      lat: loc.lat,
+      lng: loc.lng,
+      notes: loc.notes || null,
+      isOffsite: true,
+    };
+  }
+  const v = item?.venue || {};
+  return { name: v.name, address: v.address, lat: v.lat, lng: v.lng, notes: null, isOffsite: false };
+}
+
+/** "Distance / location" labels used on time sheets and chips. */
+export const GEO_LABELS = {
+  on_site: 'On site',
+  outside_geofence: 'Outside geofence',
+  not_checked: 'No location check',
+  manager: 'Manager entry',
+  auto: 'Auto-closed',
+};
+
+export function metersText(m) {
+  if (m === null || m === undefined) return '';
+  return m < 161 ? `${Math.round(m / 0.3048)} ft` : `${(m / 1609.344).toFixed(1)} mi`;
+}

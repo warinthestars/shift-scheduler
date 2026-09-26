@@ -119,6 +119,10 @@ class Venue(Base):
     default_shift_notes = Column(Text, nullable=True)
     approval_policy = Column(String(20), nullable=False, default="team_auto")
     show_rates_publicly = Column(Boolean, nullable=False, default=True)
+    geofence_enabled = Column(Boolean, nullable=False, default=False)          # Phase 27: opt-in
+    geofence_buffer_meters = Column(Integer, nullable=False, default=150)      # Phase 27: flagged, not blocked
+    clock_in_early_minutes = Column(Integer, nullable=False, default=30)       # Phase 27
+    auto_clock_out_hours = Column(Integer, nullable=False, default=2)          # Phase 27
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -152,6 +156,7 @@ class Venue(Base):
     shifts = relationship("Shift", back_populates="venue", cascade="all, delete-orphan")
     whitelists = relationship("VenueWhitelist", back_populates="venue", cascade="all, delete-orphan")
     positions = relationship("VenuePosition", back_populates="venue", cascade="all, delete-orphan")
+    locations = relationship("VenueLocation", back_populates="venue", cascade="all, delete-orphan")
 
 class VenueManager(Base):
     __tablename__ = "venue_managers"
@@ -206,6 +211,26 @@ class VenuePosition(Base):
 
     venue = relationship("Venue", back_populates="positions")
 
+class VenueLocation(Base):
+    """Phase 27: a saved place a venue works at (client site, off-site event, second room)."""
+    __tablename__ = "venue_locations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    address = Column(Text, nullable=False)
+    lat = Column(DOUBLE_PRECISION, nullable=True)
+    lng = Column(DOUBLE_PRECISION, nullable=True)
+    radius_meters = Column(Integer, nullable=True)
+    notes = Column(Text, nullable=True)
+    is_archived = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (UniqueConstraint("venue_id", "name", name="uq_venue_location_name"),)
+
+    venue = relationship("Venue", back_populates="locations")
+
 class ShiftEvent(Base):
     __tablename__ = "shift_events"
 
@@ -219,6 +244,9 @@ class ShiftEvent(Base):
     staff_notes = Column(Text, nullable=True)                              # Phase 26.2: booked staff only
     info_updated_at = Column(DateTime(timezone=True), nullable=True)       # Phase 26.2: last time/notes change
     info_change = Column(Text, nullable=True)                              # Phase 26.2: "Time changed: …"
+    location_id = Column(UUID(as_uuid=True), ForeignKey("venue_locations.id", ondelete="SET NULL"), nullable=True)  # Phase 27
+    geofence_mode = Column(String(20), nullable=False, default="venue_default")  # Phase 27: venue_default | on | off
+    location_staff_notes = Column(Text, nullable=True)                     # Phase 27: event-specific, booked staff only
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     cancel_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
@@ -354,6 +382,16 @@ class TimeEntry(Base):
     shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
     clock_in_time = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     clock_out_time = Column(DateTime(timezone=True), nullable=True)
+    # Phase 27: where the clock happened and what the geofence said
+    clock_in_lat = Column(DOUBLE_PRECISION, nullable=True)
+    clock_in_lng = Column(DOUBLE_PRECISION, nullable=True)
+    clock_in_distance_m = Column(Integer, nullable=True)
+    clock_in_geo_status = Column(String(20), nullable=False, default="not_checked")  # on_site | outside_geofence | not_checked | manager
+    clock_out_lat = Column(DOUBLE_PRECISION, nullable=True)
+    clock_out_lng = Column(DOUBLE_PRECISION, nullable=True)
+    clock_out_distance_m = Column(Integer, nullable=True)
+    clock_out_geo_status = Column(String(20), nullable=True)                         # same values + auto
+    auto_closed = Column(Boolean, nullable=False, default=False)
 
     worker = relationship("User", foreign_keys=[worker_id])
     shift = relationship("Shift", foreign_keys=[shift_id])
@@ -370,6 +408,55 @@ class TimeEntryEdit(Base):
     new_value = Column(Text, nullable=True)
     reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+class Notification(Base):
+    """Phase 28: one message for one user (shown in the bell; may also go out by email / SMS)."""
+    __tablename__ = "notifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(40), nullable=False)
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=True)
+    link = Column(String(300), nullable=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=True)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="CASCADE"), nullable=True)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="CASCADE"), nullable=True)
+    urgent = Column(Boolean, nullable=False, default=False)
+    dedupe_key = Column(String(200), nullable=True, unique=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+class NotificationDelivery(Base):
+    """Phase 28: outbox row for one channel (email / sms) of one notification."""
+    __tablename__ = "notification_deliveries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    notification_id = Column(UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    channel = Column(String(10), nullable=False)                     # email | sms
+    status = Column(String(12), nullable=False, default="pending")   # pending | sent | failed | skipped
+    digest = Column(Boolean, nullable=False, default=False)
+    send_after = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+class NotificationPreference(Base):
+    """Phase 28: what a user wants sent where. No row = defaults."""
+    __tablename__ = "notification_preferences"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    email_enabled = Column(Boolean, nullable=False, default=True)
+    sms_enabled = Column(Boolean, nullable=False, default=False)
+    reminders_enabled = Column(Boolean, nullable=False, default=True)
+    new_shift_alerts = Column(String(10), nullable=False, default="daily")   # off | instant | daily
+    manager_alerts_email = Column(Boolean, nullable=False, default=True)
+    quiet_start = Column(Integer, nullable=True)                             # hour 0-23
+    quiet_end = Column(Integer, nullable=True)
+    timezone = Column(String(64), nullable=False, default="America/New_York")
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 class ShiftTransfer(Base):
     __tablename__ = "shift_transfers"

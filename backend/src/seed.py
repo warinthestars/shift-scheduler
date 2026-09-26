@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.config import settings
@@ -12,6 +13,22 @@ from src.services.venue_positions import ensure_default_positions
 from src.services.shift_events import backfill_missing_events
 
 logger = logging.getLogger("shiftboard.seed")
+
+
+def _next_local(weekday: int, hour: int, tz_name: str, hours_long: int):
+    """
+    Phase 27: next <weekday> (Mon=0 … Sun=6) at <hour>:00 in the venue's timezone, at least 12h away,
+    so seed titles like "Friday Evening Barback" land on an actual Friday.
+    Returns (start_utc, end_utc).
+    """
+    tz = ZoneInfo(tz_name or "America/New_York")
+    now_local = datetime.now(timezone.utc).astimezone(tz)
+    days_ahead = (weekday - now_local.weekday()) % 7
+    start_local = (now_local + timedelta(days=days_ahead)).replace(hour=hour, minute=0, second=0, microsecond=0)
+    if start_local - now_local < timedelta(hours=12):
+        start_local += timedelta(days=7)
+    start_utc = start_local.astimezone(timezone.utc)
+    return start_utc, start_utc + timedelta(hours=hours_long)
 
 async def seed_initial_data(db: AsyncSession):
     """
@@ -261,8 +278,8 @@ async def seed_initial_data(db: AsyncSession):
                     created_by_user_id=manager_user.id if manager_user else None,
                     title="Saturday Night Bartending",
                     role_type="Bartender",
-                    start_time=now_utc + timedelta(days=2, hours=4),
-                    end_time=now_utc + timedelta(days=2, hours=10),
+                    start_time=_next_local(5, 18, demo_venue.timezone, 6)[0],   # Saturday 6 PM
+                    end_time=_next_local(5, 18, demo_venue.timezone, 6)[1],
                     hourly_rate=38.00,
                     capacity=3,
                     spots_filled=0,
@@ -288,8 +305,8 @@ async def seed_initial_data(db: AsyncSession):
                     created_by_user_id=manager_user.id if manager_user else None,
                     title="Sunday Brunch Serving",
                     role_type="Server",
-                    start_time=now_utc + timedelta(days=3, hours=2),
-                    end_time=now_utc + timedelta(days=3, hours=8),
+                    start_time=_next_local(6, 10, demo_venue.timezone, 6)[0],   # Sunday 10 AM
+                    end_time=_next_local(6, 10, demo_venue.timezone, 6)[1],
                     hourly_rate=32.00,
                     capacity=3,
                     spots_filled=0,
@@ -315,8 +332,8 @@ async def seed_initial_data(db: AsyncSession):
                     created_by_user_id=manager_user.id if manager_user else None,
                     title="Friday Evening Barback",
                     role_type="Barback",
-                    start_time=now_utc + timedelta(days=1, hours=5),
-                    end_time=now_utc + timedelta(days=1, hours=11),
+                    start_time=_next_local(4, 17, demo_venue.timezone, 6)[0],   # Friday 5 PM
+                    end_time=_next_local(4, 17, demo_venue.timezone, 6)[1],
                     hourly_rate=28.00,
                     capacity=2,
                     spots_filled=0,

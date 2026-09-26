@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import ShiftEvent, Shift, ShiftRequest, TimeEntry, TimeEntryEdit, User, Venue
 from src.schemas import EventTimesheet, TimesheetPerson, TimeEntryRow
+from src.services.clock import auto_close_open_entries, late_minutes
 
 ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
 TIMESHEET_STATUSES = ASSIGNED_STATUSES + ("no_show",)
@@ -64,6 +65,7 @@ def audit(db: AsyncSession, request_id, entry_id, editor_id, action, old=None, n
 
 
 async def build_timesheet(db: AsyncSession, event: ShiftEvent, venue: Venue) -> EventTimesheet:
+    await auto_close_open_entries(db, venue_id=venue.id)   # Phase 27
     shifts = (await db.execute(select(Shift).where(Shift.event_id == event.id))).scalars().all()
     by_id = {s.id: s for s in shifts}
     ids = list(by_id.keys())
@@ -112,6 +114,12 @@ async def build_timesheet(db: AsyncSession, event: ShiftEvent, venue: Venue) -> 
                 TimeEntryRow(
                     id=e.id, clock_in_time=e.clock_in_time, clock_out_time=e.clock_out_time,
                     hours=round(entry_hours(e), 2), edited=e.id in edited_ids,
+                    clock_in_geo_status=e.clock_in_geo_status,
+                    clock_in_distance_m=e.clock_in_distance_m,
+                    clock_out_geo_status=e.clock_out_geo_status,
+                    clock_out_distance_m=e.clock_out_distance_m,
+                    auto_closed=bool(e.auto_closed),
+                    late_minutes=late_minutes(e.clock_in_time, s.start_time),
                 )
                 for e in es
             ],

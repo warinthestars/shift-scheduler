@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock } from 'lucide-react';
+import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock, MapPin, AlertTriangle } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { payText } from './PayLabel';
+import EventLocationPicker from './EventLocationPicker';
+import { draftToPayload } from './LocationFields';
 import { zonedLocalToUtcIso, utcToZonedLocalInput } from '../utils/venueTime';
 
 const CUSTOM = '__custom__';
@@ -98,6 +100,11 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
   const [end, setEnd] = useState('');
   const [notes, setNotes] = useState('');
   const [staffNotes, setStaffNotes] = useState(''); // Phase 26.2: confirmed staff only
+  // Phase 27: where, clock-in location check, event-specific location notes (confirmed staff only)
+  const [where, setWhere] = useState({ kind: 'venue' });
+  const [geofenceMode, setGeofenceMode] = useState('venue_default');
+  const [locStaffOn, setLocStaffOn] = useState(false);
+  const [locStaffNotes, setLocStaffNotes] = useState('');
   const [rows, setRows] = useState(() => (isEdit ? [] : [blankRow(null)]));
   const [touched, setTouched] = useState(false);
 
@@ -119,6 +126,10 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
         setEnd(utcToZonedLocalInput(ev.end_time, tz));
         setNotes(ev.notes || '');
         setStaffNotes(ev.staff_notes || '');
+        setWhere(ev.location ? { kind: 'saved', location: ev.location } : { kind: 'venue' });
+        setGeofenceMode(ev.geofence_mode || 'venue_default');
+        setLocStaffNotes(ev.location_staff_notes || '');
+        setLocStaffOn(!!ev.location_staff_notes);
         setRows(
           (ev.positions || []).map((p) => ({
             key: p.shift_id,
@@ -188,6 +199,10 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
 
   const anyBooked = rows.some((r) => (r.booked || 0) + (r.pending || 0) > 0);
 
+  // Phase 27: effective clock-in location check for this event
+  const venueGeoOn = !!venue?.geofence_enabled;
+  const geoOn = geofenceMode === 'on' || (geofenceMode === 'venue_default' && venueGeoOn);
+
   const handleSubmit = async () => {
     setError('');
     if (!title.trim()) return setError('Give the event a name.');
@@ -222,12 +237,29 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
       });
     }
 
+    // Phase 27: where + location check
+    let locationFields = { location_id: null, new_location: null };
+    if (where.kind === 'saved') {
+      locationFields = { location_id: where.location.id, new_location: null };
+    } else if (where.kind === 'new') {
+      const { payload, error: locError } = draftToPayload(where.draft);
+      if (locError) return setError(`Where: ${locError}`);
+      locationFields = { location_id: null, new_location: payload };
+    }
+    const place = where.kind === 'saved' ? where.location : where.kind === 'new' ? locationFields.new_location : null;
+    if (geoOn && place && (place.lat === null || place.lat === undefined)) {
+      return setError('The clock-in location check is on, but this location has no map pin. Add a pin, or turn the check off for this event.');
+    }
+
     const body = {
       title: title.trim(),
       start_time: startIso,
       end_time: endIso,
       notes: notes.trim() || null,
       staff_notes: staffNotes.trim() || null,
+      ...locationFields,
+      geofence_mode: geofenceMode,
+      location_staff_notes: locStaffOn ? locStaffNotes.trim() || null : null,
       positions: payloadPositions,
     };
 
@@ -291,6 +323,54 @@ export default function ShiftEventFormModal({ mode = 'create', venue, positions 
                 <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className={inputCls} />
               </div>
             </div>
+            {/* Phase 27: Where */}
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+              <label className="flex items-center gap-1 text-xs font-semibold text-slate-300">
+                <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Where
+              </label>
+              <EventLocationPicker venue={venue} value={where} onChange={setWhere} />
+
+              <div>
+                <label className={labelCls}>Clock-in location check</label>
+                <select value={geofenceMode} onChange={(e) => setGeofenceMode(e.target.value)} className={inputCls}>
+                  <option value="venue_default">Venue default ({venueGeoOn ? 'on' : 'off'})</option>
+                  <option value="on">On for this event</option>
+                  <option value="off">Off for this event</option>
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {geoOn
+                    ? 'Workers must be at the location to clock in. A little outside is allowed but flagged for you.'
+                    : 'Workers can clock in from anywhere during the clock-in window.'}
+                </p>
+                {geoOn && where.kind === 'saved' && where.location?.lat == null && (
+                  <p className="text-[11px] text-amber-300 mt-1 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" /> This location has no map pin yet. Use “Edit this location” to add one.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={locStaffOn}
+                    onChange={(e) => setLocStaffOn(e.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-500"
+                  />
+                  <Lock className="w-3 h-3 text-indigo-300" /> Add event-specific location notes (confirmed staff only)
+                </label>
+                {locStaffOn && (
+                  <textarea
+                    rows={2}
+                    value={locStaffNotes}
+                    onChange={(e) => setLocStaffNotes(e.target.value)}
+                    className={`${inputCls} mt-2`}
+                    placeholder="Only for this event and only booked staff see it. e.g. Gate code 2280 for Saturday, ask for Maria (planner) 555-0142."
+                  />
+                )}
+              </div>
+            </div>
+
             <div>
               <label className={labelCls}>Event notes</label>
               <textarea

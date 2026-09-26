@@ -3,7 +3,7 @@ import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { enUS } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal } from 'lucide-react';
+import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin } from 'lucide-react';
 import api from '../api/client';
 import TipBadge from './TipBadge';
 import PayLabel from './PayLabel';
@@ -33,6 +33,8 @@ export default function PostedShiftsBoard({
   onCancelPosition,
   actionLoading,
   timeZone,
+  openEventId = null,      // Phase 28: open this event's roster once it loads (notification link)
+  onOpenedEvent,
 }) {
   const [scope, setScope] = useState('upcoming');
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'calendar'
@@ -41,6 +43,7 @@ export default function PostedShiftsBoard({
   const [error, setError] = useState('');
   const [selectedKey, setSelectedKey] = useState(null);
   const [menuKey, setMenuKey] = useState(null);
+  const [loadedFor, setLoadedFor] = useState(null); // `${venueId}|${scope}` of the events in state
 
   useEffect(() => {
     if (!venueId) {
@@ -53,7 +56,10 @@ export default function PostedShiftsBoard({
     api
       .get(`/venues/${venueId}/events`, { params: { scope } })
       .then((res) => {
-        if (active) setEvents(res.data || []);
+        if (active) {
+          setEvents(res.data || []);
+          setLoadedFor(`${venueId}|${scope}`);
+        }
       })
       .catch((err) => {
         if (active) setError(err.response?.data?.detail || 'Could not load posted shifts.');
@@ -65,6 +71,21 @@ export default function PostedShiftsBoard({
       active = false;
     };
   }, [venueId, scope, refreshKey]);
+
+  // Phase 28: open the event from a notification link (search 'all' if it's not in this list)
+  useEffect(() => {
+    if (!openEventId || loading || loadedFor !== `${venueId}|${scope}`) return;
+    const hit = events.find((e) => e.event_key === String(openEventId));
+    if (hit) {
+      setSelectedKey(hit.event_key);
+      if (onOpenedEvent) onOpenedEvent();
+    } else if (scope !== 'all') {
+      setScope('all');
+    } else if (onOpenedEvent) {
+      onOpenedEvent(); // gone (deleted) — give up quietly
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openEventId, events, loading, loadedFor, scope, venueId]);
 
   const selectedEvent = useMemo(
     () => events.find((e) => e.event_key === selectedKey) || null,
@@ -195,6 +216,9 @@ export default function PostedShiftsBoard({
                           {ev.description && <div className="text-[11px] text-slate-400 line-clamp-1">{ev.description}</div>}
                           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
                             <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{timeStr}</span>
+                            {ev.location_name && (
+                              <span className="inline-flex items-center gap-1 text-emerald-300"><MapPin className="w-3 h-3" />{ev.location_name}</span>
+                            )}
                             <span>Staffed <strong className="text-white">{ev.total_assigned}/{ev.total_capacity}</strong></span>
                             {ev.total_requested > 0 && (
                               <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">

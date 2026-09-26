@@ -15,6 +15,9 @@ from src.routers.events import router as events_router
 from src.routers.timesheets import router as timesheets_router
 from src.routers.listings import router as listings_router
 from src.routers.me import router as me_router
+from src.routers.locations import router as locations_router
+from src.routers.notifications import router as notifications_router
+from src.services.notification_worker import notification_worker_loop
 
 
 # Configure logging
@@ -60,7 +63,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during startup data seeding: {e}", exc_info=True)
 
+    # Phase 28: background notification worker (reminders, alerts, email/SMS delivery)
+    worker_task = None
+    if settings.NOTIFICATIONS_WORKER_ENABLED:
+        import asyncio
+        worker_task = asyncio.create_task(notification_worker_loop())
+
     yield
+
+    if worker_task is not None:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except BaseException:
+            pass
 
     logger.info("Shutting down ShiftBoard Backend Application...")
     await engine.dispose()
@@ -104,6 +120,8 @@ app.include_router(events_router)
 app.include_router(timesheets_router)
 app.include_router(listings_router)
 app.include_router(me_router)
+app.include_router(locations_router)
+app.include_router(notifications_router)
 
 
 @app.get("/healthz", tags=["System"])

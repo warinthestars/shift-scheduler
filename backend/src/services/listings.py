@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models import ShiftEvent, Shift, ShiftRequest, Venue, VenueWhitelist, User, RequestStatus
 from src.schemas import EventListing, ListingPosition, ListingVenue, ListingMyRequest
 from src.services.auto_confirm import decide_approval
+from src.services.locations import load_locations, to_listing_location, geofence_on
 from src.services.booking import (
     as_utc, ACTIVE_STATUSES, ASSIGNED_STATUSES, BOOKED_STATUSES, PENDING_STATUSES,
 )
@@ -121,6 +122,8 @@ async def build_listings(
         )
     )).all()
 
+    locations = await load_locations(db, [e.location_id for e in events])   # Phase 27
+
     out: List[EventListing] = []
     for ev in events:
         venue = venues.get(ev.venue_id)
@@ -209,7 +212,10 @@ async def build_listings(
                 lat=_f(venue.lat),
                 lng=_f(venue.lng),
                 dress_code=venue.dress_code,
-                arrival_instructions=venue.arrival_instructions,
+                # Phase 27: arrival instructions are for booked staff only (as Venue Settings promises)
+                arrival_instructions=venue.arrival_instructions if (
+                    my_request is not None and my_request.status in ASSIGNED_STATUSES
+                ) else None,
                 default_shift_notes=venue.default_shift_notes,
             ),
             positions=positions,
@@ -230,5 +236,10 @@ async def build_listings(
             staff_notes=ev.staff_notes if (
                 my_request is not None and my_request.status in ASSIGNED_STATUSES
             ) else None,
+            location=to_listing_location(locations.get(ev.location_id)) if ev.location_id else None,   # Phase 27
+            location_staff_notes=ev.location_staff_notes if (
+                my_request is not None and my_request.status in ASSIGNED_STATUSES
+            ) else None,
+            geofence_on=geofence_on(ev, venue),
         ))
     return out

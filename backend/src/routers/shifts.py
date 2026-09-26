@@ -14,13 +14,16 @@ from src.schemas import (
     ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
     CheckInRequest, CheckOutRequest, TimeEntryResponse,
     ShiftBoardMessageCreate, ShiftBoardMessageResponse,
-    EventCreate, EventPositionInput
+    EventCreate, EventPositionInput,
+    ClockBody, ClockResult,
 )
 from src.auth import get_current_user, require_manager_or_admin, require_worker, normalize_role
 from src.services.auto_confirm import evaluate_shift_request, check_double_booking
 from src.services.shift_events import create_event_with_positions
 from src.services.shift_views import to_shift_responses
 from src.services.booking import request_position, withdraw_other_pending_in_event
+from src.services.clock import clock_in, clock_out, auto_close_open_entries
+from src.services import notify_events
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
 
@@ -259,6 +262,12 @@ async def update_shift_request_status(
     await db.commit()
     await db.refresh(shift_req)
 
+    # Phase 28: tell the worker (after commit; never raises)
+    if target_clean == "approved" and prev_status != "approved":
+        await notify_events.request_decided(shift_req.id, True)
+    elif target_clean == "rejected" and prev_status != "rejected":
+        await notify_events.request_decided(shift_req.id, False)
+
     res = await db.execute(
         select(ShiftRequest)
         .options(
@@ -331,6 +340,18 @@ async def get_worker_dashboard_stats(
         "rating_count": current_user.rating_count
     }
 
+async def _my_request_response(db: AsyncSession, shift_id: UUID, user: User) -> ShiftRequest:
+    res = await db.execute(
+        select(ShiftRequest)
+        .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
+        .where(ShiftRequest.shift_id == shift_id, ShiftRequest.worker_id == user.id)
+    )
+    req = res.scalar_one_or_none()
+    if req is None:
+        raise HTTPException(status_code=404, detail="Shift request not found")
+    return req
+
+
 @router.post("/{shift_id}/check-in", response_model=ShiftRequestResponse)
 async def check_in_shift(
     shift_id: UUID,
@@ -338,22 +359,9 @@ async def check_in_shift(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Check in to an approved shift with GPS validation"""
-    res = await db.execute(
-        select(ShiftRequest)
-        .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
-        .where(ShiftRequest.shift_id == shift_id, ShiftRequest.worker_id == current_user.id)
-    )
-    shift_req = res.scalar_one_or_none()
-    if not shift_req or str(shift_req.status).lower() not in ("approved", "confirmed"):
-        raise HTTPException(status_code=400, detail="Only approved shifts can be checked into")
-
-    shift_req.status = "checked_in"
-    shift_req.check_in_time = datetime.utcnow()
-    shift_req.check_in_verified = True
-    await db.commit()
-    await db.refresh(shift_req)
-    return shift_req
+    """Legacy alias. Phase 27: same rules as /clock-in (window + opt-in geofence)."""
+    await clock_in(db, current_user, shift_id, ClockBody(latitude=coords.latitude, longitude=coords.longitude))
+    return await _my_request_response(db, shift_id, current_user)
 
 @router.post("/{shift_id}/check-out", response_model=ShiftRequestResponse)
 async def check_out_shift(
@@ -362,23 +370,9 @@ async def check_out_shift(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Check out of a shift, completing it and incrementing total shifts"""
-    res = await db.execute(
-        select(ShiftRequest)
-        .options(selectinload(ShiftRequest.shift).selectinload(Shift.venue))
-        .where(ShiftRequest.shift_id == shift_id, ShiftRequest.worker_id == current_user.id)
-    )
-    shift_req = res.scalar_one_or_none()
-    if not shift_req:
-        raise HTTPException(status_code=404, detail="Shift request not found")
-
-    shift_req.status = "completed"
-    shift_req.check_out_time = datetime.utcnow()
-    shift_req.check_out_verified = True
-    current_user.total_shifts += 1
-    await db.commit()
-    await db.refresh(shift_req)
-    return shift_req
+    """Legacy alias. Phase 27: same rules as /clock-out."""
+    await clock_out(db, current_user, shift_id, ClockBody(latitude=coords.latitude, longitude=coords.longitude))
+    return await _my_request_response(db, shift_id, current_user)
 
 # ------------------------------------------------------------------------------
 # Phase 14: Shift Dropping & Roster Reallocation
@@ -495,102 +489,29 @@ async def deny_request_endpoint(
 # ------------------------------------------------------------------------------
 # Phase 13: Hour Tracking (Clock In / Clock Out)
 # ------------------------------------------------------------------------------
-@router.post("/{shift_id}/clock-in", response_model=TimeEntryResponse)
+@router.post("/{shift_id}/clock-in", response_model=ClockResult)
 async def clock_in_shift_time(
     shift_id: UUID,
+    body: Optional[ClockBody] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Task 2: Verify the user is assigned to the shift.
-    Create a new TimeEntry setting clock_in_time to datetime.now(timezone.utc).
+    Phase 27: Clock in. Allowed from venue.clock_in_early_minutes before start until the scheduled end.
+    If the location check is on for this event, body must carry latitude/longitude:
+    inside radius = on site, inside radius + buffer = accepted but flagged, beyond = blocked.
     """
-    req = await db.scalar(
-        select(ShiftRequest).where(
-            ShiftRequest.shift_id == shift_id,
-            ShiftRequest.worker_id == current_user.id,
-            func.lower(ShiftRequest.status).in_([
-                "approved", "checked_in", "confirmed"
-            ])
-        )
-    )
-    if not req:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You are not assigned to this shift."
-        )
+    return await clock_in(db, current_user, shift_id, body)
 
-    # Check if there is already an active clock-in
-    active_entry = await db.scalar(
-        select(TimeEntry).where(
-            TimeEntry.shift_id == shift_id,
-            TimeEntry.worker_id == current_user.id,
-            TimeEntry.clock_out_time.is_(None)
-        )
-    )
-    if active_entry:
-        return active_entry
-
-    now_utc = datetime.now(timezone.utc)
-    entry = TimeEntry(
-        worker_id=current_user.id,
-        shift_id=shift_id,
-        clock_in_time=now_utc
-    )
-    db.add(entry)
-
-    # Synchronize ShiftRequest check-in status
-    req.status = "checked_in"
-    if not req.check_in_time:
-        req.check_in_time = now_utc
-    req.check_in_verified = True
-
-    await db.commit()
-    await db.refresh(entry)
-    return entry
-
-@router.post("/{shift_id}/clock-out", response_model=TimeEntryResponse)
+@router.post("/{shift_id}/clock-out", response_model=ClockResult)
 async def clock_out_shift_time(
     shift_id: UUID,
+    body: Optional[ClockBody] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Task 2: Find the active TimeEntry for this user and shift. Set clock_out_time to current UTC time.
-    """
-    entry = await db.scalar(
-        select(TimeEntry).where(
-            TimeEntry.shift_id == shift_id,
-            TimeEntry.worker_id == current_user.id,
-            TimeEntry.clock_out_time.is_(None)
-        )
-    )
-    if not entry:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No active clock-in found for this shift."
-        )
-
-    now_utc = datetime.now(timezone.utc)
-    entry.clock_out_time = now_utc
-
-    # Synchronize ShiftRequest check-out status
-    req = await db.scalar(
-        select(ShiftRequest).where(
-            ShiftRequest.shift_id == shift_id,
-            ShiftRequest.worker_id == current_user.id
-        )
-    )
-    if req:
-        req.status = "completed"
-        req.check_out_time = now_utc
-        req.check_out_verified = True
-
-    current_user.total_shifts += 1
-
-    await db.commit()
-    await db.refresh(entry)
-    return entry
+    """Phase 27: Clock out. Never blocked by location (only flagged). Under a minute = undo."""
+    return await clock_out(db, current_user, shift_id, body)
 
 @router.get("/{shift_id}/time-entry", response_model=Optional[TimeEntryResponse])
 async def get_shift_time_entry(
@@ -612,6 +533,7 @@ async def get_my_active_time_entries(
     db: AsyncSession = Depends(get_db)
 ):
     """Retrieve all open clock-ins for current worker"""
+    await auto_close_open_entries(db, worker_id=current_user.id)   # Phase 27
     res = await db.execute(
         select(TimeEntry)
         .where(
