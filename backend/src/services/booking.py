@@ -24,11 +24,12 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.models import Shift, ShiftEvent, ShiftRequest, User
+from src.models import Shift, ShiftEvent, ShiftRequest, User, Venue
 from src.services.auto_confirm import evaluate_shift_request, check_double_booking
 from src.services import notify_events
 from src.services import activity
 from src.services.team import is_blocked
+from src.services.fit import load_fit, load_requirements, required_for, tz_of
 
 logger = logging.getLogger("shiftboard.booking")
 
@@ -59,6 +60,22 @@ async def prior_drop_in_event(db: AsyncSession, worker_id, shift: Shift) -> Opti
     )
     q = q.where(Shift.event_id == shift.event_id) if shift.event_id else q.where(Shift.id == shift.id)
     return await db.scalar(q)
+
+
+async def require_certs(db: AsyncSession, worker: User, shift: Shift, you: bool = True, who: str = "") -> None:
+    """Phase 32: 400 when the position needs certificates this person doesn't have (or that expired / weren't accepted)."""
+    required = required_for(await load_requirements(db, [shift.venue_id]), shift)
+    if not required:
+        return
+    venue = await db.scalar(select(Venue).where(Venue.id == shift.venue_id))
+    tz = tz_of(venue.timezone if venue is not None else None)
+    missing = (await load_fit(db, [worker.id]))[worker.id].missing(required, shift.start_time, shift.end_time, tz)
+    if missing:
+        where = f" at {venue.name}" if venue is not None else ""
+        if you:
+            raise HTTPException(status_code=400, detail=f"{shift.role_type}{where} needs: {', '.join(missing)}. "
+                                                        "Add it on your Profile page, then try again.")
+        raise HTTPException(status_code=400, detail=f"{who or 'They'} can't take this: {shift.role_type}{where} needs {', '.join(missing)}.")
 
 
 def as_utc(dt: datetime) -> datetime:
@@ -119,6 +136,7 @@ async def request_position(
             raise HTTPException(status_code=400, detail="This shift has already started.")
         if await is_blocked(db, shift.venue_id, worker.id):          # Phase 29
             raise HTTPException(status_code=403, detail="This venue isn't taking requests from you right now.")
+        await require_certs(db, worker, shift, you=True)              # Phase 32
 
         # --- One active request per event -------------------------------------------------
         same_event_q = (

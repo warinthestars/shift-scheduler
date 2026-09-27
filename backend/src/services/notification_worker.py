@@ -7,6 +7,7 @@ Every minute:
   3. "not clocked in" 10 minutes after start -> the worker (urgent) and the venue's managers
   4. managers: people who haven't read an UPDATE to a shift starting within 24h (once per update)
   5. managers: a position still has open spots 3 hours before it starts (once per position; Phase 30)
+  5b. workers: a certificate expires in 30 days, in 7 days, or today (once each; Phase 32)
   6. send due email / SMS from the outbox
 
 Only one process runs a tick at a time (Redis lock). If Redis is unreachable the tick still runs;
@@ -206,12 +207,39 @@ async def scan_unfilled(db: AsyncSession, now: datetime) -> int:
     return sent
 
 
+async def scan_expiring_certs(db: AsyncSession, now: datetime) -> int:
+    """Phase 32: remind people 30 days and 7 days before a certificate expires, and on the day."""
+    from src.models import WorkerCertification
+    from src.services.fit import cert_label
+    today = now.date()
+    sent = 0
+    for c in (await db.execute(
+        select(WorkerCertification).where(
+            WorkerCertification.expires_on.isnot(None),
+            WorkerCertification.expires_on >= today,
+            WorkerCertification.expires_on <= today + timedelta(days=30),
+            WorkerCertification.status != "rejected",
+        )
+    )).scalars().all():
+        left = (c.expires_on - today).days
+        bucket = "0" if left <= 0 else ("7" if left <= 7 else "30")
+        label = cert_label(c.cert_type)
+        title = f"Your {label.lower()} expires today" if left <= 0 else f"Your {label.lower()} expires in {left} day{'s' if left != 1 else ''}"
+        sent += await notify_in(
+            db, [c.worker_id], "cert_expiring", title,
+            "Renew it and update your profile. Positions that need it can't be booked once it expires.",
+            "/profile?tab=certificates", urgent=left <= 0,
+            dedupe_key=f"cert-exp:{c.id}:{c.expires_on.isoformat()}:{bucket}",
+        )
+    return sent
+
+
 async def run_tick() -> None:
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
         await auto_close_open_entries(db)
     for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
-                      ("unfilled", scan_unfilled)):
+                      ("unfilled", scan_unfilled), ("certs", scan_expiring_certs)):
         try:
             async with AsyncSessionLocal() as db:
                 await fn(db, now)

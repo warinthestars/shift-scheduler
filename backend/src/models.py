@@ -3,7 +3,8 @@ from enum import Enum
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, Numeric,
-    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
+    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint,
+    Date, SmallInteger, LargeBinary,
 )
 from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
 from sqlalchemy.orm import relationship
@@ -60,6 +61,8 @@ class User(Base):
     total_shifts = Column(Integer, nullable=False, default=0)
     firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
     discoverable = Column(String(20), nullable=False, default="private")   # Phase 29.1: private | venues | everyone
+    emergency_contact_name = Column(String(100), nullable=True)            # Phase 32
+    emergency_contact_phone = Column(String(30), nullable=True)            # Phase 32
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -204,6 +207,7 @@ class VenuePosition(Base):
     tip_pool = Column(Boolean, nullable=False, default=False)
     sort_order = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, nullable=False, default=True)
+    required_certs = Column(ARRAY(String), nullable=False, default=list)   # Phase 32: cert type keys
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -583,3 +587,76 @@ class ShiftBoardMessage(Base):
     shift = relationship("Shift", foreign_keys=[shift_id])
     author = relationship("User", foreign_keys=[author_id])
 
+
+# ------------------------------------------------------------------------------
+# Phase 31: Availability & time off
+# ------------------------------------------------------------------------------
+class WorkerAvailability(Base):
+    """One weekly window. A worker with no rows hasn't set availability (treated as open)."""
+    __tablename__ = "worker_availability"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    weekday = Column(SmallInteger, nullable=False)          # 0 = Monday ... 6 = Sunday
+    start_local = Column(String(5), nullable=False)         # 'HH:MM'
+    end_local = Column(String(5), nullable=False)           # 'HH:MM' or '24:00'; earlier than start = next day
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (CheckConstraint("weekday BETWEEN 0 AND 6", name="chk_availability_weekday"),)
+
+
+class TimeOffRequest(Base):
+    __tablename__ = "time_off_requests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)                 # inclusive
+    reason = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="pending", index=True)   # pending | approved | denied | cancelled
+    decided_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    decided_venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="SET NULL"), nullable=True)
+    decision_note = Column(Text, nullable=True)
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (CheckConstraint("end_date >= start_date", name="chk_time_off_range"),)
+
+
+# ------------------------------------------------------------------------------
+# Phase 32: Profile files & certifications
+# ------------------------------------------------------------------------------
+class UserFile(Base):
+    """Small uploads kept in the database (profile photos, certificate scans)."""
+    __tablename__ = "user_files"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(20), nullable=False)               # avatar | certificate
+    filename = Column(String(255), nullable=True)
+    content_type = Column(String(100), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class WorkerCertification(Base):
+    __tablename__ = "worker_certifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    cert_type = Column(String(50), nullable=False)          # keys in services/certs.py CERT_TYPES
+    number = Column(String(100), nullable=True)
+    issued_on = Column(Date, nullable=True)
+    expires_on = Column(Date, nullable=True)
+    file_id = Column(UUID(as_uuid=True), ForeignKey("user_files.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(20), nullable=False, default="unverified")   # unverified | verified | rejected
+    verified_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    verified_venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="SET NULL"), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    review_note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (UniqueConstraint("worker_id", "cert_type", name="uq_worker_cert"),)

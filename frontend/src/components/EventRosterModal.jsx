@@ -189,6 +189,17 @@ export default function EventRosterModal({
                                   {p.rebook_reason ? ` · “${p.rebook_reason}”` : ''}
                                 </div>
                               )}
+                              {/* Phase 31 + 32 */}
+                              {(p.cert_issues || []).map((issue) => (
+                                <div key={issue} className={`text-[10px] inline-flex items-center gap-1 mr-2 ${issue.includes('not verified') ? 'text-sky-300' : 'text-rose-300'}`}>
+                                  <Lock className="w-3 h-3" /> {issue.includes('not verified') ? issue : `Missing: ${issue}`}
+                                </div>
+                              ))}
+                              {p.time_off && (
+                                <div className={`text-[10px] inline-flex items-center gap-1 ${p.time_off === 'approved' ? 'text-rose-300' : 'text-amber-300'}`}>
+                                  <AlertTriangle className="w-3 h-3" /> {p.time_off === 'approved' ? 'Has approved time off that day' : 'Asked for time off that day'}
+                                </div>
+                              )}
                               <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
                                 {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
                                 {p.email && <a href={`mailto:${p.email}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Mail className="w-3 h-3" />{p.email}</a>}

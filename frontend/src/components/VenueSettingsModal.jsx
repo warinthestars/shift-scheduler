@@ -5,6 +5,7 @@ import ModalShell from './ModalShell';
 import VenueLocationsPanel from './VenueLocationsPanel';
 import EventTemplatesPanel from './EventTemplatesPanel';
 import { TIMEZONE_OPTIONS } from '../utils/venueTime';
+import { CERT_OPTIONS } from '../utils/certs';
 
 const POLICIES = [
   { id: 'team_auto', title: 'Book my team instantly', body: "People on this venue's team are confirmed right away. Everyone else waits for a manager." },
@@ -50,6 +51,7 @@ function toDraft(p) {
     hide_rate: !!p.hide_rate,
     tips_eligible: !!p.tips_eligible,
     tip_pool: !!p.tip_pool,
+    required_certs: p.required_certs || [],   // Phase 32
   };
 }
 
@@ -76,6 +78,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
         hide_rate: draft.hide_rate,
         tips_eligible: draft.tips_eligible,
         tip_pool: draft.tips_eligible ? draft.tip_pool : false,
+        required_certs: CERT_OPTIONS.map((c) => c.key).filter((k) => draft.required_certs.includes(k)),   // Phase 32
       });
       onChanged();
     } catch (err) {
@@ -147,6 +150,23 @@ function PositionCard({ venueId, position, onChanged, onError }) {
             className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
           <EyeOff className="w-3.5 h-3.5" /> Hide pay
         </label>
+      </div>
+      {/* Phase 32: certificates people need before they can request this position */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] text-slate-400 mr-1">Requires:</span>
+        {CERT_OPTIONS.map((c) => {
+          const on = draft.required_certs.includes(c.key);
+          return (
+            <button key={c.key} type="button" disabled={disabled} aria-pressed={on}
+              onClick={() => setDraft({ ...draft, required_certs: on ? draft.required_certs.filter((k) => k !== c.key) : [...draft.required_certs, c.key] })}
+              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition ${
+                on ? 'bg-sky-500/15 text-sky-200 border-sky-500/40' : 'bg-slate-900 text-slate-500 border-slate-700 hover:text-slate-300'}`}>
+              {c.short}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex justify-end">
         {position.is_active && dirty && (
           <button type="button" onClick={save} disabled={saving}
             className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
@@ -505,6 +525,7 @@ export default function VenueSettingsModal({
         <div className="space-y-4">
           <p className="text-xs text-slate-400">
             These fill in pay and tips when you post a shift. Changing them doesn't change shifts you already posted. "Hide pay" keeps the rate off listings until someone is booked.
+            "Requires" means people need that certificate on their profile (in date) to request or be offered the position. You can still assign someone yourself after a warning.
           </p>
           {loadingPositions ? (
             <p className="text-xs text-slate-500">Loading…</p>

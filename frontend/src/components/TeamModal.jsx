@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Users, UserPlus, Link2, Copy, Download, RefreshCw, Mail, Phone, Upload, ShieldCheck, Trash2, Ban,
-  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus,
+  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus, BadgeCheck,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
 import WorkerProfilePanel, { Avatar } from './WorkerProfilePanel';
+import { certShort } from '../utils/certs';
 import { fmtShortDate } from '../utils/venueTime';
 
 const inputCls =
@@ -236,6 +237,14 @@ function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUp
               <span key={p} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[9px] font-bold uppercase">{p}</span>
             ))}
             {m.notes && <span title={m.notes} className="text-[10px] text-amber-300">• note</span>}
+            {(m.certs || []).map((k) => (
+              <span key={k} title="Verified certificate" className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
+                <BadgeCheck className="w-2.5 h-2.5" /> {certShort(k)}
+              </span>
+            ))}
+            {m.cert_attention > 0 && (
+              <span className="text-[10px] text-sky-300" title="Open the row to check and verify">• {m.cert_attention} to verify</span>
+            )}
           </div>
           <div className="text-[11px] text-slate-500 truncate">
             {m.shifts_worked} shift{m.shifts_worked === 1 ? '' : 's'} here

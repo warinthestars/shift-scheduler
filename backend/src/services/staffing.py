@@ -27,11 +27,12 @@ from src.models import (
 from src.schemas import AssignCandidate, OfferCreateResult, OfferSkip, WorkerOffer
 from src.services.booking import (
     _load_shift_locked, as_utc, PENDING_STATUSES, BOOKED_STATUSES, ACTIVE_STATUSES,
-    prior_drop_in_event, REBOOK_REASON_MIN,
+    prior_drop_in_event, REBOOK_REASON_MIN, require_certs,
 )
 from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
 from src.services.reliability import compute_reliability
 from src.services.locations import load_locations
+from src.services.fit import load_fit, load_requirements, required_for, tz_of, unverified_certs   # Phase 31 + 32
 from src.auth import normalize_role
 
 logger = logging.getLogger("shiftboard.staffing")
@@ -278,6 +279,12 @@ async def create_offers(
             if not c.available and not c.requested_this:
                 skipped.append(OfferSkip(worker_id=wid, name=name, reason=c.reason or "Not available."))
                 continue
+            if c.missing_certs:                                                         # Phase 32
+                skipped.append(OfferSkip(worker_id=wid, name=name, reason=f"Needs {', '.join(c.missing_certs)} on their profile."))
+                continue
+            if c.time_off == "approved":                                                # Phase 31
+                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Has approved time off that day."))
+                continue
             o = ShiftOffer(
                 shift_id=shift.id, venue_id=shift.venue_id, worker_id=wid, batch_id=batch,
                 offered_by_user_id=manager.id, status="pending", message=clean_msg,
@@ -326,6 +333,7 @@ async def accept_offer(db: AsyncSession, worker: User, offer_id: UUID) -> Tuple[
         )
         if (offer.status or "").lower() != "pending":
             raise HTTPException(status_code=409, detail="Someone else accepted this one first.")
+        await require_certs(db, worker, shift, you=True)                               # Phase 32
         req = await _book_locked(db, shift, worker, source="offer", approved_by=offer.offered_by_user_id, who="you")
         req_id = req.id
         await db.commit()
@@ -504,6 +512,10 @@ async def list_candidates(
     )).all())
     rel = await compute_reliability(db, ids)
     role_l = (shift.role_type or "").lower()
+    fits = await load_fit(db, ids)                                                   # Phase 31 + 32
+    required = required_for(await load_requirements(db, [venue_id]), shift)
+    venue_obj = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    tz = tz_of(venue_obj.timezone if venue_obj is not None else None)
 
     out: List[AssignCandidate] = []
     for wid, u in people.items():
@@ -544,6 +556,10 @@ async def list_candidates(
             venue_shifts=int(worked.get(wid, 0)),
             dropped_at=dropped[wid][0] if wid in dropped else None,
             drop_reason=dropped[wid][1] if wid in dropped else None,
+            availability=fits[wid].availability(shift.start_time, shift.end_time, tz),
+            time_off=fits[wid].off(shift.start_time, shift.end_time, tz),
+            missing_certs=fits[wid].missing(required, shift.start_time, shift.end_time, tz),
+            unverified_certs=unverified_certs(required, fits[wid].certs),
         ))
     out.sort(key=lambda c: (
         not c.requested_this, not c.available, not c.position_match, not c.on_team,

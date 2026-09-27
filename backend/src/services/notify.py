@@ -61,6 +61,10 @@ KINDS = {
     "shift_dropped": ("manager", True),      # Phase 29.1: a worker dropped a booked shift
     "no_show": ("booking", True),            # Phase 30: a manager marked you a no-show
     "unfilled_soon": ("manager", True),      # Phase 30: spots still open 3 h before start
+    "time_off_request": ("manager", False),  # Phase 31: a team member asked for time off
+    "time_off_decided": ("booking", False),  # Phase 31: your time off was approved / declined
+    "cert_review": ("booking", False),       # Phase 32: a manager verified / didn't accept a certificate
+    "cert_expiring": ("reminder", False),    # Phase 32: a certificate expires in 30 / 7 days, or today
     "test": ("test", True),
 }
 NEW_SHIFT_MODES = ("off", "instant", "daily")

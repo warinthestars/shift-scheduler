@@ -33,6 +33,16 @@ from src.services.shift_views import to_shift_responses
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 from src.services.clock import auto_close_open_entries, late_minutes as clock_late_minutes
 from src.services.locations import load_locations
+from src.services.fit import CERT_TYPES, load_fit, load_requirements, required_for, tz_of, unverified_certs   # Phase 31 + 32
+
+
+def _clean_certs(keys) -> List[str]:
+    """Phase 32: keep known certificate keys, in catalogue order, no duplicates."""
+    wanted = {k for k in (keys or [])}
+    unknown = wanted - set(CERT_TYPES)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown certificate type: {', '.join(sorted(unknown))}.")
+    return [k for k in CERT_TYPES if k in wanted]
 from src.services import activity
 from src.services import admin_audit
 
@@ -301,6 +311,7 @@ async def create_venue_position(
             existing.hide_rate = bool(pos_in.hide_rate)
             existing.tips_eligible = bool(pos_in.tips_eligible)
             existing.tip_pool = bool(pos_in.tips_eligible and pos_in.tip_pool)
+            existing.required_certs = _clean_certs(pos_in.required_certs)      # Phase 32
             await db.commit()
             await db.refresh(existing)
         except Exception as e:
@@ -322,6 +333,7 @@ async def create_venue_position(
             tip_pool=bool(pos_in.tips_eligible and pos_in.tip_pool),
             sort_order=int(max_order) + 1,
             is_active=True,
+            required_certs=_clean_certs(pos_in.required_certs),                # Phase 32
         )
         db.add(pos)
         await db.commit()
@@ -364,6 +376,11 @@ async def update_venue_position(
         data["name"] = new_name[:100]
     if "default_rate" in data and (data["default_rate"] is None or data["default_rate"] <= 0):
         raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
+    if "required_certs" in data:                                                 # Phase 32
+        if data["required_certs"] is None:
+            data.pop("required_certs")
+        else:
+            data["required_certs"] = _clean_certs(data["required_certs"])
 
     try:
         for field, value in data.items():
@@ -923,6 +940,22 @@ async def get_venue_events(
             event_cancel[ev_obj.id] = (ev_obj.cancelled_at is not None, ev_obj.cancel_reason)
     venue_obj = await db.scalar(select(Venue).where(Venue.id == venue_id))
     event_locations = await load_locations(db, [e.location_id for e in event_objs.values()])   # Phase 27
+
+    # Phase 31 + 32: certificate problems and time off for booked people
+    fit_by_worker = await load_fit(db, {p.worker_id for ps in assigned_by_shift.values() for p in ps})
+    requirements = await load_requirements(db, [venue_id])
+    vtz = tz_of(venue_obj.timezone if venue_obj is not None else None)
+    for s in shifts:
+        needed = required_for(requirements, s)
+        for person in assigned_by_shift[s.id]:
+            f = fit_by_worker.get(person.worker_id)
+            if f is None:
+                continue
+            person.cert_issues = f.missing(needed, s.start_time, s.end_time, vtz) + [
+                f"{label} not verified" for label in unverified_certs(needed, f.certs)
+            ]
+            if person.status in ("approved", "confirmed"):
+                person.time_off = f.off(s.start_time, s.end_time, vtz)
 
     # Phase 26.2: has each booked person read the latest info?
     for s in shifts:

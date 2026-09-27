@@ -23,6 +23,7 @@ from src.routers.staffing import router as staffing_router
 from src.routers.activity import router as activity_router
 from src.routers.admin_console import router as admin_console_router
 from src.routers.event_templates import router as event_templates_router
+from src.routers.profile import router as profile_router   # Phase 31 + 32
 from src.services.notification_worker import notification_worker_loop
 
 
@@ -134,6 +135,7 @@ app.include_router(staffing_router)
 app.include_router(activity_router)
 app.include_router(admin_console_router)
 app.include_router(event_templates_router)
+app.include_router(profile_router)   # Phase 31 + 32
 
 
 @app.get("/healthz", tags=["System"])

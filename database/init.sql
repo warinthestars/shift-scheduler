@@ -32,6 +32,8 @@ CREATE TABLE users (
     firebase_uid VARCHAR(128) UNIQUE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     discoverable VARCHAR(20) NOT NULL DEFAULT 'private',   -- Phase 29.1: private | venues | everyone
+    emergency_contact_name VARCHAR(100),                   -- Phase 32
+    emergency_contact_phone VARCHAR(30),                   -- Phase 32
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -118,6 +120,7 @@ CREATE TABLE venue_positions (
     tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
     sort_order INT NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    required_certs TEXT[] NOT NULL DEFAULT '{}',          -- Phase 32: cert type keys, e.g. {alcohol_server}
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_venue_position_name UNIQUE (venue_id, name),
@@ -531,3 +534,69 @@ CREATE TABLE event_templates (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_event_templates_venue ON event_templates(venue_id);
+
+-- ------------------------------------------------------------------------------
+-- Phase 31: Availability & time off
+-- ------------------------------------------------------------------------------
+CREATE TABLE worker_availability (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    weekday SMALLINT NOT NULL,                                -- 0 = Monday ... 6 = Sunday
+    start_local VARCHAR(5) NOT NULL,                          -- 'HH:MM' local time where they work
+    end_local VARCHAR(5) NOT NULL,                            -- 'HH:MM' or '24:00'; earlier than start = next day
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_availability_weekday CHECK (weekday BETWEEN 0 AND 6)
+);
+CREATE INDEX idx_worker_availability_worker ON worker_availability(worker_id);
+
+CREATE TABLE time_off_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,                                   -- inclusive
+    reason TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',            -- pending | approved | denied | cancelled
+    decided_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    decided_venue_id UUID REFERENCES venues(id) ON DELETE SET NULL,
+    decision_note TEXT,
+    decided_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_time_off_range CHECK (end_date >= start_date)
+);
+CREATE INDEX idx_time_off_worker ON time_off_requests(worker_id);
+CREATE INDEX idx_time_off_status ON time_off_requests(status);
+
+-- ------------------------------------------------------------------------------
+-- Phase 32: Profile files & certifications
+-- ------------------------------------------------------------------------------
+CREATE TABLE user_files (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind VARCHAR(20) NOT NULL,                                -- avatar | certificate
+    filename VARCHAR(255),
+    content_type VARCHAR(100) NOT NULL,
+    size_bytes INT NOT NULL,
+    data BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_user_files_owner ON user_files(owner_id);
+
+CREATE TABLE worker_certifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    cert_type VARCHAR(50) NOT NULL,                           -- alcohol_server | food_handler | age_21 | ...
+    number VARCHAR(100),
+    issued_on DATE,
+    expires_on DATE,
+    file_id UUID REFERENCES user_files(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'unverified',         -- unverified | verified | rejected
+    verified_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    verified_venue_id UUID REFERENCES venues(id) ON DELETE SET NULL,
+    verified_at TIMESTAMPTZ,
+    review_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_worker_cert UNIQUE (worker_id, cert_type)
+);
+CREATE INDEX idx_worker_certs_worker ON worker_certifications(worker_id);

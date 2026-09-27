@@ -18,6 +18,7 @@ import { Avatar } from '../components/WorkerProfilePanel';
 import MyShiftCard from '../components/worker/MyShiftCard';
 import DropShiftDialog from '../components/worker/DropShiftDialog';
 import HandoffsPanel from '../components/worker/HandoffsPanel';
+import ProfileNudge from '../components/worker/ProfileNudge';
 import { PENDING_INVITE_KEY } from './JoinPage';
 import {
   dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
@@ -60,6 +61,7 @@ export default function WorkerDashboard() {
   const [venueFilter, setVenueFilter] = useState('ALL');
   const [instantOnly, setInstantOnly] = useState(false);
   const [hideRequested, setHideRequested] = useState(false);
+  const [fitsOnly, setFitsOnly] = useState(false);            // Phase 31: fits my availability, not on time off
 
   const [openListing, setOpenListing] = useState(null); // { eventId, initial }
   const [transferModalOpen, setTransferModalOpen] = useState(false);
@@ -289,9 +291,10 @@ export default function WorkerDashboard() {
       if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
       if (instantOnly && !l.any_instant) return false;
       if (hideRequested && l.my_request) return false;
+      if (fitsOnly && (l.availability === 'outside' || l.time_off === 'approved')) return false;   // Phase 31
       return true;
     });
-  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested]);
+  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested, fitsOnly]);
   const listingGroups = useMemo(() => {
     const groups = [];
     filteredListings.forEach((l) => {
@@ -302,7 +305,7 @@ export default function WorkerDashboard() {
     });
     return groups;
   }, [filteredListings]);
-  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested;
+  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested || fitsOnly;
   const clearFilters = () => {
     setSearch('');
     setWhenFilter('all');
@@ -310,6 +313,7 @@ export default function WorkerDashboard() {
     setVenueFilter('ALL');
     setInstantOnly(false);
     setHideRequested(false);
+    setFitsOnly(false);
   };
 
   // My shifts: coming up / dropped (can still ask back) / history
@@ -420,6 +424,7 @@ export default function WorkerDashboard() {
       </section>
 
       <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-6">
+        {isWorker && <ProfileNudge />}
         {notification && (
           <div className={`mb-5 p-3.5 rounded-xl border flex items-start justify-between gap-3 ${
             notification.type === 'success'
@@ -580,6 +585,12 @@ export default function WorkerDashboard() {
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
                     hideRequested ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
                   Hide ones I've requested
+                </button>
+                <button type="button" onClick={() => setFitsOnly((v) => !v)}
+                  title="Hide shifts outside your weekly availability or on days you have time off"
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1 transition ${
+                    fitsOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                  <CalendarDays className="w-3.5 h-3.5" /> Fits my availability
                 </button>
                 {filtersActive && (
                   <button type="button" onClick={clearFilters} className="text-xs text-slate-400 underline hover:text-white ml-auto">Clear filters</button>

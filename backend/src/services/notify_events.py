@@ -539,3 +539,78 @@ async def _shift_dropped(db: AsyncSession, request_id) -> None:
 
 async def shift_dropped(request_id) -> None:
     await _run("shift_dropped", _shift_dropped, request_id)
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 31: time off   /   Phase 32: certificates
+# ---------------------------------------------------------------------------------------------
+def _days_text(t) -> str:
+    a = t.start_date.strftime("%a %b %-d")
+    return a if t.end_date == t.start_date else f"{a} – {t.end_date.strftime('%a %b %-d')}"
+
+
+async def _time_off_requested(db: AsyncSession, time_off_id) -> None:
+    from src.models import TimeOffRequest
+    from src.services.profile import team_venue_ids, time_off_items
+    t = await db.scalar(select(TimeOffRequest).where(TimeOffRequest.id == time_off_id))
+    if t is None:
+        return
+    worker = await db.scalar(select(User).where(User.id == t.worker_id))
+    for venue_id in sorted(await team_venue_ids(db, t.worker_id), key=str):
+        item = (await time_off_items(db, [t], venue_id=venue_id))[0]
+        body = f"{_days_text(t)}." + (f" “{t.reason}”" if t.reason else "")
+        if item.conflicts:
+            body += f"\nBooked here then: {'; '.join(item.conflicts[:3])}"
+        await notify_in(
+            db, await manager_ids(db, venue_id), "time_off_request",
+            f"{person(worker)} asked for time off", body,
+            manager_link(venue_id), venue_id=venue_id, dedupe_key=f"timeoff:{t.id}",
+        )
+
+
+async def time_off_requested(time_off_id) -> None:
+    await _run("time_off_requested", _time_off_requested, time_off_id)
+
+
+async def _time_off_decided(db: AsyncSession, time_off_id) -> None:
+    from src.models import TimeOffRequest
+    t = await db.scalar(select(TimeOffRequest).where(TimeOffRequest.id == time_off_id))
+    if t is None or t.status not in ("approved", "denied"):
+        return
+    venue = await db.scalar(select(Venue).where(Venue.id == t.decided_venue_id)) if t.decided_venue_id else None
+    approved = t.status == "approved"
+    body = f"{_days_text(t)}" + (f" · {venue.name}" if venue else "") + "."
+    if t.decision_note:
+        body += f"\n“{t.decision_note}”"
+    await notify_in(
+        db, [t.worker_id], "time_off_decided",
+        "Time off approved" if approved else "Time off not approved", body,
+        "/profile?tab=time-off", venue_id=t.decided_venue_id, dedupe_key=f"timeoff-d:{t.id}",
+    )
+
+
+async def time_off_decided(time_off_id) -> None:
+    await _run("time_off_decided", _time_off_decided, time_off_id)
+
+
+async def _cert_reviewed(db: AsyncSession, cert_id) -> None:
+    from src.models import WorkerCertification
+    from src.services.fit import cert_label
+    c = await db.scalar(select(WorkerCertification).where(WorkerCertification.id == cert_id))
+    if c is None or c.status not in ("verified", "rejected"):
+        return
+    venue = await db.scalar(select(Venue).where(Venue.id == c.verified_venue_id)) if c.verified_venue_id else None
+    label = cert_label(c.cert_type)
+    if c.status == "verified":
+        title, body = f"{label} verified", f"Checked by {venue.name if venue else 'a venue'}."
+    else:
+        title = f"{label} wasn't accepted"
+        body = f"{venue.name if venue else 'A venue'} says: “{c.review_note}”. Update it on your profile."
+    await notify_in(
+        db, [c.worker_id], "cert_review", title, body, "/profile?tab=certificates",
+        venue_id=c.verified_venue_id, dedupe_key=f"cert-r:{c.id}:{int(c.verified_at.timestamp()) if c.verified_at else 0}",
+    )
+
+
+async def cert_reviewed(cert_id) -> None:
+    await _run("cert_reviewed", _cert_reviewed, cert_id)

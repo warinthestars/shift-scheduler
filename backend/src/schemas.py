@@ -486,6 +486,8 @@ class RosterPerson(BaseModel):
     drop_reason: Optional[str] = None            # Phase 29.4: what they said when dropping
     previous_drop_at: Optional[datetime] = None  # Phase 29.4: came back / asking back after a drop
     rebook_reason: Optional[str] = None          # Phase 29.4
+    cert_issues: List[str] = []                  # Phase 32: e.g. "Alcohol server card (expired)", "Food handler card not verified"
+    time_off: Optional[str] = None               # Phase 31: approved | pending time off on this shift's day(s)
 
 
 class EventPosition(BaseModel):
@@ -535,6 +537,7 @@ class VenuePositionCreate(BaseModel):
     hide_rate: bool = False
     tips_eligible: bool = False
     tip_pool: bool = False
+    required_certs: List[str] = []           # Phase 32: cert type keys (services/fit.py CERT_TYPES)
 
 
 class VenuePositionUpdate(BaseModel):
@@ -546,6 +549,7 @@ class VenuePositionUpdate(BaseModel):
     tip_pool: Optional[bool] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
+    required_certs: Optional[List[str]] = None   # Phase 32
 
 
 class VenuePositionResponse(BaseModel):
@@ -559,6 +563,7 @@ class VenuePositionResponse(BaseModel):
     tip_pool: bool
     sort_order: int
     is_active: bool
+    required_certs: List[str] = []           # Phase 32
 
     class Config:
         from_attributes = True
@@ -912,6 +917,8 @@ class ListingPosition(BaseModel):
     my_status_reason: Optional[str] = None
     my_dropped_at: Optional[datetime] = None   # Phase 29.4: the viewer dropped this position
     staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
+    required_certs: List[str] = []             # Phase 32: labels of what this position needs
+    missing_certs: List[str] = []              # Phase 32: what the VIEWER is missing (non-empty = can't request)
 
 
 class ListingMyRequest(BaseModel):
@@ -950,6 +957,8 @@ class EventListing(BaseModel):
     started: bool = False
     can_request: bool = True
     dropped_here: Optional[datetime] = None           # Phase 29.4: viewer dropped a position in this event -> asking back needs a reason + approval
+    availability: str = "not_set"                     # Phase 31: fits | outside | not_set (the viewer's weekly availability)
+    time_off: Optional[str] = None                    # Phase 31: approved | pending time off that day
 
 
 class PositionRequestBody(BaseModel):
@@ -1096,6 +1105,8 @@ class TeamMember(BaseModel):
     would_book_again_no: int = 0
     reliability: Optional[WorkerReliability] = None
     added_at: Optional[datetime] = None
+    certs: List[str] = []                    # Phase 32: cert keys that are verified and in date
+    cert_attention: int = 0                  # Phase 32: certificates waiting for a check (not verified yet)
 
 
 class TeamMemberUpdate(BaseModel):
@@ -1245,6 +1256,10 @@ class AssignCandidate(BaseModel):
     venue_shifts: int = 0
     dropped_at: Optional[datetime] = None    # Phase 29.4: dropped this event; Assign needs a reason, offers are skipped
     drop_reason: Optional[str] = None
+    availability: str = "not_set"            # Phase 31: fits | outside | not_set
+    time_off: Optional[str] = None           # Phase 31: approved | pending
+    missing_certs: List[str] = []            # Phase 32: labels (offers skip them; Assign asks first)
+    unverified_certs: List[str] = []         # Phase 32: on file but no manager has checked them
 
 
 class AssignRequest(BaseModel):
@@ -1356,6 +1371,14 @@ class WorkerProfile(BaseModel):
     history: List[WorkerHistoryItem] = []    # this venue only, newest first
     pending_here: int = 0                    # waiting requests at this venue
     other_venues: int = 0                    # other venues they've worked at (count only)
+    bio: Optional[str] = None                                     # Phase 32
+    avatar_url: Optional[str] = None
+    skills: List[str] = []                                        # "positions I work" from their profile
+    emergency_contact_name: Optional[str] = None                  # only for people on the team / booked here
+    emergency_contact_phone: Optional[str] = None
+    certifications: List["CertificationItem"] = []
+    availability: List["AvailabilityWindow"] = []                 # Phase 31
+    time_off: List["TimeOffItem"] = []                            # upcoming pending / approved
 
 
 class TeamSummary(BaseModel):
@@ -1711,6 +1734,7 @@ class WeekDay(BaseModel):
     events: List[WeekEvent] = []
     capacity: int = 0
     filled: int = 0
+    time_off: List[str] = []                     # Phase 31: team members with approved time off that day
 
 
 class TonightResponse(BaseModel):
@@ -1727,3 +1751,123 @@ class TonightResponse(BaseModel):
 class NoShowResult(BaseModel):
     detail: str
     spot_reopened: bool = False
+
+
+# ------------------------------------------------------------------------------
+# Phase 31: Availability & time off
+# ------------------------------------------------------------------------------
+class AvailabilityWindow(BaseModel):
+    weekday: int = Field(..., ge=0, le=6)            # 0 = Monday ... 6 = Sunday
+    start_local: str                                 # 'HH:MM'
+    end_local: str                                   # 'HH:MM' or '24:00'; earlier than start = runs past midnight
+
+
+class AvailabilityUpdate(BaseModel):
+    windows: List[AvailabilityWindow] = []           # [] = clear (no availability set)
+
+
+class TimeOffCreate(BaseModel):
+    start_date: date
+    end_date: date
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class TimeOffItem(BaseModel):
+    id: UUID
+    worker_id: UUID
+    worker_name: Optional[str] = None
+    start_date: date
+    end_date: date
+    reason: Optional[str] = None
+    status: str                                      # pending | approved | denied | cancelled
+    decision_note: Optional[str] = None
+    decided_at: Optional[datetime] = None
+    decided_by_name: Optional[str] = None
+    decided_venue_name: Optional[str] = None
+    created_at: datetime
+    conflicts: List[str] = []                        # booked shifts in the range ("Sat Oct 3 · Bartender · Gala")
+
+
+class TimeOffDecision(BaseModel):
+    approve: bool
+    note: Optional[str] = Field(None, max_length=500)
+
+
+# ------------------------------------------------------------------------------
+# Phase 32: Profile & certifications
+# ------------------------------------------------------------------------------
+class CertTypeInfo(BaseModel):
+    key: str
+    label: str
+    hint: Optional[str] = None
+    expires: bool = True
+
+
+class CertificationItem(BaseModel):
+    id: UUID
+    cert_type: str
+    label: str
+    number: Optional[str] = None
+    issued_on: Optional[date] = None
+    expires_on: Optional[date] = None
+    file_id: Optional[UUID] = None
+    status: str                                      # unverified | verified | rejected
+    verified_at: Optional[datetime] = None
+    verified_by_name: Optional[str] = None
+    verified_venue_name: Optional[str] = None
+    review_note: Optional[str] = None
+    expired: bool = False
+    expiring_soon: bool = False                      # within 30 days
+
+
+class CertificationUpsert(BaseModel):
+    number: Optional[str] = Field(None, max_length=100)
+    issued_on: Optional[date] = None
+    expires_on: Optional[date] = None
+    file_id: Optional[UUID] = None                   # from POST /api/me/files
+    remove_file: bool = False
+
+
+class CertReview(BaseModel):
+    status: str                                      # verified | rejected
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class FileUploadResult(BaseModel):
+    id: UUID
+    url: str
+    content_type: str
+    size_bytes: int
+
+
+class MyProfile(BaseModel):
+    id: UUID
+    email: str
+    role: str
+    first_name: str = ""
+    last_name: str = ""
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    skills: List[str] = []
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    discoverable: str = "private"
+    availability: List[AvailabilityWindow] = []
+    time_off: List[TimeOffItem] = []
+    certifications: List[CertificationItem] = []
+    cert_types: List[CertTypeInfo] = []
+    missing: List[str] = []                          # phone | photo | emergency_contact | availability
+
+
+class MyProfileUpdate(BaseModel):
+    first_name: Optional[str] = Field(None, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
+    phone: Optional[str] = Field(None, max_length=30)
+    bio: Optional[str] = Field(None, max_length=600)
+    skills: Optional[List[str]] = None
+    emergency_contact_name: Optional[str] = Field(None, max_length=100)
+    emergency_contact_phone: Optional[str] = Field(None, max_length=30)
+
+
+WorkerProfile.model_rebuild()

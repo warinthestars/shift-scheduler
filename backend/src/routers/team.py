@@ -132,6 +132,21 @@ async def build_team(
         vr[wid] = (round(float(avg), 2) if avg is not None else None, int(n), int(yes), int(no))
     rel = await compute_reliability(db, ids)
 
+    # Phase 32: verified, in-date certificates (chips on the Team list) and ones waiting for a check
+    from src.models import WorkerCertification
+    cert_ok, cert_wait = {}, {}
+    if users:
+        today = datetime.now(timezone.utc).date()
+        for c in (await db.execute(
+            select(WorkerCertification).where(WorkerCertification.worker_id.in_(list(users)))
+        )).scalars().all():
+            if c.expires_on is not None and c.expires_on < today:
+                continue
+            if c.status == "verified":
+                cert_ok.setdefault(c.worker_id, []).append(c.cert_type)
+            elif c.status == "unverified":
+                cert_wait[c.worker_id] = cert_wait.get(c.worker_id, 0) + 1
+
     out = []
     for wid, u in users.items():
         row = rows.get(wid)
@@ -161,6 +176,8 @@ async def build_team(
             would_book_again_no=no,
             reliability=WorkerReliability(worker_id=wid, **r) if r else None,
             added_at=row.created_at if row is not None else None,
+            certs=sorted(cert_ok.get(wid, [])),
+            cert_attention=cert_wait.get(wid, 0),
         ))
     out.sort(key=lambda m: ((m.first_name or "").lower(), (m.last_name or "").lower()))
     return out
@@ -782,4 +799,21 @@ async def person_profile(
         .where(ShiftRequest.worker_id == worker_id, Shift.venue_id != venue_id,
                func.lower(ShiftRequest.status).in_(WORKED_STATUSES))
     ) or 0)
-    return WorkerProfile(member=member, history=history, pending_here=pending_here, other_venues=other_venues)
+    # Phase 31 + 32: profile, certificates, availability, time off. Private contact details only for
+    # people connected to this venue (not a stranger found through search).
+    from src.models import WorkerCertification
+    from src.services.profile import cert_items, time_off_items, availability_of, upcoming_time_off
+    connected = member.status != "none"
+    certs = await cert_items(db, list((await db.execute(
+        select(WorkerCertification).where(WorkerCertification.worker_id == worker_id)
+    )).scalars().all()))
+    time_off = [t for t in await time_off_items(db, list(await upcoming_time_off(db, worker_id)), venue_id=venue_id)
+                if t.status in ("pending", "approved")]
+    return WorkerProfile(
+        member=member, history=history, pending_here=pending_here, other_venues=other_venues,
+        bio=user.bio, avatar_url=user.avatar_url, skills=list(user.skills or []),
+        emergency_contact_name=user.emergency_contact_name if connected else None,
+        emergency_contact_phone=user.emergency_contact_phone if connected else None,
+        certifications=certs, availability=await availability_of(db, worker_id),
+        time_off=time_off if connected else [],
+    )

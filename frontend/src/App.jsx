@@ -10,6 +10,7 @@ import AdminPanel from './pages/AdminPanel';
 import VenuesDirectory from './pages/VenuesDirectory';
 import VenueProfile from './pages/VenueProfile';
 import JoinPage from './pages/JoinPage';
+import ProfilePage from './pages/ProfilePage';
 
 function HomeRedirect() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -103,6 +104,17 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
                   <Navbar />
                   <VenueProfile />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Phase 31 + 32: everyone's own profile */}
+            <Route
+              path="/profile"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
+                  <Navbar />
+                  <ProfilePage />
                 </ProtectedRoute>
               }
             />

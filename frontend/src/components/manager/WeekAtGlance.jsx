@@ -1,5 +1,5 @@
 import React from 'react';
-import { FilePen, EyeOff, Users } from 'lucide-react';
+import { FilePen, EyeOff, Users, CalendarOff } from 'lucide-react';
 import { fmtTime } from '../../utils/venueTime';
 
 function fillTone(e) {
@@ -40,6 +40,12 @@ export default function WeekAtGlance({ week = [], timeZone, onOpenEvent }) {
               </div>
             ) : (
               <p className="text-[10px] text-slate-600 mt-1.5">{d.events.length ? 'Drafts only' : 'Nothing posted'}</p>
+            )}
+            {d.time_off?.length > 0 && (
+              <p className="mt-1.5 text-[10px] text-amber-200/90 flex items-start gap-1" title={`Approved time off: ${d.time_off.join(', ')}`}>
+                <CalendarOff className="w-3 h-3 flex-shrink-0 mt-px" />
+                <span className="line-clamp-2">Off: {d.time_off.join(', ')}</span>
+              </p>
             )}
             <ul className="mt-2 space-y-1.5">
               {d.events.map((e) => (

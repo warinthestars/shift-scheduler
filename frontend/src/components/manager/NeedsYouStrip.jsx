@@ -1,15 +1,16 @@
 import React from 'react';
-import { CheckCircle2, Users, ArrowRightLeft, AlarmClock, UserPlus, BellRing } from 'lucide-react';
+import { CheckCircle2, Users, ArrowRightLeft, AlarmClock, UserPlus, BellRing, CalendarOff } from 'lucide-react';
 
 /**
  * Phase 30: One slim strip at the top of the manager dashboard.
  * Everything waiting on the manager, with a tap to jump to it. When nothing is waiting it shrinks
  * to a single "all caught up" line (the request / hand-off cards are hidden while they're empty).
  * Props: requests (number), transfers (number), late (number: late + missed), openSpots (number: open-spot alerts),
- *        onJump(targetId)  -> 'approval-queue' | 'pending-transfers' | 'tonight-board'
+ *        timeOff (number: Phase 31 time-off requests waiting),
+ *        onJump(targetId)  -> 'approval-queue' | 'pending-transfers' | 'tonight-board' | 'time-off-queue'
  */
-export default function NeedsYouStrip({ requests = 0, transfers = 0, late = 0, openSpots = 0, onJump }) {
-  const total = requests + transfers + late + openSpots;
+export default function NeedsYouStrip({ requests = 0, transfers = 0, late = 0, openSpots = 0, timeOff = 0, onJump }) {
+  const total = requests + transfers + late + openSpots + timeOff;
 
   if (total === 0) {
     return (
@@ -29,6 +30,8 @@ export default function NeedsYouStrip({ requests = 0, transfers = 0, late = 0, o
     requests > 0 && { id: 'approval-queue', n: requests, label: requests === 1 ? 'request' : 'requests', icon: Users,
       cls: 'bg-amber-500/15 border border-amber-500/40 text-amber-200 hover:bg-amber-500/25' },
     transfers > 0 && { id: 'pending-transfers', n: transfers, label: transfers === 1 ? 'hand-off' : 'hand-offs', icon: ArrowRightLeft,
+      cls: 'bg-amber-500/15 border border-amber-500/40 text-amber-200 hover:bg-amber-500/25' },
+    timeOff > 0 && { id: 'time-off-queue', n: timeOff, label: timeOff === 1 ? 'time-off request' : 'time-off requests', icon: CalendarOff,
       cls: 'bg-amber-500/15 border border-amber-500/40 text-amber-200 hover:bg-amber-500/25' },
   ].filter(Boolean);
 

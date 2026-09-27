@@ -20,6 +20,7 @@ from src.schemas import EventListing, ListingPosition, ListingVenue, ListingMyRe
 from src.services.auto_confirm import decide_approval
 from src.services.locations import load_locations, to_listing_location, geofence_on
 from src.services.team import blocked_venue_ids
+from src.services.fit import load_fit, load_requirements, required_for, tz_of, cert_label   # Phase 31 + 32
 from src.services.booking import (
     as_utc, ACTIVE_STATUSES, ASSIGNED_STATUSES, BOOKED_STATUSES, PENDING_STATUSES,
 )
@@ -125,6 +126,8 @@ async def build_listings(
 
     locations = await load_locations(db, [e.location_id for e in events])   # Phase 27
     blocked = await blocked_venue_ids(db, user.id)                        # Phase 29
+    my_fit = (await load_fit(db, [user.id]))[user.id]                     # Phase 31 + 32
+    requirements = await load_requirements(db, venue_ids)
 
     out: List[EventListing] = []
     for ev in events:
@@ -142,6 +145,7 @@ async def build_listings(
         # Phase 29.4: did the viewer drop a position here? Then asking back needs a reason + approval.
         drops = [as_utc(mine[s.id].dropped_at) for s in ev_shifts if s.id in mine and mine[s.id].dropped_at is not None]
         dropped_here = max(drops) if drops else None
+        vtz = tz_of(venue.timezone)
         for s in ev_shifts:
             r = mine.get(s.id)
             my_status = (r.status or "").lower() if r is not None else None
@@ -177,9 +181,12 @@ async def build_listings(
                 my_status_reason=r.status_reason if r is not None else None,
                 my_dropped_at=r.dropped_at if r is not None and my_status == "dropped" else None,   # Phase 29.4
                 staff_notes=s.staff_notes if booked_here else None,
+                required_certs=[cert_label(k) for k in required_for(requirements, s)],                # Phase 32
+                missing_certs=my_fit.missing(required_for(requirements, s), s.start_time, s.end_time, vtz),
             ))
 
         open_positions = [p for p in positions if p.status == "OPEN"]
+        requestable = [p for p in open_positions if not p.missing_certs]      # Phase 32
         if event_id is None and not open_positions and my_request is None:
             continue   # list mode: nothing to request and nothing of mine here
 
@@ -198,7 +205,7 @@ async def build_listings(
         can_request = (
             not cancelled
             and not started
-            and bool(open_positions)
+            and bool(requestable)
             and conflict is None
             and (my_request is None or my_request.status in PENDING_STATUSES)
         )
@@ -250,5 +257,7 @@ async def build_listings(
                 my_request is not None and my_request.status in ASSIGNED_STATUSES
             ) else None,
             geofence_on=geofence_on(ev, venue),
+            availability=my_fit.availability(ev.start_time, ev.end_time, vtz),          # Phase 31
+            time_off=my_fit.off(ev.start_time, ev.end_time, vtz),
         ))
     return out

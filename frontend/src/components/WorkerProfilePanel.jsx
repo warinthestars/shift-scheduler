@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Phone, Mail, Star, ThumbsUp, ThumbsDown, Clock, Building2, StickyNote } from 'lucide-react';
+import { Phone, Mail, Star, ThumbsUp, ThumbsDown, Clock, Building2, StickyNote, HeartPulse, CalendarDays, CalendarOff, Award, FileText, BadgeCheck, XCircle } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
+import ConfirmDialog from './ConfirmDialog';
+import { availabilitySummary, fmtDay, fmtDayRange } from '../utils/availability';
+import { openProtectedFile } from '../utils/files';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
@@ -68,6 +71,8 @@ function Stat({ label, children }) {
 export default function WorkerProfilePanel({ venueId, workerId, timeZone, compact = false, refreshKey = 0 }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [reloadTick, setReloadTick] = useState(0);   // Phase 32: after a certificate review
+  const [confirm, setConfirm] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -79,7 +84,7 @@ export default function WorkerProfilePanel({ venueId, workerId, timeZone, compac
     return () => {
       active = false;
     };
-  }, [venueId, workerId, refreshKey]);
+  }, [venueId, workerId, refreshKey, reloadTick]);
 
   if (error) return <p className="text-sm text-rose-300">{error}</p>;
   if (!data) return <p className="text-sm text-slate-500 py-6 text-center">Loading…</p>;
@@ -93,7 +98,7 @@ export default function WorkerProfilePanel({ venueId, workerId, timeZone, compac
     <div className="space-y-4">
       {!compact && (
         <div className="flex items-start gap-3">
-          <Avatar person={m} size="w-12 h-12 text-base" />
+          <Avatar person={{ ...m, avatar_url: data.avatar_url || m.avatar_url }} size="w-12 h-12 text-base" />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-base font-bold text-white">{`${m.first_name} ${m.last_name}`.trim() || m.email}</span>
@@ -164,12 +169,22 @@ export default function WorkerProfilePanel({ venueId, workerId, timeZone, compac
         </div>
       )}
 
+      {/* Phase 32: their own profile */}
+      {(data.bio || data.skills?.length > 0) && (
+        <div className="text-xs text-slate-300 space-y-1">
+          {data.bio && <p className="whitespace-pre-line">{data.bio}</p>}
+          {data.skills?.length > 0 && <p className="text-slate-400">Works as: <span className="text-slate-200">{data.skills.join(', ')}</span></p>}
+        </div>
+      )}
+
       {m.notes && (
         <p className="text-xs text-slate-200 whitespace-pre-line bg-amber-500/5 border border-amber-500/30 rounded-xl p-2.5">
           <span className="text-amber-300 font-semibold inline-flex items-center gap-1 mr-1"><StickyNote className="w-3 h-3" /> Private note:</span>
           {m.notes}
         </p>
       )}
+
+      <ProfileExtras data={data} venueId={venueId} workerId={workerId} onReviewed={() => setReloadTick((t) => t + 1)} setConfirm={setConfirm} />
 
       <div>
         <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">History here</div>
@@ -196,6 +211,124 @@ export default function WorkerProfilePanel({ venueId, workerId, timeZone, compac
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+      {confirm && <ConfirmDialog {...confirm} onClose={() => setConfirm(null)} />}
+    </div>
+  );
+}
+
+const CERT_TONE = {
+  verified: ['Verified', 'text-emerald-300', BadgeCheck],
+  unverified: ['Not verified yet', 'text-sky-300', null],
+  rejected: ['Not accepted', 'text-rose-300', XCircle],
+};
+
+/** Phase 31 + 32: certificates (verify / not accepted), availability, time off, emergency contact. */
+function ProfileExtras({ data, venueId, workerId, onReviewed, setConfirm }) {
+  const [busy, setBusy] = useState(null);
+  const review = async (c, status, note = null) => {
+    setBusy(c.id);
+    try {
+      await api.post(`/venues/${venueId}/people/${workerId}/certifications/${c.id}/review`, { status, note });
+      onReviewed();
+    } finally {
+      setBusy(null);
+    }
+  };
+  const askReject = (c) => setConfirm({
+    title: `Don't accept this ${c.label.toLowerCase()}?`,
+    message: 'They’ll be told what’s wrong so they can fix it. Positions that need it stay locked for them until it’s fixed.',
+    confirmLabel: 'Not accepted',
+    danger: true,
+    input: { label: 'What’s wrong?', placeholder: 'e.g. The photo is blurry, or the name doesn’t match', required: true },
+    onConfirm: (note) => review(c, 'rejected', note),
+  });
+  const summary = availabilitySummary(data.availability);
+  const sectionTitle = 'text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1';
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="sm:col-span-2">
+        <div className={sectionTitle}><Award className="w-3.5 h-3.5" /> Certificates</div>
+        {data.certifications?.length ? (
+          <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden">
+            {data.certifications.map((c) => {
+              const [label, tone, Icon] = CERT_TONE[c.status] || CERT_TONE.unverified;
+              return (
+                <div key={c.id} className="px-3 py-2 bg-slate-950 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <span className="font-semibold text-slate-100">{c.label}</span>
+                  <span className={`inline-flex items-center gap-0.5 font-semibold ${c.expired ? 'text-rose-300' : tone}`}>
+                    {Icon && <Icon className="w-3 h-3" />} {c.expired ? 'Expired' : label}
+                  </span>
+                  {c.expires_on && <span className="text-slate-400">exp. {fmtDay(c.expires_on)}</span>}
+                  {c.number && <span className="text-slate-500">No. {c.number}</span>}
+                  {c.status === 'verified' && c.verified_venue_name && <span className="text-slate-500">by {c.verified_venue_name}</span>}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {c.file_id && (
+                      <button type="button" onClick={() => openProtectedFile(c.file_id).catch(() => {})}
+                        className="px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-white inline-flex items-center gap-1">
+                        <FileText className="w-3 h-3" /> View
+                      </button>
+                    )}
+                    {c.status !== 'verified' && (
+                      <button type="button" disabled={busy === c.id} onClick={() => review(c, 'verified')}
+                        className="px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold disabled:opacity-50">
+                        Verify
+                      </button>
+                    )}
+                    {c.status !== 'rejected' && (
+                      <button type="button" disabled={busy === c.id} onClick={() => askReject(c)}
+                        className="px-2 py-1 rounded-md border border-rose-500/40 text-rose-300 hover:bg-rose-500/10 disabled:opacity-50">
+                        Not accepted
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">None added.</p>
+        )}
+      </div>
+
+      <div>
+        <div className={sectionTitle}><CalendarDays className="w-3.5 h-3.5" /> Usually available</div>
+        {summary.length ? (
+          <ul className="text-xs text-slate-300 space-y-0.5">
+            {summary.map((d) => <li key={d.day}><span className="text-slate-500 w-9 inline-block">{d.day}</span> {d.ranges.join(', ')}</li>)}
+          </ul>
+        ) : (
+          <p className="text-xs text-slate-500">Not set.</p>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <div className={sectionTitle}><CalendarOff className="w-3.5 h-3.5" /> Time off</div>
+          {data.time_off?.length ? (
+            <ul className="text-xs space-y-0.5">
+              {data.time_off.map((t) => (
+                <li key={t.id} className={t.status === 'approved' ? 'text-rose-200' : 'text-amber-200'}>
+                  {fmtDayRange(t.start_date, t.end_date)} · {t.status === 'approved' ? 'approved' : 'waiting for a decision'}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-slate-500">Nothing coming up.</p>
+          )}
+        </div>
+        {(data.emergency_contact_name || data.emergency_contact_phone) && (
+          <div>
+            <div className={sectionTitle}><HeartPulse className="w-3.5 h-3.5" /> Emergency contact</div>
+            <p className="text-xs text-slate-200">
+              {data.emergency_contact_name}
+              {data.emergency_contact_phone && (
+                <a href={`tel:${data.emergency_contact_phone}`} className="ml-2 text-emerald-300 hover:underline">{data.emergency_contact_phone}</a>
+              )}
+            </p>
           </div>
         )}
       </div>

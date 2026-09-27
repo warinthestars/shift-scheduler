@@ -21,7 +21,7 @@ function pickDefault(listing, prev) {
   if (!listing) return null;
   if (prev && listing.positions.some((p) => p.shift_id === prev)) return prev;
   if (listing.my_request) return listing.my_request.shift_id;
-  const open = listing.positions.filter((p) => p.status === 'OPEN');
+  const open = listing.positions.filter((p) => p.status === 'OPEN' && !(p.missing_certs || []).length);   // Phase 32
   return open.length === 1 ? open[0].shift_id : null;
 }
 
@@ -280,6 +280,18 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
         </div>
       )}
 
+      {listing.time_off && !isBooked && (
+        <div className={`mb-4 p-3 rounded-xl border text-xs flex items-start gap-2 ${
+          listing.time_off === 'approved' ? 'border-rose-700/60 bg-rose-950/40 text-rose-200' : 'border-amber-700/60 bg-amber-950/40 text-amber-200'}`}>
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            {listing.time_off === 'approved'
+              ? 'You have approved time off that day. Request it only if your plans changed.'
+              : 'You asked for time off that day. Request it only if your plans changed.'}
+          </span>
+        </div>
+      )}
+
       {blockedReason && (
         <div className="mb-4 p-3 rounded-xl border border-amber-700/60 bg-amber-950/40 text-amber-200 text-xs flex items-start gap-2">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
@@ -390,7 +402,8 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
               const ps = p.my_status ? String(p.my_status).toLowerCase() : null;
               const isMine = mine && mine.shift_id === p.shift_id;
               const locked = LOCKED_POSITION_STATUSES.includes(ps);
-              const disabled = !isMine && (full || locked || isBooked || listing.cancelled || listing.started);
+              const needsCerts = !isMine && !full && (p.missing_certs || []).length > 0;          // Phase 32
+              const disabled = !isMine && (full || locked || needsCerts || isBooked || listing.cancelled || listing.started);
               const active = selectedId === p.shift_id;
               const est = estPayText(p);
               return (
@@ -424,6 +437,12 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                         )}
                       </div>
                       {p.role_notes && <p className="text-[11px] text-slate-400 mt-1.5 whitespace-pre-line">{p.role_notes}</p>}
+                      {(p.required_certs || []).length > 0 && (
+                        <p className={`text-[11px] mt-1.5 inline-flex items-center gap-1 ${needsCerts ? 'text-amber-300 font-semibold' : 'text-slate-400'}`}>
+                          <Lock className="w-3 h-3" />
+                          {needsCerts ? `You need: ${p.missing_certs.join(', ')}` : `Requires: ${p.required_certs.join(', ')}`}
+                        </p>
+                      )}
                       {ps && (
                         <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
                           {ps === 'dropped' ? 'You dropped this' : `You: ${STATUS_LABELS[ps] || ps}`}
@@ -443,6 +462,14 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
               );
             })}
           </div>
+
+          {listing.positions.some((p) => p.status === 'OPEN' && (p.missing_certs || []).length > 0) && (
+            <p className="text-xs text-amber-200 bg-amber-950/30 border border-amber-800/40 rounded-lg p-2.5">
+              Some positions need certificates you haven't added yet.{' '}
+              <Link to="/profile?tab=certificates" onClick={onClose} className="font-bold underline hover:text-amber-100">Add them on your profile</Link>
+              , then come back to request.
+            </p>
+          )}
 
           {listing.positions.some((p) => p.est_pay_min !== null && p.est_pay_min !== undefined) && (
             <p className="text-[10px] text-slate-500">Estimates are hours × hourly rate, before tips and taxes.</p>

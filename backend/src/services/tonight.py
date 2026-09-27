@@ -21,7 +21,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import Shift, ShiftEvent, ShiftRequest, ShiftOffer, TimeEntry, User, Venue
+from src.models import Shift, ShiftEvent, ShiftRequest, ShiftOffer, TimeEntry, User, Venue, TimeOffRequest
+from src.services.team import get_venue_team
 from src.schemas import (
     TonightResponse, TonightEvent, TonightPosition, TonightPerson, TonightAlert, WeekDay, WeekEvent,
 )
@@ -288,7 +289,21 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
         we.unread += sum(1 for r in booked if (r.status or "").lower() in ("approved", "confirmed") and info_seen(r, s) is False)
         we.start_time = min(we.start_time, start)
         we.end_time = max(we.end_time, as_utc(s.end_time))
+    # Phase 31: who on the team has approved time off each day
+    team = {u.id: u for u in await get_venue_team(db, venue.id)}
+    if team:
+        last_day = today_local + timedelta(days=WEEK_DAYS - 1)
+        for t in (await db.execute(
+            select(TimeOffRequest).where(
+                TimeOffRequest.worker_id.in_(list(team)), TimeOffRequest.status == "approved",
+                TimeOffRequest.start_date <= last_day, TimeOffRequest.end_date >= today_local,
+            )
+        )).scalars().all():
+            for d in days:
+                if t.start_date.isoformat() <= d.date <= t.end_date.isoformat():
+                    d.time_off.append(_name(team[t.worker_id]))
     for d in days:
+        d.time_off.sort()
         d.events.sort(key=lambda e: e.start_time)
         d.capacity = sum(e.capacity for e in d.events if e.status != "draft")
         d.filled = sum(e.filled for e in d.events if e.status != "draft")

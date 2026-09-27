@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star } from 'lucide-react';
+import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star, Lock, CalendarOff } from 'lucide-react';
 import PayLabel from './PayLabel';
 import { fmtTimeRange } from '../utils/venueTime';
 import {
@@ -133,6 +133,11 @@ export default function EventListingCard({ listing, onOpen }) {
                   <ShieldCheck className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Needs approval" />
                 )}
                 <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
+                {!full && p.missing_certs?.length > 0 && (
+                  <span className="text-[10px] text-slate-400 inline-flex items-center gap-0.5 whitespace-nowrap" title={`Needs ${p.missing_certs.join(', ')}`}>
+                    <Lock className="w-3 h-3" /> needs a certificate
+                  </span>
+                )}
                 {p.my_status && (
                   <span className={`text-[10px] whitespace-nowrap ${p.my_status === 'dropped' ? 'text-rose-300' : 'text-amber-300'}`}>
                     • {p.my_status === 'dropped' ? 'you dropped' : 'you'}
@@ -153,6 +158,19 @@ export default function EventListingCard({ listing, onOpen }) {
           <div className="px-3 py-1.5 text-[11px] text-slate-400">+{extra} more position{extra === 1 ? '' : 's'}</div>
         )}
       </div>
+
+      {/* Phase 31: the viewer's own availability / time off */}
+      {listing.time_off && (
+        <p className={`mt-2 text-[11px] flex items-center gap-1 ${listing.time_off === 'approved' ? 'text-rose-300' : 'text-amber-300'}`}>
+          <CalendarOff className="w-3.5 h-3.5 flex-shrink-0" />
+          {listing.time_off === 'approved' ? 'You have time off that day' : 'You asked for time off that day'}
+        </p>
+      )}
+      {!listing.time_off && listing.availability === 'outside' && (
+        <p className="mt-2 text-[11px] text-slate-400 flex items-center gap-1">
+          <CalendarOff className="w-3.5 h-3.5 flex-shrink-0" /> Outside your usual availability
+        </p>
+      )}
 
       {listing.conflict && (
         <p className="mt-2 text-[11px] text-amber-300 flex items-center gap-1">
