@@ -291,7 +291,7 @@ export default function WorkerDashboard() {
       if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
       if (instantOnly && !l.any_instant) return false;
       if (hideRequested && l.my_request) return false;
-      if (fitsOnly && (l.availability === 'outside' || l.time_off === 'approved')) return false;   // Phase 31
+      if (fitsOnly && (l.availability === 'outside' || l.time_off === 'blocked')) return false;   // Phase 31 / 32.1
       return true;
     });
   }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested, fitsOnly]);

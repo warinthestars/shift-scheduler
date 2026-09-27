@@ -3,7 +3,7 @@ import { Phone, Mail, Star, ThumbsUp, ThumbsDown, Clock, Building2, StickyNote, 
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import ConfirmDialog from './ConfirmDialog';
-import { availabilitySummary, fmtDay, fmtDayRange } from '../utils/availability';
+import { availabilitySummary, fmtDay } from '../utils/availability';
 import { openProtectedFile } from '../utils/files';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
@@ -311,8 +311,10 @@ function ProfileExtras({ data, venueId, workerId, onReviewed, setConfirm }) {
           {data.time_off?.length ? (
             <ul className="text-xs space-y-0.5">
               {data.time_off.map((t) => (
-                <li key={t.id} className={t.status === 'approved' ? 'text-rose-200' : 'text-amber-200'}>
-                  {fmtDayRange(t.start_date, t.end_date)} · {t.status === 'approved' ? 'approved' : 'waiting for a decision'}
+                <li key={t.id} className="text-slate-200">
+                  {t.summary}
+                  {t.reason && <span className="text-slate-400"> · {t.reason}</span>}
+                  {t.conflicts?.length > 0 && <span className="block text-amber-300">Booked here then: {t.conflicts.join('; ')}</span>}
                 </li>
               ))}
             </ul>

@@ -281,13 +281,12 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
       )}
 
       {listing.time_off && !isBooked && (
-        <div className={`mb-4 p-3 rounded-xl border text-xs flex items-start gap-2 ${
-          listing.time_off === 'approved' ? 'border-rose-700/60 bg-rose-950/40 text-rose-200' : 'border-amber-700/60 bg-amber-950/40 text-amber-200'}`}>
+        <div className="mb-4 p-3 rounded-xl border text-xs flex items-start gap-2 border-amber-700/60 bg-amber-950/40 text-amber-200">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span>
-            {listing.time_off === 'approved'
-              ? 'You have approved time off that day. Request it only if your plans changed.'
-              : 'You asked for time off that day. Request it only if your plans changed.'}
+            This is during time you blocked off. You can still request it if your plans changed; managers can’t book you
+            into it themselves.{' '}
+            <Link to="/profile?tab=time-off" onClick={onClose} className="font-bold underline hover:text-amber-100">Your time off</Link>
           </span>
         </div>
       )}

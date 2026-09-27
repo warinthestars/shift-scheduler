@@ -42,10 +42,13 @@ export default function WeekAtGlance({ week = [], timeZone, onOpenEvent }) {
               <p className="text-[10px] text-slate-600 mt-1.5">{d.events.length ? 'Drafts only' : 'Nothing posted'}</p>
             )}
             {d.time_off?.length > 0 && (
-              <p className="mt-1.5 text-[10px] text-amber-200/90 flex items-start gap-1" title={`Approved time off: ${d.time_off.join(', ')}`}>
+              <div className="mt-1.5 text-[10px] text-amber-200/90 flex items-start gap-1" title={`Time off: ${d.time_off.join(', ')}`}>
                 <CalendarOff className="w-3 h-3 flex-shrink-0 mt-px" />
-                <span className="line-clamp-2">Off: {d.time_off.join(', ')}</span>
-              </p>
+                <ul className="min-w-0">
+                  {d.time_off.slice(0, 4).map((n) => <li key={n}>{n}</li>)}
+                  {d.time_off.length > 4 && <li className="text-amber-200/60">+{d.time_off.length - 4} more</li>}
+                </ul>
+              </div>
             )}
             <ul className="mt-2 space-y-1.5">
               {d.events.map((e) => (

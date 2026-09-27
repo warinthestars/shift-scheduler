@@ -549,23 +549,24 @@ CREATE TABLE worker_availability (
 );
 CREATE INDEX idx_worker_availability_worker ON worker_availability(worker_id);
 
-CREATE TABLE time_off_requests (
+-- Phase 32.1: time off is a block the worker sets (no approval). Managers can't book over it.
+CREATE TABLE time_off_blocks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    all_day BOOLEAN NOT NULL DEFAULT TRUE,
     start_date DATE NOT NULL,
-    end_date DATE NOT NULL,                                   -- inclusive
-    reason TEXT,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending',            -- pending | approved | denied | cancelled
-    decided_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    decided_venue_id UUID REFERENCES venues(id) ON DELETE SET NULL,
-    decision_note TEXT,
-    decided_at TIMESTAMPTZ,
+    end_date DATE,                                            -- inclusive; NULL = repeats with no end
+    start_local VARCHAR(5),                                   -- 'HH:MM' when not all day
+    end_local VARCHAR(5),                                     -- 'HH:MM' or '24:00'; at/before start = runs past midnight
+    repeat VARCHAR(20) NOT NULL DEFAULT 'none',               -- none | weekly | biweekly
+    weekdays SMALLINT[] NOT NULL DEFAULT '{}',                -- 0 = Monday ... 6 = Sunday (repeating blocks)
+    reason VARCHAR(200),                                      -- managers see this
+    private_note TEXT,                                        -- only the worker sees this
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_time_off_range CHECK (end_date >= start_date)
+    CONSTRAINT chk_time_off_block_range CHECK (end_date IS NULL OR end_date >= start_date)
 );
-CREATE INDEX idx_time_off_worker ON time_off_requests(worker_id);
-CREATE INDEX idx_time_off_status ON time_off_requests(status);
+CREATE INDEX idx_time_off_blocks_worker ON time_off_blocks(worker_id);
 
 -- ------------------------------------------------------------------------------
 -- Phase 32: Profile files & certifications

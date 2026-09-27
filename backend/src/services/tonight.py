@@ -15,13 +15,14 @@ build_tonight() returns, for one venue:
   week   : today + the next 6 days at a glance (drafts included, flagged)
 """
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import Shift, ShiftEvent, ShiftRequest, ShiftOffer, TimeEntry, User, Venue, TimeOffRequest
+from src.models import Shift, ShiftEvent, ShiftRequest, ShiftOffer, TimeEntry, User, Venue, TimeOffBlock
+from src.services.time_off import BlockSpec, occurs_on_day, day_label
 from src.services.team import get_venue_team
 from src.schemas import (
     TonightResponse, TonightEvent, TonightPosition, TonightPerson, TonightAlert, WeekDay, WeekEvent,
@@ -289,19 +290,24 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
         we.unread += sum(1 for r in booked if (r.status or "").lower() in ("approved", "confirmed") and info_seen(r, s) is False)
         we.start_time = min(we.start_time, start)
         we.end_time = max(we.end_time, as_utc(s.end_time))
-    # Phase 31: who on the team has approved time off each day
+    # Phase 32.1: who on the team has time off each day ("Sam Taylor" all day, "Sam Taylor (5:00 PM – 11:00 PM)" partial)
     team = {u.id: u for u in await get_venue_team(db, venue.id)}
     if team:
         last_day = today_local + timedelta(days=WEEK_DAYS - 1)
         for t in (await db.execute(
-            select(TimeOffRequest).where(
-                TimeOffRequest.worker_id.in_(list(team)), TimeOffRequest.status == "approved",
-                TimeOffRequest.start_date <= last_day, TimeOffRequest.end_date >= today_local,
+            select(TimeOffBlock).where(
+                TimeOffBlock.worker_id.in_(list(team)), TimeOffBlock.start_date <= last_day,
+                or_(TimeOffBlock.end_date.is_(None), TimeOffBlock.end_date >= today_local - timedelta(days=1)),
             )
         )).scalars().all():
+            spec = BlockSpec.of(t)
             for d in days:
-                if t.start_date.isoformat() <= d.date <= t.end_date.isoformat():
-                    d.time_off.append(_name(team[t.worker_id]))
+                if occurs_on_day(spec, date.fromisoformat(d.date)):
+                    label = day_label(spec)
+                    name = _name(team[t.worker_id])
+                    entry = f"{name} ({label})" if label else name
+                    if entry not in d.time_off:
+                        d.time_off.append(entry)
     for d in days:
         d.time_off.sort()
         d.events.sort(key=lambda e: e.start_time)

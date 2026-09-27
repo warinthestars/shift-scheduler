@@ -12,12 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import (
     User, Venue, VenueManager, VenueWhitelist, Shift, ShiftEvent, ShiftRequest,
-    WorkerAvailability, TimeOffRequest, WorkerCertification, UserFile,
+    WorkerAvailability, TimeOffBlock, WorkerCertification, UserFile,
 )
 from src.schemas import (
-    MyProfile, AvailabilityWindow, TimeOffItem, CertificationItem, CertTypeInfo,
+    MyProfile, AvailabilityWindow, TimeOffBlockItem, CertificationItem, CertTypeInfo,
 )
 from src.services.fit import CERT_TYPES, cert_label, tz_of, as_utc
+from src.services.time_off import BlockSpec, overlapping_block, summary as block_summary, is_over
 from src.services.team import WORKED_STATUSES, EXCLUDED_STATUSES
 from src.auth import normalize_role
 
@@ -28,7 +29,6 @@ MAX_CERT_BYTES = 5 * 1024 * 1024
 IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp")
 CERT_FILE_TYPES = IMAGE_TYPES + ("application/pdf",)
 MAX_WINDOWS = 21
-MAX_TIME_OFF_DAYS = 60
 
 
 def full_name(u: Optional[User]) -> str:
@@ -116,49 +116,73 @@ async def cert_items(db: AsyncSession, certs: List[WorkerCertification]) -> List
     return out
 
 
-async def time_off_items(db: AsyncSession, rows: List[TimeOffRequest], venue_id=None) -> List[TimeOffItem]:
-    """conflicts = booked shifts inside each range (only this venue's when venue_id is given)."""
-    if not rows:
-        return []
-    users, venues = await _names(
-        db, [r.worker_id for r in rows] + [r.decided_by_user_id for r in rows], [r.decided_venue_id for r in rows],
-    )
-    worker_ids = {r.worker_id for r in rows}
-    lo = min(r.start_date for r in rows) - timedelta(days=1)
-    hi = max(r.end_date for r in rows) + timedelta(days=2)
+CONFLICT_DAYS = 90
+
+
+async def block_conflicts(db: AsyncSession, worker_id, specs: List[BlockSpec], venue_id=None):
+    """Booked shifts in the next 90 days that overlap any of these blocks -> {block_id: [(ShiftRequest, Shift, Venue)]}.
+    Each shift is judged in its venue's time zone. Only this venue's shifts when venue_id is given."""
+    out = defaultdict(list)
+    if not specs:
+        return out
+    now = datetime.now(timezone.utc)
     q = (
-        select(ShiftRequest.worker_id, Shift, Venue)
+        select(ShiftRequest, Shift, Venue)
         .join(Shift, Shift.id == ShiftRequest.shift_id)
         .join(Venue, Venue.id == Shift.venue_id)
         .where(
-            ShiftRequest.worker_id.in_(worker_ids),
+            ShiftRequest.worker_id == worker_id,
             func.lower(ShiftRequest.status).in_(BOOKED_STATUSES),
-            Shift.start_time >= datetime(lo.year, lo.month, lo.day, tzinfo=timezone.utc),
-            Shift.start_time < datetime(hi.year, hi.month, hi.day, tzinfo=timezone.utc),
+            Shift.end_time > now,
+            Shift.start_time < now + timedelta(days=CONFLICT_DAYS),
         )
         .order_by(Shift.start_time.asc())
     )
     if venue_id is not None:
         q = q.where(Shift.venue_id == venue_id)
-    booked = defaultdict(list)
-    for wid, s, v in (await db.execute(q)).all():
-        booked[wid].append((s, v))
-    out = []
-    for r in rows:
-        conflicts = []
-        for s, v in booked.get(r.worker_id, []):
-            local = as_utc(s.start_time).astimezone(tz_of(v.timezone))
-            if r.start_date <= local.date() <= r.end_date:
-                label = f"{local.strftime('%a %b %-d')} · {s.role_type} · {s.title}"
-                conflicts.append(label if venue_id is not None else f"{label} ({v.name})")
-        out.append(TimeOffItem(
-            id=r.id, worker_id=r.worker_id, worker_name=full_name(users.get(r.worker_id)) or None,
-            start_date=r.start_date, end_date=r.end_date, reason=r.reason, status=r.status,
-            decision_note=r.decision_note, decided_at=r.decided_at,
-            decided_by_name=full_name(users.get(r.decided_by_user_id)) or None,
-            decided_venue_name=venues.get(r.decided_venue_id), created_at=r.created_at, conflicts=conflicts,
-        ))
+    for req, shift, venue in (await db.execute(q)).all():
+        tz = tz_of(venue.timezone)
+        for b in specs:
+            if overlapping_block([b], shift.start_time, shift.end_time, tz) is not None:
+                out[b.id].append((req, shift, venue))
     return out
+
+
+def conflict_label(shift: Shift, venue: Venue, with_venue: bool = True) -> str:
+    local = as_utc(shift.start_time).astimezone(tz_of(venue.timezone))
+    label = f"{local.strftime('%a %b %-d')} · {shift.role_type} · {shift.title}"
+    return f"{label} ({venue.name})" if with_venue else label
+
+
+async def block_items(
+    db: AsyncSession, rows: List[TimeOffBlock], *, owner: bool, venue_id=None, with_conflicts: bool = True,
+) -> List[TimeOffBlockItem]:
+    """owner=False hides the private note (managers' views). venue_id limits conflicts to that venue."""
+    if not rows:
+        return []
+    users, _ = await _names(db, [r.worker_id for r in rows], [])
+    today = today_utc()
+    specs = {r.id: BlockSpec.of(r) for r in rows}
+    conflicts = defaultdict(list)
+    if with_conflicts:
+        by_worker = defaultdict(list)
+        for r in rows:
+            by_worker[r.worker_id].append(specs[r.id])
+        for wid, sp in by_worker.items():
+            for bid, items in (await block_conflicts(db, wid, sp, venue_id=venue_id)).items():
+                conflicts[bid] = [conflict_label(sh, v, with_venue=venue_id is None) for _, sh, v in items]
+    return [
+        TimeOffBlockItem(
+            id=r.id, worker_id=r.worker_id, worker_name=full_name(users.get(r.worker_id)) or None,
+            all_day=bool(r.all_day), start_date=r.start_date, end_date=r.end_date,
+            start_local=r.start_local, end_local=r.end_local, repeat=r.repeat or "none",
+            weekdays=sorted(int(d) for d in (r.weekdays or [])), reason=r.reason,
+            private_note=r.private_note if owner else None,
+            summary=block_summary(specs[r.id], today), active=not is_over(specs[r.id], today),
+            conflicts=conflicts.get(r.id, []), created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 async def availability_of(db: AsyncSession, worker_id) -> List[AvailabilityWindow]:
@@ -171,12 +195,14 @@ async def availability_of(db: AsyncSession, worker_id) -> List[AvailabilityWindo
     ]
 
 
-async def upcoming_time_off(db: AsyncSession, worker_id, include_past_days: int = 0) -> List[TimeOffRequest]:
+async def upcoming_blocks(db: AsyncSession, worker_id, include_past_days: int = 0) -> List[TimeOffBlock]:
+    """Blocks that haven't ended (repeating blocks with no end always count), soonest first."""
+    since = today_utc() - timedelta(days=include_past_days)
     return (await db.execute(
-        select(TimeOffRequest).where(
-            TimeOffRequest.worker_id == worker_id,
-            TimeOffRequest.end_date >= today_utc() - timedelta(days=include_past_days),
-        ).order_by(TimeOffRequest.start_date.asc())
+        select(TimeOffBlock).where(
+            TimeOffBlock.worker_id == worker_id,
+            or_(TimeOffBlock.end_date.is_(None), TimeOffBlock.end_date >= since),
+        ).order_by(TimeOffBlock.start_date.asc(), TimeOffBlock.created_at.asc())
     )).scalars().all()
 
 
@@ -195,7 +221,7 @@ def profile_missing(user: User, has_availability: bool) -> List[str]:
 
 async def build_my_profile(db: AsyncSession, user: User) -> MyProfile:
     avail = await availability_of(db, user.id)
-    time_off = await time_off_items(db, list(await upcoming_time_off(db, user.id, include_past_days=30)))
+    time_off = await block_items(db, list(await upcoming_blocks(db, user.id, include_past_days=14)), owner=True)
     certs = await cert_items(db, list((await db.execute(
         select(WorkerCertification).where(WorkerCertification.worker_id == user.id)
     )).scalars().all()))

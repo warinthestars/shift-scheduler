@@ -802,13 +802,13 @@ async def person_profile(
     # Phase 31 + 32: profile, certificates, availability, time off. Private contact details only for
     # people connected to this venue (not a stranger found through search).
     from src.models import WorkerCertification
-    from src.services.profile import cert_items, time_off_items, availability_of, upcoming_time_off
+    from src.services.profile import cert_items, block_items, availability_of, upcoming_blocks
     connected = member.status != "none"
     certs = await cert_items(db, list((await db.execute(
         select(WorkerCertification).where(WorkerCertification.worker_id == worker_id)
     )).scalars().all()))
-    time_off = [t for t in await time_off_items(db, list(await upcoming_time_off(db, worker_id)), venue_id=venue_id)
-                if t.status in ("pending", "approved")]
+    # Phase 32.1: their time-off blocks (reason only; the private note never leaves the worker's own screens)
+    time_off = await block_items(db, list(await upcoming_blocks(db, worker_id)), owner=False, venue_id=venue_id)
     return WorkerProfile(
         member=member, history=history, pending_here=pending_here, other_venues=other_venues,
         bio=user.bio, avatar_url=user.avatar_url, skills=list(user.skills or []),

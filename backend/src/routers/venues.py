@@ -954,8 +954,11 @@ async def get_venue_events(
             person.cert_issues = f.missing(needed, s.start_time, s.end_time, vtz) + [
                 f"{label} not verified" for label in unverified_certs(needed, f.certs)
             ]
-            if person.status in ("approved", "confirmed"):
-                person.time_off = f.off(s.start_time, s.end_time, vtz)
+            if person.status in ("approved", "confirmed"):                          # Phase 32.1
+                block = f.off_block(s.start_time, s.end_time, vtz)
+                if block is not None:
+                    person.time_off = "blocked"
+                    person.time_off_reason = block.reason
 
     # Phase 26.2: has each booked person read the latest info?
     for s in shifts:

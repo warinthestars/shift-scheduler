@@ -487,7 +487,8 @@ class RosterPerson(BaseModel):
     previous_drop_at: Optional[datetime] = None  # Phase 29.4: came back / asking back after a drop
     rebook_reason: Optional[str] = None          # Phase 29.4
     cert_issues: List[str] = []                  # Phase 32: e.g. "Alcohol server card (expired)", "Food handler card not verified"
-    time_off: Optional[str] = None               # Phase 31: approved | pending time off on this shift's day(s)
+    time_off: Optional[str] = None               # Phase 32.1: 'blocked' when a time-off block overlaps this shift
+    time_off_reason: Optional[str] = None        # Phase 32.1: the block's reason (managers see it)
 
 
 class EventPosition(BaseModel):
@@ -958,7 +959,7 @@ class EventListing(BaseModel):
     can_request: bool = True
     dropped_here: Optional[datetime] = None           # Phase 29.4: viewer dropped a position in this event -> asking back needs a reason + approval
     availability: str = "not_set"                     # Phase 31: fits | outside | not_set (the viewer's weekly availability)
-    time_off: Optional[str] = None                    # Phase 31: approved | pending time off that day
+    time_off: Optional[str] = None                    # Phase 32.1: 'blocked' = overlaps one of the viewer's time-off blocks
 
 
 class PositionRequestBody(BaseModel):
@@ -1257,7 +1258,8 @@ class AssignCandidate(BaseModel):
     dropped_at: Optional[datetime] = None    # Phase 29.4: dropped this event; Assign needs a reason, offers are skipped
     drop_reason: Optional[str] = None
     availability: str = "not_set"            # Phase 31: fits | outside | not_set
-    time_off: Optional[str] = None           # Phase 31: approved | pending
+    time_off: Optional[str] = None           # Phase 32.1: 'blocked' (can't be assigned / offered)
+    time_off_reason: Optional[str] = None    # Phase 32.1: the block's reason
     missing_certs: List[str] = []            # Phase 32: labels (offers skip them; Assign asks first)
     unverified_certs: List[str] = []         # Phase 32: on file but no manager has checked them
 
@@ -1378,7 +1380,7 @@ class WorkerProfile(BaseModel):
     emergency_contact_phone: Optional[str] = None
     certifications: List["CertificationItem"] = []
     availability: List["AvailabilityWindow"] = []                 # Phase 31
-    time_off: List["TimeOffItem"] = []                            # upcoming pending / approved
+    time_off: List["TimeOffBlockItem"] = []                       # Phase 32.1: upcoming blocks (no private notes)
 
 
 class TeamSummary(BaseModel):
@@ -1734,7 +1736,7 @@ class WeekDay(BaseModel):
     events: List[WeekEvent] = []
     capacity: int = 0
     filled: int = 0
-    time_off: List[str] = []                     # Phase 31: team members with approved time off that day
+    time_off: List[str] = []                     # Phase 32.1: team members with time off that day ("Sam Taylor (5:00 PM – 11:00 PM)")
 
 
 class TonightResponse(BaseModel):
@@ -1766,31 +1768,36 @@ class AvailabilityUpdate(BaseModel):
     windows: List[AvailabilityWindow] = []           # [] = clear (no availability set)
 
 
-class TimeOffCreate(BaseModel):
+class TimeOffBlockInput(BaseModel):
+    """Phase 32.1: a block of time off the worker sets. No approval."""
+    all_day: bool = True
     start_date: date
-    end_date: date
-    reason: Optional[str] = Field(None, max_length=500)
+    end_date: Optional[date] = None              # one-off: last day (default = start_date). Repeating: until (None = no end)
+    start_local: Optional[str] = None            # 'HH:MM' when all_day is False
+    end_local: Optional[str] = None              # 'HH:MM' or '24:00'; at/before start = runs past midnight
+    repeat: str = "none"                         # none | weekly | biweekly
+    weekdays: List[int] = []                     # repeating: 0 = Monday ... 6 = Sunday (default: start_date's weekday)
+    reason: Optional[str] = Field(None, max_length=200)          # managers see this
+    private_note: Optional[str] = Field(None, max_length=500)    # only the worker sees this
 
 
-class TimeOffItem(BaseModel):
+class TimeOffBlockItem(BaseModel):
     id: UUID
     worker_id: UUID
     worker_name: Optional[str] = None
+    all_day: bool = True
     start_date: date
-    end_date: date
+    end_date: Optional[date] = None
+    start_local: Optional[str] = None
+    end_local: Optional[str] = None
+    repeat: str = "none"
+    weekdays: List[int] = []
     reason: Optional[str] = None
-    status: str                                      # pending | approved | denied | cancelled
-    decision_note: Optional[str] = None
-    decided_at: Optional[datetime] = None
-    decided_by_name: Optional[str] = None
-    decided_venue_name: Optional[str] = None
+    private_note: Optional[str] = None           # only in the worker's own views
+    summary: str = ""                            # "Every Tue & Thu, 5:00 PM – 11:00 PM"
+    active: bool = True                          # False once it's over
+    conflicts: List[str] = []                    # booked shifts inside the block (next 90 days)
     created_at: datetime
-    conflicts: List[str] = []                        # booked shifts in the range ("Sat Oct 3 · Bartender · Gala")
-
-
-class TimeOffDecision(BaseModel):
-    approve: bool
-    note: Optional[str] = Field(None, max_length=500)
 
 
 # ------------------------------------------------------------------------------
@@ -1854,7 +1861,7 @@ class MyProfile(BaseModel):
     emergency_contact_phone: Optional[str] = None
     discoverable: str = "private"
     availability: List[AvailabilityWindow] = []
-    time_off: List[TimeOffItem] = []
+    time_off: List[TimeOffBlockItem] = []        # Phase 32.1
     certifications: List[CertificationItem] = []
     cert_types: List[CertTypeInfo] = []
     missing: List[str] = []                          # phone | photo | emergency_contact | availability

@@ -196,8 +196,8 @@ export default function EventRosterModal({
                                 </div>
                               ))}
                               {p.time_off && (
-                                <div className={`text-[10px] inline-flex items-center gap-1 ${p.time_off === 'approved' ? 'text-rose-300' : 'text-amber-300'}`}>
-                                  <AlertTriangle className="w-3 h-3" /> {p.time_off === 'approved' ? 'Has approved time off that day' : 'Asked for time off that day'}
+                                <div className="text-[10px] inline-flex items-center gap-1 text-rose-300">
+                                  <AlertTriangle className="w-3 h-3" /> Has time off during this shift{p.time_off_reason ? ` · “${p.time_off_reason}”` : ''}
                                 </div>
                               )}
                               <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">

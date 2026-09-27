@@ -17,7 +17,7 @@ from src.services.booking import withdraw_other_pending_in_event
 from src.services import notify_events
 from src.services import activity
 from src.services.team import get_transfer_candidates
-from src.services.booking import require_certs   # Phase 32
+from src.services.booking import require_certs, refuse_if_blocked   # Phase 32 / 32.1
 
 router = APIRouter(prefix="/api/transfers", tags=["Shift Transfers"])
 
@@ -70,6 +70,7 @@ async def propose_shift_transfer(
 
     # Phase 32: the teammate needs the position's certificates
     await require_certs(db, to_worker, shift, you=False, who=f"{to_worker.first_name or 'They'}".strip())
+    await refuse_if_blocked(db, to_worker, shift, who=f"{to_worker.first_name or 'They'}".strip())   # Phase 32.1
 
     # 4. Check if there's already an active transfer for this shift
     existing_active = await db.scalar(

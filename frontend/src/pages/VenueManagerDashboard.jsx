@@ -20,7 +20,6 @@ import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
 import { WorkerProfileModal } from '../components/WorkerProfilePanel';
 import TonightBoard from '../components/manager/TonightBoard';
 import NeedsYouStrip from '../components/manager/NeedsYouStrip';
-import TimeOffCard from '../components/manager/TimeOffCard';
 
 /**
  * Venue manager dashboard.
@@ -45,7 +44,6 @@ export default function VenueManagerDashboard() {
 
   const [pendingRequests, setPendingRequests] = useState([]);
   const [pendingTransfers, setPendingTransfers] = useState([]);
-  const [pendingTimeOff, setPendingTimeOff] = useState([]);   // Phase 31
   const [currentVenueId, setCurrentVenueId] = useState(initialVenue);
   const [venueDetails, setVenueDetails] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -104,14 +102,12 @@ export default function VenueManagerDashboard() {
         return;
       }
 
-      const [requestsRes, venueRes, transfersRes, reliabilityRes, timeOffRes] = await Promise.all([
+      const [requestsRes, venueRes, transfersRes, reliabilityRes] = await Promise.all([
         api.get(`/venues/${activeId}/requests/pending`),
         api.get(`/venues/${activeId}`),
         api.get(`/transfers/venue/${activeId}/pending`).catch(() => ({ data: [] })),
         api.get(`/venues/${activeId}/reliability`).catch(() => ({ data: {} })),
-        api.get(`/venues/${activeId}/time-off`).catch(() => ({ data: [] })),          // Phase 31
       ]);
-      setPendingTimeOff(timeOffRes.data || []);
 
       setPendingRequests(requestsRes.data || []);
       setVenueDetails(venueRes.data || null);
@@ -494,7 +490,6 @@ export default function VenueManagerDashboard() {
         <NeedsYouStrip
           requests={pendingRequests.length}
           transfers={pendingTransfers.length}
-          timeOff={pendingTimeOff.length}
           late={tonightSummary.late}
           openSpots={tonightSummary.openSpots}
           onJump={scrollTo}
@@ -564,15 +559,6 @@ export default function VenueManagerDashboard() {
                 onDeny={handleDenyTransfer}
               />
             )}
-            <TimeOffCard
-              venueId={currentVenueId}
-              items={pendingTimeOff}
-              onOpenWorker={setProfileWorkerId}
-              onDone={(message, type = 'success') => {
-                setNotification({ type, message });
-                fetchVenueData(currentVenueId);
-              }}
-            />
             <ActivityFeed
               venueId={currentVenueId}
               refreshKey={boardRefreshKey}

@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import AsyncSessionLocal
-from src.models import VenueActivity, Shift, ShiftEvent, ShiftRequest, User, Venue, TimeOffRequest
+from src.models import VenueActivity, Shift, ShiftEvent, ShiftRequest, User, Venue
 
 logger = logging.getLogger("shiftboard.activity")
 
@@ -62,10 +62,7 @@ CATEGORY = {
     "no_show": "alerts",                # Phase 30
     "manager_clock_in": "alerts",
     "unfilled_soon": "alerts",
-    "time_off_requested": "team",       # Phase 31
-    "time_off_approved": "team",
-    "time_off_denied": "team",
-    "time_off_cancelled": "team",
+    "time_off_conflict": "alerts",      # Phase 32.1: a worker blocked off time they're booked for
     "cert_verified": "team",            # Phase 32
     "cert_rejected": "team",
 }
@@ -215,38 +212,3 @@ async def _for_venue(db: AsyncSession, kind: str, venue_id, actor_id, text: str)
 
 async def for_venue(kind: str, venue_id, actor_id=None, text: str = "") -> None:
     await _run(kind, _for_venue, kind, venue_id, actor_id, text)
-
-
-# ---------------------------------------------------------------------------------------------
-# Phase 31: time off (logged at every team venue, or the deciding venue for decisions)
-# ---------------------------------------------------------------------------------------------
-def _range_text(t: TimeOffRequest) -> str:
-    a = t.start_date.strftime("%a %b %-d")
-    return a if t.end_date == t.start_date else f"{a} – {t.end_date.strftime('%a %b %-d')}"
-
-
-async def _for_time_off(db: AsyncSession, kind: str, time_off_id, actor_id, venue_id) -> None:
-    from src.services.profile import team_venue_ids      # local import: profile imports this module's siblings
-    t = await db.scalar(select(TimeOffRequest).where(TimeOffRequest.id == time_off_id))
-    if t is None:
-        return
-    worker = await db.scalar(select(User).where(User.id == t.worker_id))
-    name = person(worker)
-    when = _range_text(t)
-    text = {
-        "time_off_requested": f"{name} asked for time off: {when}",
-        "time_off_approved": f"Approved {name}'s time off: {when}",
-        "time_off_denied": f"Declined {name}'s time off: {when}",
-        "time_off_cancelled": f"{name} cancelled their time off: {when}",
-    }.get(kind, f"{name}: {when}")
-    if kind == "time_off_requested" and t.reason:
-        text += f" · {t.reason}"
-    if kind in ("time_off_approved", "time_off_denied") and t.decision_note:
-        text += f" · {t.decision_note}"
-    venues = [venue_id] if venue_id else sorted(await team_venue_ids(db, t.worker_id), key=str)
-    for v in venues:
-        await record_in(db, v, kind, text, actor_id=actor_id, worker_id=t.worker_id)
-
-
-async def for_time_off(kind: str, time_off_id, actor_id=None, venue_id=None) -> None:
-    await _run(kind, _for_time_off, kind, time_off_id, actor_id, venue_id)

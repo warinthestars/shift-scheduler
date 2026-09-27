@@ -542,55 +542,44 @@ async def shift_dropped(request_id) -> None:
 
 
 # ---------------------------------------------------------------------------------------------
-# Phase 31: time off   /   Phase 32: certificates
+# Phase 32.1: time-off blocks   /   Phase 32: certificates
 # ---------------------------------------------------------------------------------------------
 def _days_text(t) -> str:
     a = t.start_date.strftime("%a %b %-d")
     return a if t.end_date == t.start_date else f"{a} – {t.end_date.strftime('%a %b %-d')}"
 
 
-async def _time_off_requested(db: AsyncSession, time_off_id) -> None:
-    from src.models import TimeOffRequest
-    from src.services.profile import team_venue_ids, time_off_items
-    t = await db.scalar(select(TimeOffRequest).where(TimeOffRequest.id == time_off_id))
-    if t is None:
+async def _time_off_conflicts(db: AsyncSession, block_id) -> None:
+    """Phase 32.1: a worker blocked off time that overlaps shifts they're booked on.
+    Tells each venue's managers (once per block version per shift) and logs it; the booking itself is untouched."""
+    from src.models import TimeOffBlock
+    from src.services.time_off import BlockSpec, summary
+    from src.services.profile import block_conflicts, conflict_label
+    from src.services.activity import record_in
+    b = await db.scalar(select(TimeOffBlock).where(TimeOffBlock.id == block_id))
+    if b is None:
         return
-    worker = await db.scalar(select(User).where(User.id == t.worker_id))
-    for venue_id in sorted(await team_venue_ids(db, t.worker_id), key=str):
-        item = (await time_off_items(db, [t], venue_id=venue_id))[0]
-        body = f"{_days_text(t)}." + (f" “{t.reason}”" if t.reason else "")
-        if item.conflicts:
-            body += f"\nBooked here then: {'; '.join(item.conflicts[:3])}"
-        await notify_in(
-            db, await manager_ids(db, venue_id), "time_off_request",
-            f"{person(worker)} asked for time off", body,
-            manager_link(venue_id), venue_id=venue_id, dedupe_key=f"timeoff:{t.id}",
+    spec = BlockSpec.of(b)
+    worker = await db.scalar(select(User).where(User.id == b.worker_id))
+    stamp = int(_as_utc(b.updated_at).timestamp() * 1000) if b.updated_at else 0
+    for req, shift, venue in (await block_conflicts(db, b.worker_id, [spec])).get(b.id, []):
+        what = conflict_label(shift, venue, with_venue=False)
+        why = f" · “{b.reason}”" if b.reason else ""
+        sent = await notify_in(
+            db, await manager_ids(db, venue.id), "time_off_conflict",
+            f"{person(worker)} blocked off time they're booked for",
+            f"{what}\nTheir time off: {summary(spec)}{why}\nThey're still booked. Talk to them, or find cover.",
+            manager_link(venue.id, shift.event_id), venue_id=venue.id, event_id=shift.event_id, request_id=req.id,
+            dedupe_key=f"tob:{b.id}:{shift.id}:{stamp}",
         )
+        if sent:
+            await record_in(db, venue.id, "time_off_conflict",
+                            f"{person(worker)} blocked off time during their shift: {what}{why}",
+                            event_id=shift.event_id, request_id=req.id, worker_id=b.worker_id)
 
 
-async def time_off_requested(time_off_id) -> None:
-    await _run("time_off_requested", _time_off_requested, time_off_id)
-
-
-async def _time_off_decided(db: AsyncSession, time_off_id) -> None:
-    from src.models import TimeOffRequest
-    t = await db.scalar(select(TimeOffRequest).where(TimeOffRequest.id == time_off_id))
-    if t is None or t.status not in ("approved", "denied"):
-        return
-    venue = await db.scalar(select(Venue).where(Venue.id == t.decided_venue_id)) if t.decided_venue_id else None
-    approved = t.status == "approved"
-    body = f"{_days_text(t)}" + (f" · {venue.name}" if venue else "") + "."
-    if t.decision_note:
-        body += f"\n“{t.decision_note}”"
-    await notify_in(
-        db, [t.worker_id], "time_off_decided",
-        "Time off approved" if approved else "Time off not approved", body,
-        "/profile?tab=time-off", venue_id=t.decided_venue_id, dedupe_key=f"timeoff-d:{t.id}",
-    )
-
-
-async def time_off_decided(time_off_id) -> None:
-    await _run("time_off_decided", _time_off_decided, time_off_id)
+async def time_off_conflicts(block_id) -> None:
+    await _run("time_off_conflicts", _time_off_conflicts, block_id)
 
 
 async def _cert_reviewed(db: AsyncSession, cert_id) -> None:

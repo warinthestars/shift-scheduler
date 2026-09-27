@@ -5,9 +5,9 @@ Phase 31 + 32: Does this person fit this shift?
                   Weekly windows are wall-clock times WHERE THEY WORK, so a shift is judged in its venue's
                   time zone. A shift fits when it sits entirely inside one window. Windows may run past
                   midnight (end earlier than start, or '24:00'). No windows at all = 'not_set' (never warns).
-  time off      - 'approved' | 'pending' | None
-                  A request covers whole local days (start_date..end_date inclusive). A shift overlaps when
-                  any local day it touches is covered (a shift ending exactly at midnight doesn't touch the next day).
+  time off      - 'blocked' | None   (Phase 32.1)
+                  The worker's time-off blocks (services/time_off.py): full or partial days, one-off or repeating.
+                  A shift is 'blocked' when it overlaps any occurrence. Nobody approves blocks.
   certificates  - labels of what's missing for a position, e.g. ["Alcohol server card"]
                   A certificate counts when it isn't rejected and hasn't expired by the shift's local date.
                   Unverified certificates count (managers see the "not verified" badge).
@@ -20,12 +20,11 @@ from datetime import datetime, date, time, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import WorkerAvailability, TimeOffRequest, WorkerCertification, VenuePosition
-
-ACTIVE_TIME_OFF = ("pending", "approved")
+from src.models import WorkerAvailability, TimeOffBlock, WorkerCertification, VenuePosition
+from src.services.time_off import BlockSpec, overlapping_block
 
 # The certificate catalogue. Keys are stored in VARCHAR columns (no DB enum).
 CERT_TYPES: Dict[str, dict] = {
@@ -97,17 +96,6 @@ def shift_local_days(start: datetime, end: datetime, tz: ZoneInfo) -> Tuple[date
     return s_loc.date(), max(s_loc.date(), last)
 
 
-def time_off_hit(requests: List[Tuple[date, date, str]], start: datetime, end: datetime, tz: ZoneInfo) -> Optional[str]:
-    first, last = shift_local_days(start, end, tz)
-    hit = None
-    for d0, d1, st in requests:
-        if d0 <= last and d1 >= first:
-            if st == "approved":
-                return "approved"
-            hit = "pending"
-    return hit
-
-
 def missing_certs(required: Iterable[str], held: Dict[str, Tuple[str, Optional[date]]], on_day: date) -> List[str]:
     """required: cert keys. held: key -> (status, expires_on). Returns labels of what's missing / expired / rejected."""
     out = []
@@ -129,14 +117,17 @@ def unverified_certs(required: Iterable[str], held: Dict[str, Tuple[str, Optiona
 @dataclass
 class WorkerFit:
     windows: List[Tuple[int, str, str]] = field(default_factory=list)
-    time_off: List[Tuple[date, date, str]] = field(default_factory=list)
+    time_off: List[BlockSpec] = field(default_factory=list)          # Phase 32.1: time-off blocks
     certs: Dict[str, Tuple[str, Optional[date]]] = field(default_factory=dict)
 
     def availability(self, start, end, tz) -> str:
         return availability_fit(self.windows, start, end, tz)
 
+    def off_block(self, start, end, tz) -> Optional[BlockSpec]:
+        return overlapping_block(self.time_off, start, end, tz)
+
     def off(self, start, end, tz) -> Optional[str]:
-        return time_off_hit(self.time_off, start, end, tz)
+        return "blocked" if self.off_block(start, end, tz) is not None else None
 
     def missing(self, required, start, end, tz) -> List[str]:
         return missing_certs(required, self.certs, shift_local_days(start, end, tz)[1])
@@ -155,11 +146,11 @@ async def load_fit(db: AsyncSession, worker_ids: Iterable) -> Dict:
         out[a.worker_id].windows.append((int(a.weekday), a.start_local, a.end_local))
     today = datetime.now(timezone.utc).date() - timedelta(days=1)
     for t in (await db.execute(
-        select(TimeOffRequest).where(
-            TimeOffRequest.worker_id.in_(ids), TimeOffRequest.status.in_(ACTIVE_TIME_OFF), TimeOffRequest.end_date >= today,
+        select(TimeOffBlock).where(
+            TimeOffBlock.worker_id.in_(ids), or_(TimeOffBlock.end_date.is_(None), TimeOffBlock.end_date >= today),
         )
     )).scalars().all():
-        out[t.worker_id].time_off.append((t.start_date, t.end_date, t.status))
+        out[t.worker_id].time_off.append(BlockSpec.of(t))
     for c in (await db.execute(select(WorkerCertification).where(WorkerCertification.worker_id.in_(ids)))).scalars().all():
         out[c.worker_id].certs[c.cert_type] = (c.status, c.expires_on)
     return out

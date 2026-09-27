@@ -78,6 +78,25 @@ async def require_certs(db: AsyncSession, worker: User, shift: Shift, you: bool 
         raise HTTPException(status_code=400, detail=f"{who or 'They'} can't take this: {shift.role_type}{where} needs {', '.join(missing)}.")
 
 
+async def refuse_if_blocked(db: AsyncSession, worker: User, shift: Shift, who: str = "") -> None:
+    """Phase 32.1: nobody else can book a worker into their own time-off block (manager assign, hand-offs).
+    A waiting request the worker made themselves for this position is their choice, so approving it is allowed."""
+    own_request = await db.scalar(
+        select(ShiftRequest.id).where(
+            ShiftRequest.shift_id == shift.id, ShiftRequest.worker_id == worker.id,
+            func.lower(ShiftRequest.status).in_(PENDING_STATUSES),
+        )
+    )
+    if own_request is not None:
+        return
+    venue = await db.scalar(select(Venue).where(Venue.id == shift.venue_id))
+    block = (await load_fit(db, [worker.id]))[worker.id].off_block(
+        shift.start_time, shift.end_time, tz_of(venue.timezone if venue is not None else None))
+    if block is not None:
+        why = f" ({block.reason})" if block.reason else ""
+        raise HTTPException(status_code=409, detail=f"{who or 'They'} blocked off this time{why}. Ask them to change their time off first.")
+
+
 def as_utc(dt: datetime) -> datetime:
     if isinstance(dt, str):
         dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))

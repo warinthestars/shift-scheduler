@@ -1,5 +1,7 @@
 """
 Phase 31 + 32: Profile, availability, time off and certificates.
+Phase 32.1: time off is a BLOCK the worker sets (full / partial day, one-off / weekly / every other week).
+No approval. Managers can't assign or offer shifts that overlap it.
 
 Worker (signed in, their own data):
   GET    /api/me/profile                              everything on the Profile page
@@ -7,8 +9,9 @@ Worker (signed in, their own data):
   POST   /api/me/avatar            (multipart file)    upload a profile photo (JPG/PNG/WebP, max 2 MB)
   DELETE /api/me/avatar
   PUT    /api/me/availability                         replace the weekly windows ([] = not set)
-  POST   /api/me/time-off                             ask for days off (goes to the managers of their team venues)
-  POST   /api/me/time-off/{id}/cancel                 withdraw a pending request / cancel approved time off
+  POST   /api/me/time-off                             add a time-off block (returns it with any booked shifts it overlaps)
+  PUT    /api/me/time-off/{id}                        change a block
+  DELETE /api/me/time-off/{id}                        remove a block
   POST   /api/me/files             (multipart file)    upload a certificate scan (JPG/PNG/WebP/PDF, max 5 MB)
   PUT    /api/me/certifications/{cert_type}           add or update a certificate (changes reset verification)
   DELETE /api/me/certifications/{cert_type}
@@ -18,8 +21,6 @@ Files:
   GET    /api/files/{file_id}                         certificate scans: the owner, managers of venues they're connected to, admins
 
 Managers:
-  GET    /api/venues/{venue_id}/time-off?scope=pending|upcoming   the venue team's requests (with clashes at this venue)
-  POST   /api/time-off/{id}/decide?venue_id=          approve / deny (any manager of one of the worker's team venues)
   POST   /api/venues/{venue_id}/people/{worker_id}/certifications/{cert_id}/review   verify / reject
 """
 import logging
@@ -33,21 +34,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import (
-    User, Venue, WorkerAvailability, TimeOffRequest, WorkerCertification, UserFile,
+    User, Venue, WorkerAvailability, TimeOffBlock, WorkerCertification, UserFile,
 )
 from src.schemas import (
-    MyProfile, MyProfileUpdate, AvailabilityUpdate, AvailabilityWindow, TimeOffCreate, TimeOffItem,
-    TimeOffDecision, CertificationUpsert, CertificationItem, CertReview, FileUploadResult,
+    MyProfile, MyProfileUpdate, AvailabilityUpdate, AvailabilityWindow, TimeOffBlockInput, TimeOffBlockItem,
+    CertificationUpsert, CertificationItem, CertReview, FileUploadResult,
 )
 from src.auth import get_current_user, require_manager_or_admin, normalize_role
 from src.routers.venues import verify_venue_manager_access
 from src.services.fit import CERT_TYPES, parse_hm, cert_label
 from src.services.messaging import normalize_phone
-from src.services.team import get_venue_team
+from src.services import time_off as blocks
 from src.services.profile import (
-    build_my_profile, time_off_items, cert_items, team_venue_ids, related_venue_ids, managed_venue_ids,
-    may_view_worker, read_upload, avatar_url, today_utc, full_name,
-    IMAGE_TYPES, CERT_FILE_TYPES, MAX_AVATAR_BYTES, MAX_CERT_BYTES, MAX_WINDOWS, MAX_TIME_OFF_DAYS,
+    build_my_profile, block_items, cert_items, related_venue_ids,
+    may_view_worker, read_upload, avatar_url, today_utc,
+    IMAGE_TYPES, CERT_FILE_TYPES, MAX_AVATAR_BYTES, MAX_CERT_BYTES, MAX_WINDOWS,
 )
 from src.services import notify_events, activity
 
@@ -191,132 +192,86 @@ async def set_availability(
 
 
 # ---------------------------------------------------------------------------------------------
-# Time off (worker)
+# Time off blocks (Phase 32.1)
 # ---------------------------------------------------------------------------------------------
-@router.post("/api/me/time-off", response_model=TimeOffItem, status_code=status.HTTP_201_CREATED)
-async def request_time_off(
-    body: TimeOffCreate,
+async def _save_block(db: AsyncSession, user: User, body: TimeOffBlockInput, row: Optional[TimeOffBlock]) -> TimeOffBlock:
+    try:
+        end_date, start_local, end_local, weekdays = blocks.validate(
+            all_day=body.all_day, start_date=body.start_date, end_date=body.end_date,
+            start_local=body.start_local, end_local=body.end_local, repeat=body.repeat, weekdays=body.weekdays,
+            today=today_utc(), is_new=row is None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if row is None:
+        count = await db.scalar(select(func.count(TimeOffBlock.id)).where(TimeOffBlock.worker_id == user.id))
+        if (count or 0) >= blocks.MAX_BLOCKS:
+            raise HTTPException(status_code=400, detail=f"You can have up to {blocks.MAX_BLOCKS} time-off blocks. Remove some old ones first.")
+    try:
+        now = datetime.now(timezone.utc)
+        if row is None:
+            row = TimeOffBlock(worker_id=user.id, created_at=now)
+            db.add(row)
+        row.all_day = bool(body.all_day)
+        row.start_date = body.start_date
+        row.end_date = end_date
+        row.start_local = start_local
+        row.end_local = end_local
+        row.repeat = body.repeat
+        row.weekdays = weekdays
+        row.reason = _clean(body.reason)
+        row.private_note = _clean(body.private_note)
+        row.updated_at = now
+        await db.commit()
+        await db.refresh(row)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Could not save your time off: {e}")
+    return row
+
+
+@router.post("/api/me/time-off", response_model=TimeOffBlockItem, status_code=status.HTTP_201_CREATED)
+async def add_time_off(
+    body: TimeOffBlockInput,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if body.end_date < body.start_date:
-        raise HTTPException(status_code=400, detail="The last day can't be before the first day.")
-    if body.start_date < today_utc() - timedelta(days=1):
-        raise HTTPException(status_code=400, detail="Time off has to start today or later.")
-    if (body.end_date - body.start_date).days + 1 > MAX_TIME_OFF_DAYS:
-        raise HTTPException(status_code=400, detail=f"Ask for up to {MAX_TIME_OFF_DAYS} days at a time.")
-    overlap = await db.scalar(
-        select(TimeOffRequest.id).where(
-            TimeOffRequest.worker_id == current_user.id,
-            TimeOffRequest.status.in_(("pending", "approved")),
-            TimeOffRequest.start_date <= body.end_date,
-            TimeOffRequest.end_date >= body.start_date,
-        ).limit(1)
-    )
-    if overlap:
-        raise HTTPException(status_code=409, detail="You already asked for time off on some of these days.")
-    try:
-        now = datetime.now(timezone.utc)
-        t = TimeOffRequest(worker_id=current_user.id, start_date=body.start_date, end_date=body.end_date,
-                           reason=_clean(body.reason), status="pending", created_at=now, updated_at=now)
-        db.add(t)
-        await db.commit()
-        await db.refresh(t)
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not send your request: {e}")
-    await notify_events.time_off_requested(t.id)
-    await activity.for_time_off("time_off_requested", t.id, current_user.id)
-    return (await time_off_items(db, [t]))[0]
+    row = await _save_block(db, current_user, body, None)
+    await notify_events.time_off_conflicts(row.id)          # managers of venues where it overlaps a booked shift
+    return (await block_items(db, [row], owner=True))[0]
 
 
-@router.post("/api/me/time-off/{time_off_id}/cancel", response_model=TimeOffItem)
-async def cancel_time_off(
-    time_off_id: UUID,
+@router.put("/api/me/time-off/{block_id}", response_model=TimeOffBlockItem)
+async def update_time_off(
+    block_id: UUID,
+    body: TimeOffBlockInput,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    t = await db.scalar(select(TimeOffRequest).where(TimeOffRequest.id == time_off_id, TimeOffRequest.worker_id == current_user.id))
-    if t is None:
-        raise HTTPException(status_code=404, detail="Request not found.")
-    if t.status not in ("pending", "approved"):
-        raise HTTPException(status_code=400, detail="This request is already closed.")
-    if t.end_date < today_utc():
-        raise HTTPException(status_code=400, detail="That time off is already over.")
-    was = t.status
-    try:
-        t.status = "cancelled"
-        t.updated_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(t)
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not cancel: {e}")
-    if was == "approved":
-        await activity.for_time_off("time_off_cancelled", t.id, current_user.id)
-    return (await time_off_items(db, [t]))[0]
+    row = await db.scalar(select(TimeOffBlock).where(TimeOffBlock.id == block_id, TimeOffBlock.worker_id == current_user.id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Time off not found.")
+    row = await _save_block(db, current_user, body, row)
+    await notify_events.time_off_conflicts(row.id)
+    return (await block_items(db, [row], owner=True))[0]
 
 
-# ---------------------------------------------------------------------------------------------
-# Time off (managers)
-# ---------------------------------------------------------------------------------------------
-@router.get("/api/venues/{venue_id}/time-off", response_model=List[TimeOffItem])
-async def venue_time_off(
-    venue_id: UUID,
-    scope: str = Query("pending", pattern="^(pending|upcoming)$"),
-    current_user: User = Depends(require_manager_or_admin),
+@router.delete("/api/me/time-off/{block_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_time_off(
+    block_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await verify_venue_manager_access(venue_id, current_user, db)
-    team_ids = [u.id for u in await get_venue_team(db, venue_id)]
-    if not team_ids:
-        return []
-    q = select(TimeOffRequest).where(TimeOffRequest.worker_id.in_(team_ids), TimeOffRequest.end_date >= today_utc())
-    q = q.where(TimeOffRequest.status == "pending") if scope == "pending" else q.where(TimeOffRequest.status.in_(("pending", "approved")))
-    rows = (await db.execute(q.order_by(TimeOffRequest.start_date.asc()))).scalars().all()
-    return await time_off_items(db, list(rows), venue_id=venue_id)
-
-
-@router.post("/api/time-off/{time_off_id}/decide", response_model=TimeOffItem)
-async def decide_time_off(
-    time_off_id: UUID,
-    body: TimeOffDecision,
-    venue_id: Optional[UUID] = Query(None, description="The venue the manager is deciding for (shown to the worker)"),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    t = await db.scalar(select(TimeOffRequest).where(TimeOffRequest.id == time_off_id))
-    if t is None:
-        raise HTTPException(status_code=404, detail="Request not found.")
-    team_venues = await team_venue_ids(db, t.worker_id)
-    mine = await managed_venue_ids(db, current_user)
-    allowed = team_venues if mine is None else (team_venues & mine)
-    if not allowed and mine is not None:
-        raise HTTPException(status_code=403, detail="This person isn't on the team at a venue you manage.")
-    if venue_id is not None and allowed and venue_id not in allowed:
-        raise HTTPException(status_code=403, detail="This person isn't on that venue's team.")
-    if t.status != "pending":
-        raise HTTPException(status_code=400, detail=f"This request was already {t.status}.")
-    note = _clean(body.note)
-    if not body.approve and not note:
-        raise HTTPException(status_code=400, detail="Add a short note so they know why.")
+    row = await db.scalar(select(TimeOffBlock).where(TimeOffBlock.id == block_id, TimeOffBlock.worker_id == current_user.id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Time off not found.")
     try:
-        now = datetime.now(timezone.utc)
-        t.status = "approved" if body.approve else "denied"
-        t.decided_by_user_id = current_user.id
-        t.decided_venue_id = venue_id or (sorted(allowed, key=str)[0] if allowed else None)
-        t.decision_note = note
-        t.decided_at = now
-        t.updated_at = now
+        await db.execute(delete(TimeOffBlock).where(TimeOffBlock.id == row.id))
         await db.commit()
-        await db.refresh(t)
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not save the decision: {e}")
-    await notify_events.time_off_decided(t.id)
-    await activity.for_time_off("time_off_approved" if body.approve else "time_off_denied", t.id, current_user.id,
-                                venue_id=t.decided_venue_id)
-    return (await time_off_items(db, [t], venue_id=t.decided_venue_id))[0]
+        raise HTTPException(status_code=500, detail=f"Could not remove it: {e}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------------------------

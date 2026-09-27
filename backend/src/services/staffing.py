@@ -27,7 +27,7 @@ from src.models import (
 from src.schemas import AssignCandidate, OfferCreateResult, OfferSkip, WorkerOffer
 from src.services.booking import (
     _load_shift_locked, as_utc, PENDING_STATUSES, BOOKED_STATUSES, ACTIVE_STATUSES,
-    prior_drop_in_event, REBOOK_REASON_MIN, require_certs,
+    prior_drop_in_event, REBOOK_REASON_MIN, require_certs, refuse_if_blocked,
 )
 from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
 from src.services.reliability import compute_reliability
@@ -215,6 +215,7 @@ async def assign_worker(
         if worker is None:
             raise HTTPException(status_code=404, detail="Person not found.")
         name = full_name(worker)
+        await refuse_if_blocked(db, worker, shift, who=name)                           # Phase 32.1
         req = await _book_locked(db, shift, worker, source="manager_assign", approved_by=manager.id, who=name,
                                  rebook_reason=reason)
         req_id = req.id
@@ -281,9 +282,6 @@ async def create_offers(
                 continue
             if c.missing_certs:                                                         # Phase 32
                 skipped.append(OfferSkip(worker_id=wid, name=name, reason=f"Needs {', '.join(c.missing_certs)} on their profile."))
-                continue
-            if c.time_off == "approved":                                                # Phase 31
-                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Has approved time off that day."))
                 continue
             o = ShiftOffer(
                 shift_id=shift.id, venue_id=shift.venue_id, worker_id=wid, batch_id=batch,
@@ -537,6 +535,9 @@ async def list_candidates(
             reason = f"Can't rebook: {HISTORY_MESSAGES[history[wid]]}."
         if reason is None and wid in overlaps:
             reason = f"Booked at that time ({overlaps[wid]})."
+        block = fits[wid].off_block(shift.start_time, shift.end_time, tz)              # Phase 32.1
+        if reason is None and block is not None and not requested_this:
+            reason = f"Blocked off this time{f' ({block.reason})' if block.reason else ''}."
         out.append(AssignCandidate(
             worker_id=wid,
             first_name=u.first_name or "",
@@ -557,7 +558,8 @@ async def list_candidates(
             dropped_at=dropped[wid][0] if wid in dropped else None,
             drop_reason=dropped[wid][1] if wid in dropped else None,
             availability=fits[wid].availability(shift.start_time, shift.end_time, tz),
-            time_off=fits[wid].off(shift.start_time, shift.end_time, tz),
+            time_off="blocked" if block is not None else None,
+            time_off_reason=block.reason if block is not None else None,
             missing_certs=fits[wid].missing(required, shift.start_time, shift.end_time, tz),
             unverified_certs=unverified_certs(required, fits[wid].certs),
         ))

@@ -45,7 +45,7 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
   }, [position.shift_id, debouncedQ]);
 
   const selectable = (c) => (c.available || c.requested_this) && !c.offered && !(c.dropped_at && !c.requested_this)   // Phase 29.4
-    && !(c.missing_certs || []).length && c.time_off !== 'approved';                                               // Phase 31 + 32
+    && !(c.missing_certs || []).length && c.time_off !== 'blocked';                                                // Phase 32 / 32.1
   const toggle = (c) => {
     if (!selectable(c)) return;
     setSelected((prev) => {
@@ -296,8 +296,6 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
 export function warningsOf(c) {
   const out = [];
   if ((c.missing_certs || []).length) out.push(`Missing ${c.missing_certs.join(', ')}`);
-  if (c.time_off === 'approved') out.push('Has approved time off that day');
-  if (c.time_off === 'pending') out.push('Asked for time off that day');
   if (c.availability === 'outside') out.push('Outside their availability');
   return out;
 }
@@ -311,9 +309,9 @@ function FitChips({ c }) {
   (c.unverified_certs || []).forEach((m) => items.push(
     <span key={`u-${m}`} className={`${chip} bg-sky-500/10 text-sky-300 border-sky-500/30`}><BadgeCheck className="w-3 h-3" /> {m} not verified</span>,
   ));
-  if (c.time_off) items.push(
-    <span key="off" className={`${chip} ${c.time_off === 'approved' ? 'bg-rose-500/10 text-rose-300 border-rose-500/30' : 'bg-amber-500/10 text-amber-300 border-amber-500/30'}`}>
-      <CalendarOff className="w-3 h-3" /> {c.time_off === 'approved' ? 'Time off' : 'Asked for time off'}
+  if (c.time_off === 'blocked') items.push(   // Phase 32.1: their time-off block (can't be assigned or offered)
+    <span key="off" className={`${chip} bg-rose-500/10 text-rose-300 border-rose-500/30`}>
+      <CalendarOff className="w-3 h-3" /> Time off{c.time_off_reason ? `: ${c.time_off_reason}` : ''}
     </span>,
   );
   if (c.availability === 'outside') items.push(

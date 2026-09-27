@@ -589,7 +589,7 @@ class ShiftBoardMessage(Base):
 
 
 # ------------------------------------------------------------------------------
-# Phase 31: Availability & time off
+# Phase 31: Availability  /  Phase 32.1: time off blocks
 # ------------------------------------------------------------------------------
 class WorkerAvailability(Base):
     """One weekly window. A worker with no rows hasn't set availability (treated as open)."""
@@ -605,23 +605,25 @@ class WorkerAvailability(Base):
     __table_args__ = (CheckConstraint("weekday BETWEEN 0 AND 6", name="chk_availability_weekday"),)
 
 
-class TimeOffRequest(Base):
-    __tablename__ = "time_off_requests"
+class TimeOffBlock(Base):
+    """Phase 32.1: time the worker has blocked off. No approval; managers can't book over it."""
+    __tablename__ = "time_off_blocks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    all_day = Column(Boolean, nullable=False, default=True)
     start_date = Column(Date, nullable=False)
-    end_date = Column(Date, nullable=False)                 # inclusive
-    reason = Column(Text, nullable=True)
-    status = Column(String(20), nullable=False, default="pending", index=True)   # pending | approved | denied | cancelled
-    decided_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    decided_venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="SET NULL"), nullable=True)
-    decision_note = Column(Text, nullable=True)
-    decided_at = Column(DateTime(timezone=True), nullable=True)
+    end_date = Column(Date, nullable=True)                  # inclusive; None = repeats with no end
+    start_local = Column(String(5), nullable=True)          # 'HH:MM' when not all day
+    end_local = Column(String(5), nullable=True)            # 'HH:MM' or '24:00'
+    repeat = Column(String(20), nullable=False, default="none")          # none | weekly | biweekly
+    weekdays = Column(ARRAY(SmallInteger), nullable=False, default=list)  # 0 = Monday ... 6 = Sunday
+    reason = Column(String(200), nullable=True)             # managers see this
+    private_note = Column(Text, nullable=True)              # only the worker sees this
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    __table_args__ = (CheckConstraint("end_date >= start_date", name="chk_time_off_range"),)
+    __table_args__ = (CheckConstraint("end_date IS NULL OR end_date >= start_date", name="chk_time_off_block_range"),)
 
 
 # ------------------------------------------------------------------------------

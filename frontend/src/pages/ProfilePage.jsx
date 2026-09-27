@@ -48,7 +48,7 @@ export default function ProfilePage() {
   const tabs = [
     { id: 'about', label: 'About me', icon: UserRound },
     isWorker && { id: 'availability', label: 'Availability', icon: CalendarDays },
-    isWorker && { id: 'time-off', label: 'Time off', icon: CalendarOff, badge: (profile?.time_off || []).filter((t) => t.status === 'pending').length },
+    isWorker && { id: 'time-off', label: 'Time off', icon: CalendarOff },   // Phase 32.1: blocks, nothing to wait for
     isWorker && { id: 'certificates', label: 'Certificates', icon: Award, badge: (profile?.certifications || []).filter((c) => c.expired || c.status === 'rejected').length },
     { id: 'notifications', label: 'Notifications', icon: Bell },
   ].filter(Boolean);

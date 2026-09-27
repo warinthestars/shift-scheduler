@@ -159,11 +159,10 @@ export default function EventListingCard({ listing, onOpen }) {
         )}
       </div>
 
-      {/* Phase 31: the viewer's own availability / time off */}
+      {/* Phase 31 / 32.1: the viewer's own availability / time-off blocks */}
       {listing.time_off && (
-        <p className={`mt-2 text-[11px] flex items-center gap-1 ${listing.time_off === 'approved' ? 'text-rose-300' : 'text-amber-300'}`}>
-          <CalendarOff className="w-3.5 h-3.5 flex-shrink-0" />
-          {listing.time_off === 'approved' ? 'You have time off that day' : 'You asked for time off that day'}
+        <p className="mt-2 text-[11px] flex items-center gap-1 text-amber-300">
+          <CalendarOff className="w-3.5 h-3.5 flex-shrink-0" /> During your time off
         </p>
       )}
       {!listing.time_off && listing.availability === 'outside' && (
