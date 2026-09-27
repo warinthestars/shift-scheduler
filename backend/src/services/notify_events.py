@@ -274,6 +274,28 @@ async def removed(request_id) -> None:
     await _run("removed", _removed, request_id)
 
 
+async def _no_show_marked(db: AsyncSession, request_id) -> None:
+    """Phase 30: tell the worker they were marked a no-show (so they can speak up if it's wrong)."""
+    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
+    if req is None:
+        return
+    shift, venue, event, _ = await _shift_bundle(db, req.shift_id)
+    if shift is None:
+        return
+    reason = f"\nNote from your manager: {req.status_reason}" if req.status_reason else ""
+    await notify_in(
+        db, [req.worker_id], "no_show",
+        f"Marked as a no-show: {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. If you were there, message your manager so they can fix your hours.{reason}",
+        worker_shift_link(req.id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id, urgent=True,
+        dedupe_key=f"noshow:{req.id}",
+    )
+
+
+async def no_show_marked(request_id) -> None:
+    await _run("no_show_marked", _no_show_marked, request_id)
+
+
 # ---------------------------------------------------------------------------------------------
 # Hand-offs (transfers)
 # ---------------------------------------------------------------------------------------------

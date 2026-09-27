@@ -131,7 +131,7 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
           </label>
         )}
         {f.kind === 'delete' && <p className="text-xs text-rose-300">Delete this time entry?</p>}
-        {f.kind === 'noshow' && <p className="text-xs text-rose-300">Mark as a no-show? This counts against their reliability.</p>}
+        {f.kind === 'noshow' && <p className="text-xs text-rose-300">Mark as a no-show? This counts against their reliability, they’re told, and their spot opens again.</p>}
         <input
           value={f.reason}
           onChange={(e) => setForm({ ...f, reason: e.target.value })}

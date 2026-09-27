@@ -59,6 +59,8 @@ KINDS = {
     "team_joined": ("manager", False),       # Phase 29: someone joined through an invite
     "team_added": ("booking", False),        # Phase 29.1: a manager added you to their team
     "shift_dropped": ("manager", True),      # Phase 29.1: a worker dropped a booked shift
+    "no_show": ("booking", True),            # Phase 30: a manager marked you a no-show
+    "unfilled_soon": ("manager", True),      # Phase 30: spots still open 3 h before start
     "test": ("test", True),
 }
 NEW_SHIFT_MODES = ("off", "instant", "daily")

@@ -10,7 +10,7 @@ Categories (for the filter chips on the dashboard):
   staffing  - direct assigns and offers
   team      - team changes, invites, joins, co-managers
   changes   - events posted / edited / cancelled / copied, venue settings
-  alerts    - not clocked in
+  alerts    - not clocked in, no-shows, manager clock-ins, spots still open close to start (Phase 30)
 """
 import logging
 from typing import Optional
@@ -59,6 +59,9 @@ CATEGORY = {
     "template_deleted": "changes",
     "venue_settings": "changes",
     "not_clocked_in": "alerts",
+    "no_show": "alerts",                # Phase 30
+    "manager_clock_in": "alerts",
+    "unfilled_soon": "alerts",
 }
 CATEGORIES = ("bookings", "staffing", "team", "changes", "alerts")
 
@@ -137,6 +140,8 @@ async def _for_request(db: AsyncSession, kind: str, request_id, actor_id, extra:
         "person_removed": f"Removed {name} from {what}",
         "assigned": f"Assigned {name} to {what}",
         "offer_accepted": f"{name} accepted the offer for {what}",
+        "no_show": f"Marked {name} as a no-show for {what}",               # Phase 30
+        "manager_clock_in": f"Clocked {name} in for {what}",
     }.get(kind, f"{name}: {what}")
     if extra:
         text += f" · {extra}"

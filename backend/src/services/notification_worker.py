@@ -6,7 +6,8 @@ Every minute:
   2. reminders to booked workers: ~24h before and ~2h before (each once, via dedupe keys)
   3. "not clocked in" 10 minutes after start -> the worker (urgent) and the venue's managers
   4. managers: people who haven't read an UPDATE to a shift starting within 24h (once per update)
-  5. send due email / SMS from the outbox
+  5. managers: a position still has open spots 3 hours before it starts (once per position; Phase 30)
+  6. send due email / SMS from the outbox
 
 Only one process runs a tick at a time (Redis lock). If Redis is unreachable the tick still runs;
 dedupe keys keep reminders from doubling.
@@ -169,11 +170,48 @@ async def scan_unread_updates(db: AsyncSession, now: datetime) -> int:
     return sent
 
 
+UNFILLED_WINDOW = timedelta(hours=3)
+
+
+async def scan_unfilled(db: AsyncSession, now: datetime) -> int:
+    """Phase 30: one alert per position that still has open spots when it's 3 h (or less) from starting."""
+    rows = (await db.execute(
+        select(Shift).where(
+            func.upper(Shift.status) == "OPEN",
+            Shift.start_time > now,
+            Shift.start_time <= now + UNFILLED_WINDOW,
+            Shift.spots_filled < Shift.capacity,
+        )
+    )).scalars().all()
+    sent = 0
+    for s in rows:
+        ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == s.event_id)) if s.event_id else None
+        if ev is not None and (ev.cancelled_at is not None or (ev.status or "published") != "published"):
+            continue
+        venue = await db.scalar(select(Venue).where(Venue.id == s.venue_id))
+        open_n = (s.capacity or 1) - (s.spots_filled or 0)
+        name = ev.title if ev else s.title
+        n = await notify_in(
+            db, await manager_ids(db, s.venue_id), "unfilled_soon",
+            f"{open_n} {s.role_type} spot{'s' if open_n != 1 else ''} still open: {name}",
+            f"Starts {when_text(s.start_time, venue)}. Offer it or assign someone from the Today board.",
+            manager_link(s.venue_id, s.event_id), venue_id=s.venue_id, event_id=s.event_id,
+            urgent=True, dedupe_key=f"unfilled3h:{s.id}",
+        )
+        if n:
+            sent += n
+            await record_in(db, s.venue_id, "unfilled_soon",
+                            f"{open_n} {s.role_type} spot{'s' if open_n != 1 else ''} still open 3 h before {name}",
+                            event_id=s.event_id)
+    return sent
+
+
 async def run_tick() -> None:
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
         await auto_close_open_entries(db)
-    for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates)):
+    for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
+                      ("unfilled", scan_unfilled)):
         try:
             async with AsyncSessionLocal() as db:
                 await fn(db, now)

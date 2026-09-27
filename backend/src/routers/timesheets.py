@@ -10,8 +10,8 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import User, Shift, ShiftRequest, TimeEntry
-from src.schemas import ReasonBody, TimeEntryInput, PayRateInput
+from src.models import User, Shift, ShiftRequest, TimeEntry, TimeEntryEdit
+from src.schemas import ReasonBody, TimeEntryInput, PayRateInput, NoShowResult
 from src.auth import require_manager_or_admin
 from src.services.venue_public import can_manage_venue
 from src.services import notify_events
@@ -21,6 +21,17 @@ from src.services.timesheets import (
 )
 
 router = APIRouter(prefix="/api", tags=["Time Sheets"])
+
+NO_SHOW_RELEASED = "no_show:spot_released"   # Phase 30: audit marker - this no-show freed the spot
+
+
+async def _no_show_released_spot(db: AsyncSession, request_id) -> bool:
+    """True when the latest no-show on this booking freed the spot (Phase 30 and later)."""
+    last = await db.scalar(
+        select(TimeEntryEdit).where(TimeEntryEdit.shift_request_id == request_id, TimeEntryEdit.action == "no_show")
+        .order_by(TimeEntryEdit.created_at.desc()).limit(1)
+    )
+    return last is not None and last.new_value == NO_SHOW_RELEASED
 
 
 async def _load_request(db: AsyncSession, request_id: UUID, user: User):
@@ -83,16 +94,22 @@ async def remove_person(
     return {"detail": "Removed from shift."}
 
 
-@router.post("/requests/{request_id}/no-show")
+@router.post("/requests/{request_id}/no-show", response_model=NoShowResult)
 async def mark_no_show(
     request_id: UUID,
     body: ReasonBody,
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Phase 30: a no-show also frees their spot (spots_filled - 1, FILLED -> OPEN while the shift is
+    still running) so the manager can find cover straight away. The audit row's new_value is
+    NO_SHOW_RELEASED so undoing it (adding time) gives the spot back.
+    """
     req, shift = await _load_request(db, request_id, current_user)
     st = (req.status or "").lower()
-    if as_utc(shift.start_time) > datetime.now(timezone.utc):
+    now = datetime.now(timezone.utc)
+    if as_utc(shift.start_time) > now:
         raise HTTPException(status_code=400, detail="You can only mark a no-show after the shift starts.")
     if st not in ("approved", "confirmed"):
         raise HTTPException(status_code=400, detail="Only confirmed people who haven't clocked in can be marked no-show.")
@@ -101,15 +118,26 @@ async def mark_no_show(
     )
     if has_entries:
         raise HTTPException(status_code=400, detail="They have clock-in records. Delete those first if they really didn't show.")
+    reopened = False
     try:
         req.status = "no_show"
         req.status_reason = (body.reason or "").strip() or None
-        audit(db, req.id, None, current_user.id, "no_show", st, "no_show", req.status_reason)
+        shift.spots_filled = max(0, (shift.spots_filled or 1) - 1)
+        if (shift.status or "").upper() == "FILLED" and as_utc(shift.end_time) > now:
+            shift.status = "OPEN"
+        reopened = as_utc(shift.end_time) > now and (shift.status or "").upper() == "OPEN"
+        audit(db, req.id, None, current_user.id, "no_show", st, NO_SHOW_RELEASED, req.status_reason)
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to mark no-show: {str(e)}")
-    return {"detail": "Marked as no-show."}
+    await notify_events.no_show_marked(request_id)                                            # Phase 30
+    await activity.for_request("no_show", request_id, current_user.id,
+                               f"Reason: {req.status_reason}" if req.status_reason else "")
+    return NoShowResult(
+        detail="Marked as no-show. Their spot is open again." if reopened else "Marked as no-show.",
+        spot_reopened=reopened,
+    )
 
 
 @router.put("/requests/{request_id}/pay-rate")
@@ -148,6 +176,7 @@ async def add_time_entry(
     if st not in ASSIGNED_STATUSES + ("no_show",):
         raise HTTPException(status_code=400, detail="Time can only be added for people booked on this shift.")
     cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
+    reclaim = st == "no_show" and await _no_show_released_spot(db, req.id)   # Phase 30
     try:
         entry = TimeEntry(
             worker_id=req.worker_id, shift_id=req.shift_id, clock_in_time=cin, clock_out_time=cout,
@@ -164,11 +193,19 @@ async def add_time_entry(
         req.check_in_time = req.check_in_time or cin
         if st == "no_show":
             req.status_reason = None
+        # Phase 30: the no-show had freed their spot and they worked after all -> take it back.
+        # If someone already covered it and the position is full, leave the count alone (capacity is a hard limit).
+        if reclaim and (shift.spots_filled or 0) < (shift.capacity or 1):
+            shift.spots_filled = (shift.spots_filled or 0) + 1
+            if shift.spots_filled >= (shift.capacity or 1) and (shift.status or "").upper() == "OPEN":
+                shift.status = "FILLED"
         audit(db, req.id, entry.id, current_user.id, "add", None, fmt_range(cin, cout), reason)
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to add time: {str(e)}")
+    if cout is None:   # Phase 30: "Clock in for them" from the Tonight board (or the time sheet)
+        await activity.for_request("manager_clock_in", request_id, current_user.id, f"Reason: {reason}")
     return {"detail": "Time added.", "entry_id": str(entry.id)}
 
 

@@ -1,2024 +1,1663 @@
-# Phase 29.4: Worker View Overhaul, and Coming Back After a Drop
+# Phase 30: Manager "Today" Board & Live Alerts
 
-**Why:** The worker page grew one feature at a time: offers, hand-offs, the calendar, read-receipts, clock-in windows and location checks. An audit of it, both on the live site and on a local copy loaded with a realistic worker (a shift today, an updated shift, a pending request, a drop, a hand-off offer, a manager's offer and history), found these problems:
+**Why:** The manager dashboard answers "what's posted?" well, but not "what's happening right now?" A manager checking their phone at 7:05 PM should see straight away:
 
-* **Too many buttons:** each shift card showed up to 7 of them (Details, Directions, Calendar, Board, Transfer, Drop, Clock In). The one that matters right now (Clock in, Read the update) was last in the row, and on phones it wrapped under everything else.
-* **Tabs cut off on phones:** "My Schedule" was cut in half and "Pending Transfers" was off-screen, with no hint to scroll.
-* **Opening tab:** the page always opened on Find Shifts, even when the worker has a shift in an hour.
-* **Hand-offs:**
-  - The worker screens say "Transfer" while managers see "Hand-off".
-  - A worker couldn't see or withdraw a hand-off they had sent. `GET /transfers/my-outgoing` existed but nothing used it.
-  - The incoming hand-off card didn't show the teammate's note.
-  - On the server, a sender could "cancel" a hand-off even after the manager had approved it.
-* **Drop button and dialog:**
-  - The Drop button used light-theme colours (`text-red-600`, `hover:bg-red-50`, a white flash on the dark page).
-  - The drop dialog was hand-built, so Esc didn't close it.
-  - It gave no way to say why, and no warning that dropping within 72 h counts as a late drop.
-* **Raw data on cards:** labels like "Via: manager assign", "1 transfers" and "7 open" were shown as-is.
-* **Dropped shifts in Find Shifts:** they said "you" and offered **Book instantly**, and the server then refused with "You dropped this shift earlier…". The status label read "Released".
-* **Managers couldn't undo a drop:** they couldn't book back someone who dropped (the Assign button refused), even when the worker could make it after all. That's the second half of this phase.
-* **Timestamps:** approving a request stored a naive `datetime.utcnow()`, which breaks the aware-UTC rule.
+* who is in
+* who is late
+* who hasn't read the update
+* which spots are still open
+
+and fix each one with a single tap. Today that means opening each event's roster, then its time sheet, then the bell. Two things are also wasted space: the request and hand-off cards are empty most of the time, and Posted Shifts (a long list of every future event) sits above everything.
 
 ## What this phase adds
 
-### A. Coming back after a drop (flagged, always approved by a manager)
-1. **Worker asks back:**
-   * A dropped shift appears on My shifts under **"Dropped · you can still ask to come back"**. The same applies to the event in Find shifts, where the CTA reads "Ask to come back".
-   * The request form requires **"Why you can make it now"** (5+ characters).
-   * The request **always waits for a manager**, even when the venue books the team instantly. This covers any position in that event, not only the one they dropped.
-   * **Withdrawing and asking again still needs a reason**, so there's no loophole.
-   * After a denial, that position stays closed to them (same as any denial today).
-2. **Managers see the flag everywhere:**
-   * Queue card: "Dropped this event on Sat, Sep 26 and is asking back. Needs your OK."
-   * Review modal: a red box, and the note is headed "Why they can make it now".
-   * The event roster.
-   * The bell: "… dropped this earlier and is asking back · Server".
-   * The activity log: "… requested … · asking back after dropping · "reason"".
-3. **Manager books someone back:**
-   * The roster shows a new **Dropped** list under each position, with who dropped, when and their reason, and a **Book back…** button that asks for a reason.
-   * In **Assign / Offer**, people who dropped this event show "Dropped this event on … · "reason"". **Assign** asks for a reason inline before booking. **Offers skip them** ("Use Assign with a reason").
-   * The API refuses to assign without a reason (400).
-   * The roster marks the person "Back after dropping on … · "reason"".
-   * The activity log reads "Assigned … · booked back after a drop · "reason"".
-4. **Drop reason:** Drop now takes an optional reason (`POST /api/shifts/{id}/drop {reason}`). It's saved in `status_reason`, shown to managers in the drop notification and the activity log, and shown back to the worker. Old clients that send no body still work.
-5. **Reliability stays honest:**
-   * The row keeps `dropped_at`.
-   * A drop still counts while they're asking back, after they withdraw, or after a denial.
-   * It stops counting only if they actually work the shift.
-   * Two new columns on `shift_requests`: `previous_drop_at` and `rebook_reason`.
+### A. The "Today / This week" board (new, at the top of the dashboard)
+1. **Today tab:** every published, not-cancelled event that touches today (venue time). That includes overnight shifts that started yesterday and ones that already ended. Live events come first, then upcoming, then ended (collapsed unless someone never clocked in).
+   * Each event shows:
+     - a LIVE badge, times, and "Starts in 1 h 30 min" or "Live now · ends in 4 h"
+     - counts: booked, clocked in, late, never clocked in, no-show, open, haven't read the update
+   * Each booked person shows a **clock state**:
 
-### B. Worker page overhaul
-1. **Tabs:**
-   * Renamed and reordered to **My shifts · Find shifts · Calendar · Hand-offs**, with counts and badges.
-   * On phones they sit in a **2×2 grid**, so none are hidden.
-   * The page **opens on My shifts** when you have something coming up or an offer to answer; otherwise it opens on Find shifts.
-   * The tab ids are unchanged (`schedule`, `find`, `calendar`, `transfers`), so every notification link keeps working.
-2. **Header:**
-   * Profile photo with an initials fallback.
-   * Clickable chips: rating, "N coming up", "N waiting for your answer" (offers plus hand-offs), "N open to pick up".
-   * A "Worker preview" badge appears only for admins and managers, instead of "Worker" for everyone.
-3. **My shifts cards** (new `MyShiftCard`):
-   * A date tile and a plain status: Confirmed · Waiting for the manager · Worked · You dropped this · Clocked in.
-   * Where the booking came from, in words: "Assigned by your manager", "Booked instantly (team)", "You accepted an offer"…
-   * **One main button:**
-     - Clock in / Clock out
-     - "Clock-in opens 8:01 PM"
-     - Read the update. When clock-in is open, it shows next to Clock in and **never hides it**.
-     - Withdraw request
-     - Ask to come back
-   * **Everything else is in a ⋯ menu:** Details & notes, Directions, Add to my calendar, Shift chat, Hand off to a teammate, Drop shift. Drop is disabled inside 24 h, with the reason.
-   * Offers are answered at the top of My shifts. Other tabs show a slim "N shifts offered to you" link.
-4. **Drop dialog** (new `DropShiftDialog`):
-   * Uses the standard modal, so Esc works.
-   * Optional reason.
-   * Late-drop warning inside 72 h.
-   * Explains the spot opens right away and that coming back needs approval.
-5. **Hand-offs tab** (new `HandoffsPanel`):
-   * **Offered to you**: shows the teammate's note, plus Accept / Decline.
-   * **Sent by you** (last 14 days): shows each hand-off's status in words, with **Withdraw** while it's still waiting.
-   * The hand-off modal (`TransferModal`) uses the standard modal and "hand off" wording, and says clearly **you keep the shift until the manager approves**.
-6. **Banners:** messages are plain ("Shift dropped. Your manager has been told…"). They're dismissed with ✕.
-7. **Server fixes:**
-   * Declining or withdrawing a hand-off only works while it's still waiting. Before this, a sender could "cancel" an already approved hand-off.
-   * Approvals store an aware UTC time.
-   * The "shift dropped" alert is no longer swallowed by the dedupe key when someone drops the same shift a second time.
+     | State | Meaning |
+     |---|---|
+     | **Not open yet** | clock-in opens at … |
+     | **Not in yet** | clock-in is open, not late yet |
+     | **Late** (pulsing) | 10+ min past the start, no clock-in, "35 min past the start" |
+     | **In** | since 6:52 PM · 12 min late · "clocked in by a manager" · "away from site" |
+     | **Done** | 6:52 PM – 11:05 PM |
+     | **Never clocked in** | shift ended, not marked |
+     | **No-show** | marked |
 
-⚠️ **Schema change:** two new columns on `shift_requests`. See §E.
+     Plus "hasn't read the update", and their reliability badge.
+   * **One-tap actions per person:**
+     - 📞 **Call**: a `tel:` link; greyed out when there's no phone on file
+     - **Clock in** (for Not in yet / Late): asks for a reason and records a manager clock-in at now
+     - **No-show** (for Late / Never clocked in): optional note that they'll see
+   * **Per position:** "Message this shift" opens the existing shift board. Open spots show **Find cover**, which opens the existing Assign/Offer modal. It also shows "2 asked · 1 offered".
+   * Event buttons: **Roster** (opens the existing roster) and **Time sheet**.
+2. **Alerts at the top of the Today tab**, most urgent first:
+
+   | Alert | Severity | Actions |
+   |---|---|---|
+   | Late | high | Call / Clock in / No-show |
+   | Open spot within 12 h | high when starting within 2 h or already started | Find cover |
+   | Never clocked in | medium | No-show / Add hours |
+   | Haven't read the update | low | Message |
+   | Clocked in away from site | low | Time sheet |
+
+   4 alerts are shown, with "Show all N".
+3. **This week tab:** today plus 6 days. Each day shows a fill bar ("7/11 spots filled"), and each event is a chip:
+   * green = full
+   * amber = partly filled
+   * red = nobody yet
+   * dashed = draft
+
+   Chips also show "N asked" and unread counts. Tapping one opens the roster.
+4. **Live:** the board reloads every 60 s while the tab is visible, whenever the tab becomes visible again, and after any change on the page. The header shows "Live · updated just now".
+5. The board opens on **Today** when there's something today; otherwise it opens on **This week**. With nothing on today it shows "Nothing on today. Next up: …".
+
+### B. "Needs you (N)" strip
+* It sits above the board and adds up requests, hand-offs, people late or not clocked in, and open spots soon. Each chip jumps to the right place.
+* When nothing is waiting it shrinks to one line: "Nothing needs you right now."
+* The **request and hand-off cards now only render while they have items**, so the right column is just the activity log most of the time.
+* **Posted Shifts moves below the board.** It is unchanged otherwise.
+
+### C. No-shows now free the spot
+* `POST /api/requests/{id}/no-show` now:
+  - lowers `spots_filled` and reopens a FILLED position while the shift is still running, so **Find cover → Assign** works straight away
+  - notifies the worker ("Marked as a no-show … If you were there, message your manager"), which is urgent so it can go by SMS
+  - logs `no_show` in the activity log
+  - returns `{detail, spot_reopened}`
+* **Undo (adding their time) takes the spot back** if there's still room. The time sheet's "Mark no-show" behaves the same.
+* No-shows from before this phase are recognised by their audit row and are never double-counted.
+* A manager clock-in (a time entry with no clock-out) now logs `manager_clock_in` ("Clocked Alex Rivers in for …, Reason: phone died").
+
+### D. New live alert: spots still open 3 h before start
+The background worker sends **one** alert per position (urgent, so it can go by SMS) to the venue's managers when a published position still has open spots 3 hours before it starts: "2 Runner spots still open: Soon Unfilled". It also adds an `unfilled_soon` line to the activity log. Drafts and cancelled events are skipped.
+
+✅ **No schema change.** A plain rebuild is enough (§E).
 
 ## 0. Rules for this phase (read first)
 * Do **NOT** touch:
   - `backend/src/auth.py`, `backend/src/routers/auth.py`, `backend/src/services/firebase.py`, `backend/src/services/always_admin.py`
-  - `main.py` (unchanged this phase)
+  - `main.py`: unchanged. The new endpoint lives in the existing `routers/activity.py`, which is already mounted at `/api/venues`.
   - `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/vite.config.js`
-* No new npm or Python packages.
-* No native PostgreSQL ENUMs. Statuses are unchanged; "asking back" is an ordinary `pending` request with `previous_drop_at` set.
-* Aware UTC datetimes only.
-* Notification and activity hooks run after the commit, as before.
-* **Keep `dropped_at` on the request row** when someone asks back or is booked back. Reliability depends on it. Do not add `req.dropped_at = None` back into `booking.py` or `staffing.py`.
-* **NEW FILE / FULL FILE REPLACEMENT**: write exactly the content shown. **EDITS**: each edit is an exact *Find* → *Replace with*. Every *Find* appears **exactly once** in the current file; apply them in order.
+* No new npm or Python packages. The icons used all exist in lucide-react 0.359.
+* No native PostgreSQL ENUMs. The new states (`upcoming`, `due`, `late`, `in`, `done`, `missed`, `no_show`) are **computed**, not stored.
+* Aware UTC datetimes only. "Today" is worked out in the venue's time zone (`ZoneInfo(venue.timezone)`).
+* Notification and activity hooks run after the commit and never raise, as before.
+* **`spots_filled` can never exceed `capacity`:** the database has a check constraint, `chk_spots`. The undo path only takes the spot back when there's room. Keep that guard.
+* **NEW FILE**: write exactly the content shown. **EDITS**: each edit is an exact *Find* → *Replace with*. Every *Find* appears **exactly once** in the current file; apply them in order.
   - Some files use Windows line endings (CRLF). Match on the text and keep the file's line endings.
-* These blocks were generated from the real current (Phase 29.3) files and checked:
-  - after applying them, the backend imports cleanly (155 API operations; no new routes)
+* These blocks were generated from the real current (Phase 29.4) files, and your repo was checked to match them before writing this. They were verified:
+  - the backend imports cleanly: 156 API operations, one new route, `GET /api/venues/{venue_id}/tonight`
   - the frontend bundles with no missing imports
-  - 39 new integration checks pass against PostgreSQL 16, and the Phase 29, 29.1, 29.2 and 29.3 suites still pass
-  - the new worker page (desktop and phone), the ⋯ menu, the drop dialog, ask-to-come-back, the Hand-offs tab, and the manager's roster / Book back / Assign-with-reason were rendered with the real Tailwind build
+  - 49 new integration checks pass against PostgreSQL 16, and the earlier suites give the same results as on Phase 29.4
+  - the board was rendered with the real Tailwind build, on desktop and phone, with a live event, late people, no-show → Find cover, and the week view
 
   Don't "improve" them.
 
 ---
 
-# PART A: Database, models, schemas
+# PART A: Schemas
 
-## A1. `database/init.sql` (EDIT)
-
-**Edit 1.** Find:
-```sql
-    dropped_at TIMESTAMPTZ,
-    status_reason TEXT,
-    pay_rate NUMERIC(10, 2),
-    info_seen_at TIMESTAMPTZ,
-```
-Replace with:
-```sql
-    dropped_at TIMESTAMPTZ,
-    status_reason TEXT,
-    previous_drop_at TIMESTAMPTZ,                             -- Phase 29.4: coming back after dropping this event
-    rebook_reason TEXT,                                       -- Phase 29.4: why (worker's request note or the manager's reason)
-    pay_rate NUMERIC(10, 2),
-    info_seen_at TIMESTAMPTZ,
-```
-
----
-
-## A2. `backend/src/models.py` (EDIT)
+## A1. `backend/src/schemas.py` (EDIT: append at the end)
+Adds `TonightPerson`, `TonightPosition`, `TonightEvent`, `TonightAlert`, `WeekEvent`, `WeekDay`, `TonightResponse` and `NoShowResult`. Nothing existing changes.
 
 **Edit 1.** Find:
 ```python
-    dropped_at = Column(DateTime(timezone=True), nullable=True)
-    status_reason = Column(Text, nullable=True)
-    pay_rate = Column(Numeric(10, 2), nullable=True)
-    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
-```
-Replace with:
-```python
-    dropped_at = Column(DateTime(timezone=True), nullable=True)
-    status_reason = Column(Text, nullable=True)
-    previous_drop_at = Column(DateTime(timezone=True), nullable=True)   # Phase 29.4: rebooked / asking back after a drop
-    rebook_reason = Column(Text, nullable=True)                         # Phase 29.4
-    pay_rate = Column(Numeric(10, 2), nullable=True)
-    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
-```
-
----
-
-## A3. `backend/src/schemas.py` (EDITS)
-* `ShiftRequestResponse`: `dropped_at`, `previous_drop_at`, `rebook_reason`
-* `RosterPerson`: drop and rebook fields
-* `EventPosition.dropped`
-* `ListingPosition.my_dropped_at`, `EventListing.dropped_here`
-* `AssignCandidate.dropped_at` / `drop_reason`
-* `AssignRequest.reason`
-* the new `DropShiftBody`
-
-**Edit 1.** Find:
-```python
-    pay_rate: Optional[float] = None
-    notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
-    shift: Optional[ShiftResponse] = None
-    worker: Optional[UserBrief] = None
-```
-Replace with:
-```python
-    pay_rate: Optional[float] = None
-    notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
-    dropped_at: Optional[datetime] = None            # Phase 29.4
-    previous_drop_at: Optional[datetime] = None      # Phase 29.4: asking back / rebooked after dropping this event
-    rebook_reason: Optional[str] = None              # Phase 29.4
-    shift: Optional[ShiftResponse] = None
-    worker: Optional[UserBrief] = None
-```
-
-**Edit 2.** Find:
-```python
-    rating_review: Optional[str] = None
-    approval_source: Optional[str] = None   # Phase 29: e.g. manager_assign, offer
-
-
-```
-Replace with:
-```python
-    rating_review: Optional[str] = None
-    approval_source: Optional[str] = None   # Phase 29: e.g. manager_assign, offer
-    dropped_at: Optional[datetime] = None        # Phase 29.4: when they dropped (dropped list)
-    drop_reason: Optional[str] = None            # Phase 29.4: what they said when dropping
-    previous_drop_at: Optional[datetime] = None  # Phase 29.4: came back / asking back after a drop
-    rebook_reason: Optional[str] = None          # Phase 29.4
-
-
-```
-
-**Edit 3.** Find:
-```python
-    requested: List[RosterPerson] = []
-    offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
-
-
-```
-Replace with:
-```python
-    requested: List[RosterPerson] = []
-    offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
-    dropped: List[RosterPerson] = []         # Phase 29.4: people who dropped this position (can be booked back)
-
-
-```
-
-**Edit 4.** Find:
-```python
-    my_status: Optional[str] = None            # viewer's request status on this position
-    my_status_reason: Optional[str] = None
-    staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
-
-```
-Replace with:
-```python
-    my_status: Optional[str] = None            # viewer's request status on this position
-    my_status_reason: Optional[str] = None
-    my_dropped_at: Optional[datetime] = None   # Phase 29.4: the viewer dropped this position
-    staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
-
-```
-
-**Edit 5.** Find:
-```python
-    started: bool = False
-    can_request: bool = True
-
-
-```
-Replace with:
-```python
-    started: bool = False
-    can_request: bool = True
-    dropped_here: Optional[datetime] = None           # Phase 29.4: viewer dropped a position in this event -> asking back needs a reason + approval
-
-
-```
-
-**Edit 6.** Find:
-```python
-    offered: bool = False                    # has a pending offer for this position
-    venue_shifts: int = 0
-
-
-class AssignRequest(BaseModel):
-    worker_id: UUID
-
-
-```
-Replace with:
-```python
-    offered: bool = False                    # has a pending offer for this position
-    venue_shifts: int = 0
-    dropped_at: Optional[datetime] = None    # Phase 29.4: dropped this event; Assign needs a reason, offers are skipped
-    drop_reason: Optional[str] = None
-
-
-class AssignRequest(BaseModel):
-    worker_id: UUID
-    reason: Optional[str] = Field(None, max_length=500)   # Phase 29.4: required to book back someone who dropped this event
-
-
-```
-
-**Edit 7.** Find:
-```python
-class SaveAsTemplateRequest(BaseModel):
-    name: str
-```
-Replace with:
-```python
-class SaveAsTemplateRequest(BaseModel):
-    name: str
-
-
-# ------------------------------------------------------------------------------
-# Phase 29.4: Drops
-# ------------------------------------------------------------------------------
 class DropShiftBody(BaseModel):
     reason: Optional[str] = Field(None, max_length=500)   # optional; managers see it
+```
+Replace with:
+```python
+class DropShiftBody(BaseModel):
+    reason: Optional[str] = Field(None, max_length=500)   # optional; managers see it
+
+
+# ------------------------------------------------------------------------------
+# Phase 30: Manager "Tonight" board
+# ------------------------------------------------------------------------------
+class TonightPerson(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    phone: Optional[str] = None
+    request_status: str                          # approved | confirmed | checked_in | completed | no_show
+    clock_state: str                             # upcoming | due | late | in | done | missed | no_show
+    clock_in_time: Optional[datetime] = None     # first clock-in
+    clock_out_time: Optional[datetime] = None    # last clock-out (when done)
+    late_minutes: int = 0                        # late: minutes past start right now; in/done: recorded lateness
+    geo_flag: bool = False                       # clocked in outside the geofence
+    manager_clock: bool = False                  # a manager entered the clock-in
+    info_seen: Optional[bool] = None             # None = nothing to read
+    previous_drop_at: Optional[datetime] = None  # Phase 29.4 re-booked after a drop
+
+
+class TonightPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    capacity: int
+    spots_filled: int
+    open_spots: int
+    pending_requests: int = 0
+    pending_offers: int = 0
+    people: List[TonightPerson] = []
+
+
+class TonightEvent(BaseModel):
+    event_key: str
+    event_id: Optional[UUID] = None
+    title: str
+    start_time: datetime
+    end_time: datetime
+    location_name: Optional[str] = None
+    state: str                                   # upcoming | live | ended
+    clock_in_opens_at: datetime
+    positions: List[TonightPosition] = []
+    booked: int = 0
+    clocked_in: int = 0
+    done: int = 0
+    late: int = 0
+    missed: int = 0
+    no_show: int = 0
+    unread: int = 0
+    open_spots: int = 0
+
+
+class TonightAlert(BaseModel):
+    kind: str                                    # late | missed | open_spot | unread | geo
+    severity: str                                # high | medium | low
+    text: str
+    event_id: Optional[UUID] = None
+    event_key: Optional[str] = None
+    shift_id: Optional[UUID] = None
+    request_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
+
+
+class WeekEvent(BaseModel):
+    event_key: str
+    event_id: Optional[UUID] = None
+    title: str
+    start_time: datetime
+    end_time: datetime
+    status: str = "published"                    # draft | published
+    capacity: int = 0
+    filled: int = 0
+    requested: int = 0
+    open_spots: int = 0
+    unread: int = 0
+
+
+class WeekDay(BaseModel):
+    date: str                                    # YYYY-MM-DD in the venue's time zone
+    label: str                                   # Today | Tomorrow | Wed
+    events: List[WeekEvent] = []
+    capacity: int = 0
+    filled: int = 0
+
+
+class TonightResponse(BaseModel):
+    venue_id: UUID
+    timezone: str
+    now: datetime
+    date: str                                    # today's YYYY-MM-DD (venue time)
+    events: List[TonightEvent] = []
+    alerts: List[TonightAlert] = []
+    counts: dict = {}
+    week: List[WeekDay] = []
+
+
+class NoShowResult(BaseModel):
+    detail: str
+    spot_reopened: bool = False
 ```
 
 ---
 
 # PART B: Backend
 
-## B1. `backend/src/services/booking.py` (EDITS)
-Ask-back rules: reason required, always pending, and `dropped_at` kept. Also adds the `prior_drop_in_event()` helper that staffing uses.
+## B1. NEW FILE `backend/src/services/tonight.py`
+Builds the board in one pass. It uses a fixed number of queries, whatever the number of shifts.
 
-**Edit 1.** Find:
 ```python
-* A position can be requested again only after the worker WITHDREW it. Drops, rejections,
-  removals, no-shows and hand-offs stay on record (they feed reliability).
 """
-import logging
-```
-Replace with:
-```python
-* A position can be requested again only after the worker WITHDREW it. Drops, rejections,
-  removals, no-shows and hand-offs stay on record (they feed reliability).
-* Phase 29.4: a worker who DROPPED a position in this event can ask to come back (same or another
-  position). They must say why, it always waits for a manager, and the request carries
-  previous_drop_at + rebook_reason. dropped_at is kept on the row so the drop still counts for
-  reliability unless they end up working the shift.
+Phase 30: The manager's "Tonight" board.
+
+build_tonight() returns, for one venue:
+  events : every published, not-cancelled event that touches TODAY (venue time), with each booked
+           person's clock state:
+             upcoming - clock-in isn't open yet
+             due      - clock-in is open, not late yet (start + 10 min)
+             late     - past start + 10 min, no clock-in, shift still running
+             in       - clocked in (open entry)
+             done     - clocked out
+             missed   - shift ended, never clocked in, not marked no-show yet
+             no_show  - marked no-show
+  alerts : what needs the manager right now, most urgent first
+  week   : today + the next 6 days at a glance (drafts included, flagged)
 """
-import logging
-```
-
-**Edit 2.** Find:
-```python
-ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
-ACTIVE_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES
-REREQUESTABLE_STATUSES = ("withdrawn",)
-BLOCKED_MESSAGES = {
-    "rejected": "The venue already passed on your request for this position. You can request a different position.",
-    "removed": "The venue removed you from this shift.",
-    "no_show": "You were marked as a no-show for this shift.",
-    "cancelled": "This position was cancelled.",
-    "dropped": "You dropped this shift earlier, so it can't be picked back up here. Message the manager if they still need you.",
-    "transferred": "You handed this shift off earlier.",
-}
-NOTE_MAX = 500
-
-
-```
-Replace with:
-```python
-ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
-ACTIVE_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES
-REREQUESTABLE_STATUSES = ("withdrawn", "dropped")      # Phase 29.4: dropped = ask to come back
-BLOCKED_MESSAGES = {
-    "rejected": "The venue already passed on your request for this position. You can request a different position.",
-    "removed": "The venue removed you from this shift.",
-    "no_show": "You were marked as a no-show for this shift.",
-    "cancelled": "This position was cancelled.",
-    "transferred": "You handed this shift off earlier.",
-}
-NOTE_MAX = 500
-
-
-REBOOK_REASON_MIN = 5
-
-
-async def prior_drop_in_event(db: AsyncSession, worker_id, shift: Shift) -> Optional[datetime]:
-    """Phase 29.4: the latest time this worker dropped a position in this event (or this shift), if ever."""
-    q = (
-        select(func.max(ShiftRequest.dropped_at))
-        .join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(ShiftRequest.worker_id == worker_id, ShiftRequest.dropped_at.isnot(None))
-    )
-    q = q.where(Shift.event_id == shift.event_id) if shift.event_id else q.where(Shift.id == shift.id)
-    return await db.scalar(q)
-
-
-```
-
-**Edit 3.** Find:
-```python
-                )
-
-        # --- Earlier history on this exact position ---------------------------------------
-        existing = await db.scalar(
-```
-Replace with:
-```python
-                )
-
-        # --- Phase 29.4: coming back after a drop needs a reason and a manager ---------------
-        prior_drop = await prior_drop_in_event(db, worker.id, shift)
-        clean_note = _clean_note(note)
-        if prior_drop is not None and (not clean_note or len(clean_note) < REBOOK_REASON_MIN):
-            raise HTTPException(
-                status_code=400,
-                detail="You dropped a shift at this event earlier. Tell the manager why you can make it now. "
-                       "They have to approve it.",
-            )
-
-        # --- Earlier history on this exact position ---------------------------------------
-        existing = await db.scalar(
-```
-
-**Edit 4.** Find:
-```python
-        decision, source = await evaluate_shift_request(db=db, worker=worker, shift=shift, venue=shift.venue)
-        status_val = (decision.value if hasattr(decision, "value") else str(decision)).lower()
-        now = datetime.now(timezone.utc)
-
-```
-Replace with:
-```python
-        decision, source = await evaluate_shift_request(db=db, worker=worker, shift=shift, venue=shift.venue)
-        status_val = (decision.value if hasattr(decision, "value") else str(decision)).lower()
-        if prior_drop is not None:                     # Phase 29.4: never instant after a drop
-            status_val, source = "pending", None
-        now = datetime.now(timezone.utc)
-
-```
-
-**Edit 5.** Find:
-```python
-            req.check_out_time = None
-            req.check_out_verified = False
-            req.dropped_at = None
-            req.status_reason = None
-            req.pay_rate = None
-            req.notes = _clean_note(note)
-            req.created_at = now
-        else:
-```
-Replace with:
-```python
-            req.check_out_time = None
-            req.check_out_verified = False
-            # Phase 29.4: dropped_at is kept (the drop still counts unless they work the shift)
-            req.status_reason = None
-            req.pay_rate = None
-            req.notes = _clean_note(note)
-            req.previous_drop_at = prior_drop
-            req.rebook_reason = clean_note if prior_drop is not None else None
-            req.created_at = now
-        else:
-```
-
-**Edit 6.** Find:
-```python
-                approved_at=now if status_val == "approved" else None,
-                notes=_clean_note(note),
-            )
-            db.add(req)
-```
-Replace with:
-```python
-                approved_at=now if status_val == "approved" else None,
-                notes=_clean_note(note),
-                previous_drop_at=prior_drop,                                    # Phase 29.4
-                rebook_reason=clean_note if prior_drop is not None else None,
-            )
-            db.add(req)
-```
-
-**Edit 7.** Find:
-```python
-    if status_val != "approved":
-        await notify_events.request_pending(req_id)
-    await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id)   # Phase 29.1
-    return req_id
-
-```
-Replace with:
-```python
-    if status_val != "approved":
-        await notify_events.request_pending(req_id)
-    await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id,
-                               f"asking back after dropping · “{clean_note}”" if prior_drop is not None else "")   # Phase 29.1 / 29.4
-    return req_id
-
-```
-
----
-
-## B2. `backend/src/services/staffing.py` (EDITS)
-Assign with a reason books back someone who dropped. Candidates carry the drop, and offers skip them.
-
-**Edit 1.** Find:
-```python
-from src.services.booking import (
-    _load_shift_locked, as_utc, PENDING_STATUSES, BOOKED_STATUSES, ACTIVE_STATUSES,
-)
-from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
-```
-Replace with:
-```python
-from src.services.booking import (
-    _load_shift_locked, as_utc, PENDING_STATUSES, BOOKED_STATUSES, ACTIVE_STATUSES,
-    prior_drop_in_event, REBOOK_REASON_MIN,
-)
-from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
-```
-
-**Edit 2.** Find:
-```python
-
-MAX_OFFER_PEOPLE = 5
-REASSIGNABLE_STATUSES = ("withdrawn", "rejected", "cancelled", "removed")
-HISTORY_MESSAGES = {
-    "dropped": "dropped this shift earlier",
-    "no_show": "was marked a no-show on this shift",
-    "transferred": "handed this shift off earlier",
-```
-Replace with:
-```python
-
-MAX_OFFER_PEOPLE = 5
-REASSIGNABLE_STATUSES = ("withdrawn", "rejected", "cancelled", "removed", "dropped")   # Phase 29.4: dropped = with a reason
-HISTORY_MESSAGES = {
-    "no_show": "was marked a no-show on this shift",
-    "transferred": "handed this shift off earlier",
-```
-
-**Edit 3.** Find:
-```python
-    approved_by: Optional[UUID],
-    who: str,
-) -> ShiftRequest:
-    """
-```
-Replace with:
-```python
-    approved_by: Optional[UUID],
-    who: str,
-    rebook_reason: Optional[str] = None,
-) -> ShiftRequest:
-    """
-```
-
-**Edit 4.** Find:
-```python
-                raise HTTPException(status_code=400, detail=f"Already on this position (status: {st}).")
-
-    # Overlapping booking elsewhere
-    overlap = await db.scalar(
-```
-Replace with:
-```python
-                raise HTTPException(status_code=400, detail=f"Already on this position (status: {st}).")
-
-    # Phase 29.4: booking back someone who dropped this event needs the manager's reason
-    # (approving their own "ask to come back" request is fine: they already gave one)
-    prior_drop = await prior_drop_in_event(db, worker.id, shift)
-    asked_back = target is not None and (target.status or "").lower() in PENDING_STATUSES and target.previous_drop_at is not None
-    reason = (rebook_reason or "").strip()[:500]
-    if prior_drop is not None and not asked_back:
-        if you:
-            raise HTTPException(status_code=400, detail="You dropped a shift at this event earlier. Ask the manager to book you back.")
-        if len(reason) < REBOOK_REASON_MIN:
-            when = as_utc(prior_drop).strftime("%b %-d")
-            raise HTTPException(
-                status_code=400,
-                detail=f"{who} dropped this event on {when}. Add a short reason to book them back.",
-            )
-
-    # Overlapping booking elsewhere
-    overlap = await db.scalar(
-```
-
-**Edit 5.** Find:
-```python
-    target.check_out_time = None
-    target.check_out_verified = False
-    target.dropped_at = None
-    target.status_reason = None
-    target.pay_rate = None
-    await db.flush()
-
-```
-Replace with:
-```python
-    target.check_out_time = None
-    target.check_out_verified = False
-    # Phase 29.4: dropped_at is kept on purpose (history + reliability if this booking doesn't happen)
-    target.status_reason = None
-    target.pay_rate = None
-    if prior_drop is not None:
-        target.previous_drop_at = prior_drop
-        if not asked_back:
-            target.rebook_reason = reason
-    await db.flush()
-
-```
-
-**Edit 6.** Find:
-```python
-
-
-async def assign_worker(db: AsyncSession, manager: User, shift_id: UUID, worker_id: UUID) -> Tuple[UUID, str]:
-    """Manager books a specific person. Commits. Returns (request_id, message)."""
-    try:
-        shift = await _load_shift_locked(db, shift_id)
-        worker = await db.scalar(select(User).where(User.id == worker_id))
-        if worker is None:
-            raise HTTPException(status_code=404, detail="Person not found.")
-        name = full_name(worker)
-        req = await _book_locked(db, shift, worker, source="manager_assign", approved_by=manager.id, who=name)
-        req_id = req.id
-        role = shift.role_type
-```
-Replace with:
-```python
-
-
-async def assign_worker(
-    db: AsyncSession, manager: User, shift_id: UUID, worker_id: UUID, reason: Optional[str] = None,
-) -> Tuple[UUID, str]:
-    """Manager books a specific person. Commits. Returns (request_id, message).
-    Phase 29.4: `reason` is required when the person dropped this event earlier."""
-    try:
-        shift = await _load_shift_locked(db, shift_id)
-        worker = await db.scalar(select(User).where(User.id == worker_id))
-        if worker is None:
-            raise HTTPException(status_code=404, detail="Person not found.")
-        name = full_name(worker)
-        req = await _book_locked(db, shift, worker, source="manager_assign", approved_by=manager.id, who=name,
-                                 rebook_reason=reason)
-        req_id = req.id
-        role = shift.role_type
-```
-
-**Edit 7.** Find:
-```python
-            if c.offered:
-                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Already has an offer for this position."))
-                continue
-            if not c.available and not c.requested_this:
-```
-Replace with:
-```python
-            if c.offered:
-                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Already has an offer for this position."))
-                continue
-            if c.dropped_at is not None and not c.requested_this:                     # Phase 29.4
-                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Dropped this event earlier. Use Assign with a reason."))
-                continue
-            if not c.available and not c.requested_this:
-```
-
-**Edit 8.** Find:
-```python
-        in_event[wid].append((sid, (st or "").lower(), role))
-
-    history = {wid: (st or "").lower() for wid, st in (await db.execute(
-        select(ShiftRequest.worker_id, ShiftRequest.status).where(
-```
-Replace with:
-```python
-        in_event[wid].append((sid, (st or "").lower(), role))
-
-    # Phase 29.4: who dropped this event (Assign needs a reason; offers skip them)
-    drop_q = (
-        select(ShiftRequest.worker_id, ShiftRequest.dropped_at, ShiftRequest.status, ShiftRequest.status_reason)
-        .join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(ShiftRequest.worker_id.in_(ids), ShiftRequest.dropped_at.isnot(None),
-               func.lower(ShiftRequest.status).notin_(ACTIVE_STATUSES))
-    )
-    drop_q = drop_q.where(Shift.event_id == shift.event_id) if shift.event_id else drop_q.where(Shift.id == shift.id)
-    dropped = {}
-    for wid, dat, st, why in (await db.execute(drop_q)).all():
-        if wid not in dropped or dat > dropped[wid][0]:
-            dropped[wid] = (dat, why if (st or "").lower() == "dropped" else None)
-
-    history = {wid: (st or "").lower() for wid, st in (await db.execute(
-        select(ShiftRequest.worker_id, ShiftRequest.status).where(
-```
-
-**Edit 9.** Find:
-```python
-            offered=wid in offered,
-            venue_shifts=int(worked.get(wid, 0)),
-        ))
-    out.sort(key=lambda c: (
-```
-Replace with:
-```python
-            offered=wid in offered,
-            venue_shifts=int(worked.get(wid, 0)),
-            dropped_at=dropped[wid][0] if wid in dropped else None,
-            drop_reason=dropped[wid][1] if wid in dropped else None,
-        ))
-    out.sort(key=lambda c: (
-```
-
----
-
-## B3. `backend/src/routers/staffing.py` (EDITS)
-`POST /api/shifts/{shift_id}/assign` body is now `{worker_id, reason?}`. `reason` is required (5+ characters) when the person dropped this event and didn't ask back themselves; otherwise the response is 400.
-
-**Edit 1.** Find:
-```python
-
-from src.database import get_db
-from src.models import User, Shift, ShiftOffer
-from src.schemas import (
-    AssignCandidate, AssignRequest, AssignResult, OfferCreate, OfferCreateResult, WorkerOffer, OfferAcceptResult,
-```
-Replace with:
-```python
-
-from src.database import get_db
-from src.models import User, Shift, ShiftOffer, ShiftRequest
-from src.schemas import (
-    AssignCandidate, AssignRequest, AssignResult, OfferCreate, OfferCreateResult, WorkerOffer, OfferAcceptResult,
-```
-
-**Edit 2.** Find:
-```python
-):
-    await _managed_shift(db, shift_id, current_user)
-    request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id)
-    await notify_events.assigned(request_id)          # after commit; never raises
-    await activity.for_request("assigned", request_id, current_user.id)   # Phase 29.1
-    return AssignResult(request_id=request_id, message=message)
-
-```
-Replace with:
-```python
-):
-    await _managed_shift(db, shift_id, current_user)
-    request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id, reason=body.reason)
-    await notify_events.assigned(request_id)          # after commit; never raises
-    # Phase 29.4: flag a rebook after a drop in the activity log
-    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
-    extra = f"booked back after a drop · “{req.rebook_reason}”" if req is not None and req.previous_drop_at and req.rebook_reason else ""
-    await activity.for_request("assigned", request_id, current_user.id, extra)   # Phase 29.1
-    return AssignResult(request_id=request_id, message=message)
-
-```
-
----
-
-## B4. `backend/src/routers/shifts.py` (EDITS)
-`POST /api/shifts/{shift_id}/drop` accepts an optional `{reason}` body. Approve stores an aware UTC time.
-
-**Edit 1.** Find:
-```python
-)
-from src.schemas import (
-    ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
-    CheckInRequest, CheckOutRequest, TimeEntryResponse,
-```
-Replace with:
-```python
-)
-from src.schemas import (
-    DropShiftBody,                                            # Phase 29.4
-    ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
-    CheckInRequest, CheckOutRequest, TimeEntryResponse,
-```
-
-**Edit 2.** Find:
-```python
-        shift_req.approval_source = "manager_manual"
-        shift_req.approved_by_user_id = current_user.id
-        shift_req.approved_at = datetime.utcnow()
-        # Phase 26.1: booked on this position -> close their other waiting requests in the event
-        await withdraw_other_pending_in_event(
-```
-Replace with:
-```python
-        shift_req.approval_source = "manager_manual"
-        shift_req.approved_by_user_id = current_user.id
-        shift_req.approved_at = datetime.now(timezone.utc)      # Phase 29.4: was a naive utcnow()
-        # Phase 26.1: booked on this position -> close their other waiting requests in the event
-        await withdraw_other_pending_in_event(
-```
-
-**Edit 3.** Find:
-```python
-async def drop_shift(
-    shift_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-```
-Replace with:
-```python
-async def drop_shift(
-    shift_id: UUID,
-    body: Optional[DropShiftBody] = None,                     # Phase 29.4: optional reason for the manager
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-```
-
-**Edit 4.** Find:
-```python
-        shift_req.status = "dropped"
-        shift_req.dropped_at = now_utc
-
-        # Step 2: Decrement spots_filled
-```
-Replace with:
-```python
-        shift_req.status = "dropped"
-        shift_req.dropped_at = now_utc
-        shift_req.status_reason = ((body.reason or "").strip()[:500] or None) if body else None   # Phase 29.4
-
-        # Step 2: Decrement spots_filled
-```
-
-**Edit 5.** Find:
-```python
-    # Phase 29.1: managers hear about drops right away (after commit; never raises)
-    await notify_events.shift_dropped(shift_req.id)
-    await activity.for_request("shift_dropped", shift_req.id, current_user.id)
-
-    return {
-```
-Replace with:
-```python
-    # Phase 29.1: managers hear about drops right away (after commit; never raises)
-    await notify_events.shift_dropped(shift_req.id)
-    await activity.for_request("shift_dropped", shift_req.id, current_user.id,
-                               f"“{shift_req.status_reason}”" if shift_req.status_reason else "")   # Phase 29.4: with their reason
-
-    return {
-```
-
----
-
-## B5. `backend/src/services/listings.py` (EDITS)
-
-**Edit 1.** Find:
-```python
-        positions: List[ListingPosition] = []
-        my_request: Optional[ListingMyRequest] = None
-        for s in ev_shifts:
-            r = mine.get(s.id)
-```
-Replace with:
-```python
-        positions: List[ListingPosition] = []
-        my_request: Optional[ListingMyRequest] = None
-        # Phase 29.4: did the viewer drop a position here? Then asking back needs a reason + approval.
-        drops = [as_utc(mine[s.id].dropped_at) for s in ev_shifts if s.id in mine and mine[s.id].dropped_at is not None]
-        dropped_here = max(drops) if drops else None
-        for s in ev_shifts:
-            r = mine.get(s.id)
-```
-
-**Edit 2.** Find:
-```python
-                spots_left=left,
-                status="OPEN" if is_open else "FILLED",
-                booking="instant" if decision == RequestStatus.APPROVED else "approval",
-                est_pay_min=round(rate * hours, 2) if rate is not None else None,
-                est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
-                my_status=my_status,
-                my_status_reason=r.status_reason if r is not None else None,
-                staff_notes=s.staff_notes if booked_here else None,
-            ))
-```
-Replace with:
-```python
-                spots_left=left,
-                status="OPEN" if is_open else "FILLED",
-                booking="instant" if decision == RequestStatus.APPROVED and dropped_here is None else "approval",
-                est_pay_min=round(rate * hours, 2) if rate is not None else None,
-                est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
-                my_status=my_status,
-                my_status_reason=r.status_reason if r is not None else None,
-                my_dropped_at=r.dropped_at if r is not None and my_status == "dropped" else None,   # Phase 29.4
-                staff_notes=s.staff_notes if booked_here else None,
-            ))
-```
-
-**Edit 3.** Find:
-```python
-            started=started,
-            can_request=can_request,
-            staff_notes=ev.staff_notes if (
-                my_request is not None and my_request.status in ASSIGNED_STATUSES
-```
-Replace with:
-```python
-            started=started,
-            can_request=can_request,
-            dropped_here=dropped_here if (my_request is None or my_request.status in PENDING_STATUSES) else None,   # Phase 29.4
-            staff_notes=ev.staff_notes if (
-                my_request is not None and my_request.status in ASSIGNED_STATUSES
-```
-
----
-
-## B6. `backend/src/routers/venues.py` (EDITS)
-The manager board returns a `dropped` list per position and rebook flags on each person.
-
-**Edit 1.** Find:
-```python
-            rating_review=ratings_by_req[req.id].review if req.id in ratings_by_req else None,
-            approval_source=req.approval_source,
-        )
-        if person.status in ASSIGNED_STATUSES:
-            assigned_by_shift[req.shift_id].append(person)
-        else:
-            requested_by_shift[req.shift_id].append(person)
-
-    event_ids = {s.event_id for s in shifts if s.event_id}
-```
-Replace with:
-```python
-            rating_review=ratings_by_req[req.id].review if req.id in ratings_by_req else None,
-            approval_source=req.approval_source,
-            previous_drop_at=req.previous_drop_at,       # Phase 29.4
-            rebook_reason=req.rebook_reason,
-        )
-        if person.status in ASSIGNED_STATUSES:
-            assigned_by_shift[req.shift_id].append(person)
-        else:
-            requested_by_shift[req.shift_id].append(person)
-
-    # Phase 29.4: people who dropped a position (the manager can book them back with a reason)
-    dropped_by_shift = defaultdict(list)
-    for req, worker in (await db.execute(
-        select(ShiftRequest, User)
-        .join(User, ShiftRequest.worker_id == User.id)
-        .where(ShiftRequest.shift_id.in_(shift_ids), func.lower(ShiftRequest.status) == "dropped")
-        .order_by(ShiftRequest.dropped_at.desc())
-    )).all():
-        dropped_by_shift[req.shift_id].append(RosterPerson(
-            request_id=req.id, worker_id=worker.id, first_name=worker.first_name or "", last_name=worker.last_name or "",
-            email=worker.email, phone=worker.phone,
-            aggregate_rating=float(worker.aggregate_rating) if worker.aggregate_rating is not None else 5.0,
-            rating_count=int(worker.rating_count or 0), status="dropped", requested_at=req.created_at,
-            dropped_at=req.dropped_at, drop_reason=req.status_reason,
-        ))
-
-    event_ids = {s.event_id for s in shifts if s.event_id}
-```
-
-**Edit 2.** Find:
-```python
-            requested=requested_by_shift[s.id],
-            offers=offers_by_shift[s.id],
-        ))
-
-```
-Replace with:
-```python
-            requested=requested_by_shift[s.id],
-            offers=offers_by_shift[s.id],
-            dropped=dropped_by_shift[s.id],            # Phase 29.4
-        ))
-
-```
-
----
-
-## B7. `backend/src/services/reliability.py` (EDITS)
-
-**Edit 1.** Find:
-```python
-from uuid import UUID
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models import Shift, ShiftEvent, ShiftRequest, ShiftOffer, TimeEntry, User, Venue
+from src.schemas import (
+    TonightResponse, TonightEvent, TonightPosition, TonightPerson, TonightAlert, WeekDay, WeekEvent,
+)
+from src.services.clock import auto_close_open_entries, late_minutes, clock_in_opens_at, LATE_GRACE, as_utc
+from src.services.locations import load_locations
+from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
+
+BOARD_STATUSES = ("approved", "confirmed", "checked_in", "completed", "no_show")
+BOOKED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
+PENDING_STATUSES = ("pending", "pending_manager_approval")
+WEEK_DAYS = 7
+OPEN_SPOT_ALERT_WINDOW = timedelta(hours=12)   # open spots on shifts starting within 12 h are alerts
+SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _tz(venue: Venue) -> ZoneInfo:
+    try:
+        return ZoneInfo(venue.timezone or "America/New_York")
+    except Exception:
+        return ZoneInfo("America/New_York")
+
+
+def _hm(dt: datetime, tz: ZoneInfo) -> str:
+    return as_utc(dt).astimezone(tz).strftime("%-I:%M %p")
+
+
+def _name(u: User) -> str:
+    n = f"{u.first_name or ''} {u.last_name or ''}".strip()
+    return n or (u.email or "Someone")
+
+
+def _key(s: Shift) -> str:
+    return str(s.event_id) if s.event_id else f"{s.title}|{as_utc(s.start_time).isoformat()}|{as_utc(s.end_time).isoformat()}"
+
+
+def clock_state(req_status: str, entries: list, shift: Shift, venue: Venue, now: datetime):
+    """Returns (state, late_minutes, first_in, last_out)."""
+    if req_status == "no_show":
+        return "no_show", 0, None, None
+    start, end = as_utc(shift.start_time), as_utc(shift.end_time)
+    if entries:
+        first_in = min(as_utc(e.clock_in_time) for e in entries)
+        open_entry = any(e.clock_out_time is None for e in entries)
+        last_out = None if open_entry else max(as_utc(e.clock_out_time) for e in entries)
+        return ("in" if open_entry else "done"), late_minutes(first_in, start), first_in, last_out
+    if now >= end:
+        return "missed", 0, None, None
+    if now < clock_in_opens_at(shift, venue):
+        return "upcoming", 0, None, None
+    if now <= start + LATE_GRACE:
+        return "due", 0, None, None
+    return "late", int((now - start).total_seconds() // 60), None, None
+
+
+async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
+    await auto_close_open_entries(db, venue_id=venue.id)
+    tz = _tz(venue)
+    now = datetime.now(timezone.utc)
+    today_local = now.astimezone(tz).date()
+    day_start = datetime(today_local.year, today_local.month, today_local.day, tzinfo=tz)
+    today_end_utc = (day_start + timedelta(days=1)).astimezone(timezone.utc)
+    day_start_utc = day_start.astimezone(timezone.utc)
+    week_end_utc = (day_start + timedelta(days=WEEK_DAYS)).astimezone(timezone.utc)
+
+    shifts = (await db.execute(
+        select(Shift).where(
+            Shift.venue_id == venue.id,
+            Shift.start_time < week_end_utc,
+            Shift.end_time > day_start_utc,
+            func.upper(Shift.status) != "CANCELLED",
+        ).order_by(Shift.start_time.asc(), Shift.role_type.asc())
+    )).scalars().all()
+
+    event_ids = {s.event_id for s in shifts if s.event_id}
+    events = {e.id: e for e in (await db.execute(
+        select(ShiftEvent).where(ShiftEvent.id.in_(event_ids))
+    )).scalars().all()} if event_ids else {}
+    shifts = [s for s in shifts if not (s.event_id in events and events[s.event_id].cancelled_at is not None)]
+    locations = await load_locations(db, [e.location_id for e in events.values()])
+    shift_ids = [s.id for s in shifts]
+
+    reqs = defaultdict(list)          # shift_id -> [(req, user)]
+    pending = defaultdict(int)
+    offers = defaultdict(int)
+    entries = defaultdict(list)       # (shift_id, worker_id) -> [TimeEntry]
+    if shift_ids:
+        for req, u in (await db.execute(
+            select(ShiftRequest, User).join(User, User.id == ShiftRequest.worker_id)
+            .where(ShiftRequest.shift_id.in_(shift_ids),
+                   func.lower(ShiftRequest.status).in_(BOARD_STATUSES + PENDING_STATUSES))
+            .order_by(User.first_name.asc(), User.last_name.asc())
+        )).all():
+            if (req.status or "").lower() in PENDING_STATUSES:
+                pending[req.shift_id] += 1
+            else:
+                reqs[req.shift_id].append((req, u))
+        for sid, n in (await db.execute(
+            select(ShiftOffer.shift_id, func.count(ShiftOffer.id))
+            .where(ShiftOffer.shift_id.in_(shift_ids), ShiftOffer.status == "pending")
+            .group_by(ShiftOffer.shift_id)
+        )).all():
+            offers[sid] = int(n)
+        for e in (await db.execute(select(TimeEntry).where(TimeEntry.shift_id.in_(shift_ids)))).scalars().all():
+            entries[(e.shift_id, e.worker_id)].append(e)
+
+    def info_seen(req, s):
+        ev = events.get(s.event_id)
+        loc = locations.get(ev.location_id) if ev is not None and ev.location_id else None
+        notes = has_any_notes(venue, ev, s, loc)
+        updated = latest_info_update(ev, s)
+        if not notes and updated is None:
+            return None
+        return not needs_ack(booked=True, has_notes=notes, updated_at=updated,
+                             seen_at=req.info_seen_at, booked_at=req.approved_at or req.created_at)
+
+    # ---------------------------------------------------------------- today
+    today = {}
+    order = []
+    alerts = []
+    for s in shifts:
+        if (s.status or "").upper() == "DRAFT":
+            continue
+        start, end = as_utc(s.start_time), as_utc(s.end_time)
+        if not (start < today_end_utc and end > day_start_utc):
+            continue
+        k = _key(s)
+        ev = events.get(s.event_id)
+        if k not in today:
+            loc = locations.get(ev.location_id) if ev is not None and ev.location_id else None
+            today[k] = TonightEvent(
+                event_key=k, event_id=s.event_id, title=(ev.title if ev else s.title) or "Shift",
+                start_time=start, end_time=end, location_name=loc.name if loc else None,
+                state="ended" if now >= end else ("live" if now >= start else "upcoming"),
+                clock_in_opens_at=clock_in_opens_at(s, venue),
+            )
+            order.append(k)
+        te = today[k]
+        # an event's positions can differ in time; widen the event window
+        te.start_time = min(te.start_time, start)
+        te.end_time = max(te.end_time, end)
+        te.state = "ended" if now >= te.end_time else ("live" if now >= te.start_time else "upcoming")
+
+        people = []
+        for req, u in reqs[s.id]:
+            st = (req.status or "").lower()
+            es = entries.get((s.id, u.id), [])
+            state, late, first_in, last_out = clock_state(st, es, s, venue, now)
+            seen = info_seen(req, s) if st in BOOKED_STATUSES else None
+            first_entry = min(es, key=lambda e: as_utc(e.clock_in_time)) if es else None
+            p = TonightPerson(
+                request_id=req.id, worker_id=u.id, first_name=u.first_name or "", last_name=u.last_name or "",
+                phone=u.phone, request_status=st, clock_state=state,
+                clock_in_time=first_in, clock_out_time=last_out, late_minutes=late,
+                geo_flag=any(e.clock_in_geo_status == "outside_geofence" for e in es),
+                manager_clock=first_entry is not None and first_entry.clock_in_geo_status == "manager",
+                info_seen=seen, previous_drop_at=req.previous_drop_at,
+            )
+            people.append(p)
+            label = f"{s.role_type} · {te.title}"
+            if state == "late":
+                alerts.append(TonightAlert(
+                    kind="late", severity="high",
+                    text=f"{_name(u)} hasn't clocked in · {label} started {late} min ago",
+                    event_id=s.event_id, event_key=k, shift_id=s.id, request_id=req.id, worker_id=u.id))
+            elif state == "missed":
+                alerts.append(TonightAlert(
+                    kind="missed", severity="medium",
+                    text=f"{_name(u)} never clocked in · {label} ended {_hm(end, tz)}. Mark a no-show or add their hours.",
+                    event_id=s.event_id, event_key=k, shift_id=s.id, request_id=req.id, worker_id=u.id))
+            elif p.geo_flag and state == "in":
+                alerts.append(TonightAlert(
+                    kind="geo", severity="low",
+                    text=f"{_name(u)} clocked in away from the site · {label}",
+                    event_id=s.event_id, event_key=k, shift_id=s.id, request_id=req.id, worker_id=u.id))
+
+        cap = s.capacity if s.capacity is not None else 1
+        open_spots = max(0, cap - (s.spots_filled or 0)) if now < end else 0
+        te.positions.append(TonightPosition(
+            shift_id=s.id, role_type=s.role_type or "Worker", capacity=cap, spots_filled=s.spots_filled or 0,
+            open_spots=open_spots, pending_requests=pending[s.id], pending_offers=offers[s.id], people=people,
+        ))
+        if open_spots and start - now <= OPEN_SPOT_ALERT_WINDOW:
+            extra = []
+            if pending[s.id]:
+                extra.append(f"{pending[s.id]} request{'s' if pending[s.id] != 1 else ''} waiting")
+            if offers[s.id]:
+                extra.append(f"{offers[s.id]} offer{'s' if offers[s.id] != 1 else ''} out")
+            when = f"started {_hm(start, tz)}" if now >= start else f"starts {_hm(start, tz)}"
+            alerts.append(TonightAlert(
+                kind="open_spot", severity="high" if now >= start - timedelta(hours=2) else "medium",
+                text=f"{open_spots} {s.role_type} spot{'s' if open_spots != 1 else ''} open · {te.title} {when}"
+                     + (f" ({', '.join(extra)})" if extra else ""),
+                event_id=s.event_id, event_key=k, shift_id=s.id))
+
+    for k in order:
+        te = today[k]
+        ps = [p for pos in te.positions for p in pos.people]
+        te.booked = sum(1 for p in ps if p.clock_state != "no_show")
+        te.clocked_in = sum(1 for p in ps if p.clock_state == "in")
+        te.done = sum(1 for p in ps if p.clock_state == "done")
+        te.late = sum(1 for p in ps if p.clock_state == "late")
+        te.missed = sum(1 for p in ps if p.clock_state == "missed")
+        te.no_show = sum(1 for p in ps if p.clock_state == "no_show")
+        te.unread = sum(1 for p in ps if p.info_seen is False and p.clock_state in ("upcoming", "due", "late"))
+        te.open_spots = sum(pos.open_spots for pos in te.positions)
+        if te.unread and te.state != "ended":
+            alerts.append(TonightAlert(
+                kind="unread", severity="low",
+                text=f"{te.unread} {'person hasn' if te.unread == 1 else 'people haven'}'t read the latest info · {te.title}",
+                event_id=te.event_id, event_key=k))
+
+    alerts.sort(key=lambda a: SEVERITY_ORDER.get(a.severity, 3))
+    today_events = [today[k] for k in order]
+    counts = {
+        "events": len(today_events),
+        "booked": sum(e.booked for e in today_events),
+        "clocked_in": sum(e.clocked_in for e in today_events),
+        "done": sum(e.done for e in today_events),
+        "late": sum(e.late for e in today_events),
+        "missed": sum(e.missed for e in today_events),
+        "no_show": sum(e.no_show for e in today_events),
+        "unread": sum(e.unread for e in today_events),
+        "open_spots": sum(e.open_spots for e in today_events),
+        "alerts": len(alerts),
+        "urgent": sum(1 for a in alerts if a.severity == "high"),
+    }
+
+    # ---------------------------------------------------------------- week
+    days = []
+    for i in range(WEEK_DAYS):
+        d = today_local + timedelta(days=i)
+        days.append(WeekDay(
+            date=d.isoformat(),
+            label="Today" if i == 0 else ("Tomorrow" if i == 1 else d.strftime("%a")),
+        ))
+    by_day = {d.date: d for d in days}
+    week_events = {}
+    for s in shifts:
+        start = as_utc(s.start_time)
+        local_date = start.astimezone(tz).date().isoformat()
+        day = by_day.get(local_date)
+        if day is None:          # started before today (overnight into today) -> shown under today
+            day = days[0] if start < day_start_utc else None
+        if day is None:
+            continue
+        k = _key(s)
+        ev = events.get(s.event_id)
+        we = week_events.get(k)
+        if we is None:
+            we = WeekEvent(
+                event_key=k, event_id=s.event_id, title=(ev.title if ev else s.title) or "Shift",
+                start_time=start, end_time=as_utc(s.end_time),
+                status=(ev.status if ev is not None and ev.status else "published"),
+            )
+            week_events[k] = we
+            day.events.append(we)
+        cap = s.capacity if s.capacity is not None else 1
+        booked = [r for r, _ in reqs[s.id] if (r.status or "").lower() in BOOKED_STATUSES]
+        we.capacity += cap
+        we.filled += len(booked)
+        we.requested += pending[s.id]
+        if as_utc(s.end_time) > now:
+            we.open_spots += max(0, cap - (s.spots_filled or 0))
+        we.unread += sum(1 for r in booked if (r.status or "").lower() in ("approved", "confirmed") and info_seen(r, s) is False)
+        we.start_time = min(we.start_time, start)
+        we.end_time = max(we.end_time, as_utc(s.end_time))
+    for d in days:
+        d.events.sort(key=lambda e: e.start_time)
+        d.capacity = sum(e.capacity for e in d.events if e.status != "draft")
+        d.filled = sum(e.filled for e in d.events if e.status != "draft")
+
+    return TonightResponse(
+        venue_id=venue.id, timezone=str(tz.key), now=now, date=today_local.isoformat(),
+        events=today_events, alerts=alerts, counts=counts, week=days,
+    )
+```
+
+---
+
+## B2. `backend/src/routers/activity.py` (EDITS)
+Adds `GET /api/venues/{venue_id}/tonight` (managers of the venue plus platform admins; uses `verify_venue_manager_access`).
+
+**Edit 1.** Find:
+```python
+
+  GET /api/venues/{venue_id}/activity?category=&limit=30&before=<iso>
+"""
+from datetime import datetime
 ```
 Replace with:
 ```python
-from uuid import UUID
 
-from sqlalchemy import select, func, or_, and_
-from sqlalchemy.ext.asyncio import AsyncSession
-
+  GET /api/venues/{venue_id}/activity?category=&limit=30&before=<iso>
+Phase 30:
+  GET /api/venues/{venue_id}/tonight   (the manager's Today / This week board)
+"""
+from datetime import datetime
 ```
 
 **Edit 2.** Find:
 ```python
-        .where(
-            ShiftRequest.worker_id.in_(worker_ids),
-            func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped", "no_show")),
-        )
-    )).all()
+from src.database import get_db
+from src.models import User, VenueActivity
+from src.schemas import ActivityItem
+from src.auth import require_manager_or_admin
+from src.routers.venues import verify_venue_manager_access
+from src.services.activity import CATEGORIES, person
+
+router = APIRouter(prefix="/api/venues", tags=["Activity"])
 ```
 Replace with:
 ```python
-        .where(
-            ShiftRequest.worker_id.in_(worker_ids),
-            or_(
-                func.lower(ShiftRequest.status).in_(COMMITTED_STATUSES + ("dropped", "no_show")),
-                # Phase 29.4: dropped, then asked back / was booked back but it didn't happen -> still a drop
-                and_(ShiftRequest.dropped_at.isnot(None), func.lower(ShiftRequest.status) != "transferred"),
-            ),
-        )
-    )).all()
+from src.database import get_db
+from src.models import User, VenueActivity
+from src.schemas import ActivityItem, TonightResponse
+from src.auth import require_manager_or_admin
+from src.routers.venues import verify_venue_manager_access
+from src.services.activity import CATEGORIES, person
+from src.services.tonight import build_tonight
+
+router = APIRouter(prefix="/api/venues", tags=["Activity"])
 ```
 
 **Edit 3.** Find:
 ```python
-            continue
-
-        if status_l == "dropped":
-            d = _aware(dropped_at)
-            if d is not None and (start - d) < LATE_DROP_WINDOW:
+        for r in rows
+    ]
 ```
 Replace with:
 ```python
-            continue
+        for r in rows
+    ]
 
-        if status_l == "dropped" or (dropped_at is not None and status_l not in COMMITTED_STATUSES + ("no_show",)):
-            d = _aware(dropped_at)
-            if d is not None and (start - d) < LATE_DROP_WINDOW:
+
+@router.get("/{venue_id}/tonight", response_model=TonightResponse)
+async def venue_tonight(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Phase 30: today's shifts with live clock status, alerts, and the week at a glance."""
+    venue = await verify_venue_manager_access(venue_id, current_user, db)
+    return await build_tonight(db, venue)
 ```
 
 ---
 
-## B8. `backend/src/services/notify_events.py` (EDITS)
+## B3. `backend/src/routers/timesheets.py` (EDITS)
+A no-show frees the spot and is audited with the `no_show:spot_released` marker. Adding time for a no-show takes the spot back when there's room. A manager clock-in logs activity.
 
 **Edit 1.** Find:
 ```python
-    title = f"{person(worker)} requested {shift.role_type}"
-    body = f"{event.title if event else shift.title} · {when_text(shift.start_time, venue)}"
-    if req.notes:
-        body += f"\n“{req.notes}”"
+
+from src.database import get_db
+from src.models import User, Shift, ShiftRequest, TimeEntry
+from src.schemas import ReasonBody, TimeEntryInput, PayRateInput
+from src.auth import require_manager_or_admin
+from src.services.venue_public import can_manage_venue
 ```
 Replace with:
 ```python
-    title = f"{person(worker)} requested {shift.role_type}"
-    body = f"{event.title if event else shift.title} · {when_text(shift.start_time, venue)}"
-    if req.previous_drop_at is not None:                      # Phase 29.4: asking back after a drop
-        title = f"{person(worker)} dropped this earlier and is asking back · {shift.role_type}"
-        body += "\nThey dropped this event earlier. It needs your approval."
-    if req.notes:
-        body += f"\n“{req.notes}”"
+
+from src.database import get_db
+from src.models import User, Shift, ShiftRequest, TimeEntry, TimeEntryEdit
+from src.schemas import ReasonBody, TimeEntryInput, PayRateInput, NoShowResult
+from src.auth import require_manager_or_admin
+from src.services.venue_public import can_manage_venue
 ```
 
 **Edit 2.** Find:
 ```python
-        db, await manager_ids(db, shift.venue_id), "shift_dropped",
-        f"{person(worker)} dropped {shift.role_type} · {event.title if event else shift.title}",
-        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event.",
-        manager_link(shift.venue_id, shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id,
-        request_id=req.id, urgent=is_soon(shift.start_time), dedupe_key=f"dropped:{req.id}",
-    )
+
+router = APIRouter(prefix="/api", tags=["Time Sheets"])
+
 
 ```
 Replace with:
 ```python
-        db, await manager_ids(db, shift.venue_id), "shift_dropped",
-        f"{person(worker)} dropped {shift.role_type} · {event.title if event else shift.title}",
-        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event."
-        + (f"\nTheir reason: “{req.status_reason}”" if req.status_reason else ""),          # Phase 29.4
-        manager_link(shift.venue_id, shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id,
-        request_id=req.id, urgent=is_soon(shift.start_time),
-        dedupe_key=f"dropped:{req.id}:{int(_as_utc(req.dropped_at).timestamp()) if req.dropped_at else 0}",
+
+router = APIRouter(prefix="/api", tags=["Time Sheets"])
+
+NO_SHOW_RELEASED = "no_show:spot_released"   # Phase 30: audit marker - this no-show freed the spot
+
+
+async def _no_show_released_spot(db: AsyncSession, request_id) -> bool:
+    """True when the latest no-show on this booking freed the spot (Phase 30 and later)."""
+    last = await db.scalar(
+        select(TimeEntryEdit).where(TimeEntryEdit.shift_request_id == request_id, TimeEntryEdit.action == "no_show")
+        .order_by(TimeEntryEdit.created_at.desc()).limit(1)
     )
+    return last is not None and last.new_value == NO_SHOW_RELEASED
+
+
+```
+
+**Edit 3.** Find:
+```python
+
+
+@router.post("/requests/{request_id}/no-show")
+async def mark_no_show(
+    request_id: UUID,
+    body: ReasonBody,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    req, shift = await _load_request(db, request_id, current_user)
+    st = (req.status or "").lower()
+    if as_utc(shift.start_time) > datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="You can only mark a no-show after the shift starts.")
+    if st not in ("approved", "confirmed"):
+```
+Replace with:
+```python
+
+
+@router.post("/requests/{request_id}/no-show", response_model=NoShowResult)
+async def mark_no_show(
+    request_id: UUID,
+    body: ReasonBody,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Phase 30: a no-show also frees their spot (spots_filled - 1, FILLED -> OPEN while the shift is
+    still running) so the manager can find cover straight away. The audit row's new_value is
+    NO_SHOW_RELEASED so undoing it (adding time) gives the spot back.
+    """
+    req, shift = await _load_request(db, request_id, current_user)
+    st = (req.status or "").lower()
+    now = datetime.now(timezone.utc)
+    if as_utc(shift.start_time) > now:
+        raise HTTPException(status_code=400, detail="You can only mark a no-show after the shift starts.")
+    if st not in ("approved", "confirmed"):
+```
+
+**Edit 4.** Find:
+```python
+    if has_entries:
+        raise HTTPException(status_code=400, detail="They have clock-in records. Delete those first if they really didn't show.")
+    try:
+        req.status = "no_show"
+        req.status_reason = (body.reason or "").strip() or None
+        audit(db, req.id, None, current_user.id, "no_show", st, "no_show", req.status_reason)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to mark no-show: {str(e)}")
+    return {"detail": "Marked as no-show."}
+
+
+```
+Replace with:
+```python
+    if has_entries:
+        raise HTTPException(status_code=400, detail="They have clock-in records. Delete those first if they really didn't show.")
+    reopened = False
+    try:
+        req.status = "no_show"
+        req.status_reason = (body.reason or "").strip() or None
+        shift.spots_filled = max(0, (shift.spots_filled or 1) - 1)
+        if (shift.status or "").upper() == "FILLED" and as_utc(shift.end_time) > now:
+            shift.status = "OPEN"
+        reopened = as_utc(shift.end_time) > now and (shift.status or "").upper() == "OPEN"
+        audit(db, req.id, None, current_user.id, "no_show", st, NO_SHOW_RELEASED, req.status_reason)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to mark no-show: {str(e)}")
+    await notify_events.no_show_marked(request_id)                                            # Phase 30
+    await activity.for_request("no_show", request_id, current_user.id,
+                               f"Reason: {req.status_reason}" if req.status_reason else "")
+    return NoShowResult(
+        detail="Marked as no-show. Their spot is open again." if reopened else "Marked as no-show.",
+        spot_reopened=reopened,
+    )
+
+
+```
+
+**Edit 5.** Find:
+```python
+        raise HTTPException(status_code=400, detail="Time can only be added for people booked on this shift.")
+    cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
+    try:
+        entry = TimeEntry(
+```
+Replace with:
+```python
+        raise HTTPException(status_code=400, detail="Time can only be added for people booked on this shift.")
+    cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
+    reclaim = st == "no_show" and await _no_show_released_spot(db, req.id)   # Phase 30
+    try:
+        entry = TimeEntry(
+```
+
+**Edit 6.** Find:
+```python
+        if st == "no_show":
+            req.status_reason = None
+        audit(db, req.id, entry.id, current_user.id, "add", None, fmt_range(cin, cout), reason)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to add time: {str(e)}")
+    return {"detail": "Time added.", "entry_id": str(entry.id)}
+
+```
+Replace with:
+```python
+        if st == "no_show":
+            req.status_reason = None
+        # Phase 30: the no-show had freed their spot and they worked after all -> take it back.
+        # If someone already covered it and the position is full, leave the count alone (capacity is a hard limit).
+        if reclaim and (shift.spots_filled or 0) < (shift.capacity or 1):
+            shift.spots_filled = (shift.spots_filled or 0) + 1
+            if shift.spots_filled >= (shift.capacity or 1) and (shift.status or "").upper() == "OPEN":
+                shift.status = "FILLED"
+        audit(db, req.id, entry.id, current_user.id, "add", None, fmt_range(cin, cout), reason)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to add time: {str(e)}")
+    if cout is None:   # Phase 30: "Clock in for them" from the Tonight board (or the time sheet)
+        await activity.for_request("manager_clock_in", request_id, current_user.id, f"Reason: {reason}")
+    return {"detail": "Time added.", "entry_id": str(entry.id)}
 
 ```
 
 ---
 
-## B9. `backend/src/routers/transfers.py` (EDIT)
-Declining or withdrawing a hand-off only works while it's still waiting.
+## B4. `backend/src/services/notify_events.py` (EDIT)
+New `no_show_marked(request_id)` hook.
 
 **Edit 1.** Find:
 ```python
-        is_manager = bool(mgr)
 
-    if current_user.id == transfer.to_worker_id:
-        transfer.status = "declined"
+
+# ---------------------------------------------------------------------------------------------
+# Hand-offs (transfers)
 ```
 Replace with:
 ```python
-        is_manager = bool(mgr)
 
-    # Phase 29.4: only a hand-off that's still waiting can be declined / withdrawn / denied
-    if (transfer.status or "").lower() not in ("pending_worker_acceptance", "pending_manager_approval"):
-        raise HTTPException(status_code=400, detail="This hand-off is already settled.")
 
-    if current_user.id == transfer.to_worker_id:
-        transfer.status = "declined"
+async def _no_show_marked(db: AsyncSession, request_id) -> None:
+    """Phase 30: tell the worker they were marked a no-show (so they can speak up if it's wrong)."""
+    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
+    if req is None:
+        return
+    shift, venue, event, _ = await _shift_bundle(db, req.shift_id)
+    if shift is None:
+        return
+    reason = f"\nNote from your manager: {req.status_reason}" if req.status_reason else ""
+    await notify_in(
+        db, [req.worker_id], "no_show",
+        f"Marked as a no-show: {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. If you were there, message your manager so they can fix your hours.{reason}",
+        worker_shift_link(req.id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id, urgent=True,
+        dedupe_key=f"noshow:{req.id}",
+    )
+
+
+async def no_show_marked(request_id) -> None:
+    await _run("no_show_marked", _no_show_marked, request_id)
+
+
+# ---------------------------------------------------------------------------------------------
+# Hand-offs (transfers)
 ```
 
 ---
 
-# PART C: Frontend, worker
+## B5. `backend/src/services/notify.py` (EDIT)
+Registers the two new notification kinds so email/SMS preferences apply.
 
-New folder: `frontend/src/components/worker/`.
-
-## C1. `frontend/src/pages/WorkerDashboard.jsx` (FULL FILE REPLACEMENT)
-Same data calls as before plus `GET /transfers/my-outgoing`. Note `w-full` on the page root, the header container and `<main>`.
-
-```jsx
-import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import api from '../api/client';
-import {
-  Calendar, AlertCircle, Briefcase, Check, Search, Filter, ArrowRightLeft, Zap, Info, CalendarDays, AlertTriangle,
-  ListChecks, Send, ChevronRight, RotateCcw, X,
-} from 'lucide-react';
-import TransferModal from '../components/TransferModal';
-import ShiftBoardModal from '../components/ShiftBoardModal';
-import EventListingCard from '../components/EventListingCard';
-import EventListingModal from '../components/EventListingModal';
-import WorkerCalendar from '../components/WorkerCalendar';
-import ShiftDetailsModal from '../components/ShiftDetailsModal';
-import WorkerOffers from '../components/WorkerOffers';
-import RatingBadge from '../components/RatingBadge';
-import { Avatar } from '../components/WorkerProfilePanel';
-import MyShiftCard from '../components/worker/MyShiftCard';
-import DropShiftDialog from '../components/worker/DropShiftDialog';
-import HandoffsPanel from '../components/worker/HandoffsPanel';
-import { PENDING_INVITE_KEY } from './JoinPage';
-import {
-  dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
-} from '../utils/listingFormat';
-import { getCurrentPosition } from '../utils/geo';
-
-const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in'];
-const TAB_IDS = ['schedule', 'find', 'calendar', 'transfers'];
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
-
-/**
- * Worker home. Phase 29.4 layout:
- *   Tabs: My shifts (default when you have something coming up) · Find shifts · Calendar · Hand-offs.
- *   Each shift card has ONE main button (clock in/out, read the update, withdraw, ask to come back)
- *   and a ⋯ menu for the rest (details, directions, calendar, chat, hand off, drop).
- *   Tab ids stay 'schedule' | 'find' | 'calendar' | 'transfers' so notification links keep working.
- */
-export default function WorkerDashboard() {
-  const { user } = useAuth();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const urlTab = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState(TAB_IDS.includes(urlTab) ? urlTab : null);
-  const [listings, setListings] = useState([]);
-  const [calendar, setCalendar] = useState({ items: [], unread_count: 0 });
-  const [detailRequestId, setDetailRequestId] = useState(null);
-  const [myShifts, setMyShifts] = useState([]);
-  const [incomingTransfers, setIncomingTransfers] = useState([]);
-  const [outgoingTransfers, setOutgoingTransfers] = useState([]);   // Phase 29.4
-  const [activeClockIns, setActiveClockIns] = useState(new Set());
-  const [loading, setLoading] = useState(true);
-  const [clockActionLoading, setClockActionLoading] = useState(null);
-  const [handoffBusy, setHandoffBusy] = useState(null);
-  const [withdrawingId, setWithdrawingId] = useState(null);
-  const [notification, setNotification] = useState(null);
-
-  // Find Shifts filters
-  const [search, setSearch] = useState('');
-  const [whenFilter, setWhenFilter] = useState('all');
-  const [roleFilter, setRoleFilter] = useState('ALL');
-  const [venueFilter, setVenueFilter] = useState('ALL');
-  const [instantOnly, setInstantOnly] = useState(false);
-  const [hideRequested, setHideRequested] = useState(false);
-
-  const [openListing, setOpenListing] = useState(null); // { eventId, initial }
-  const [transferModalOpen, setTransferModalOpen] = useState(false);
-  const [transferShiftId, setTransferShiftId] = useState(null);
-  const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
-  const [shiftToDrop, setShiftToDrop] = useState(null);
-  const [offers, setOffers] = useState([]);
-  const [offerBusy, setOfferBusy] = useState(null);
-  const navigate = useNavigate();
-
-  const flash = (type, message) => setNotification({ type, message });
-
-  const fetchWorkerData = async (showSpinner = true) => {
-    try {
-      if (showSpinner) setLoading(true);
-      const [listingsRes, myRes, transfersRes, outRes, activeClocksRes, calendarRes, offersRes] = await Promise.all([
-        api.get('/listings'),
-        api.get('/users/me/shifts'),
-        api.get('/transfers/my-incoming'),
-        api.get('/transfers/my-outgoing').catch(() => ({ data: [] })),
-        api.get('/shifts/time-entries/active').catch(() => ({ data: [] })),
-        api.get('/me/calendar').catch(() => ({ data: { items: [], unread_count: 0 } })),
-        api.get('/me/offers').catch(() => ({ data: [] })),
-      ]);
-      setListings(listingsRes.data || []);
-      setOffers(offersRes.data || []);
-      setCalendar({ items: calendarRes.data?.items || [], unread_count: calendarRes.data?.unread_count || 0 });
-      setMyShifts(myRes.data || []);
-      setIncomingTransfers(transfersRes.data || []);
-      setOutgoingTransfers(outRes.data || []);
-      setActiveClockIns(new Set((activeClocksRes.data || []).map((te) => te.shift_id)));
-      // First load: open My shifts when there's something coming up, otherwise Find shifts
-      setActiveTab((prev) => {
-        if (prev) return prev;
-        const upcoming = (myRes.data || []).some((r) => {
-          const st = String(r.status || '').toLowerCase();
-          return UPCOMING_STATUSES.includes(st) && new Date(r.shift?.end_time).getTime() >= Date.now();
-        });
-        return upcoming || (offersRes.data || []).length ? 'schedule' : 'find';
-      });
-    } catch (err) {
-      flash('error', "Couldn't load your shifts. Check your connection and refresh.");
-      setActiveTab((prev) => prev || 'find');
-    } finally {
-      if (showSpinner) setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let pendingInvite = null;
-    try {
-      pendingInvite = localStorage.getItem(PENDING_INVITE_KEY);
-    } catch (e) {
-      pendingInvite = null;
-    }
-    if (pendingInvite) {
-      navigate(`/join/${pendingInvite}`, { replace: true });
-      return;
-    }
-    fetchWorkerData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ---- Actions ---------------------------------------------------------------------------
-  const handleOffer = async (offer, action) => {
-    setOfferBusy(offer.offer_id);
-    try {
-      const res = await api.post(`/offers/${offer.offer_id}/${action}`);
-      flash(action === 'accept' ? 'success' : 'info', action === 'accept' ? res.data.message : 'Offer declined.');
-    } catch (err) {
-      flash('error', err.response?.data?.detail || 'Could not update the offer.');
-    } finally {
-      setOfferBusy(null);
-      fetchWorkerData(false);
-    }
-  };
-
-  const handleWithdraw = async (req) => {
-    try {
-      setWithdrawingId(req.id);
-      await api.post(`/listings/requests/${req.id}/withdraw`);
-      flash('info', 'Request withdrawn.');
-      fetchWorkerData(false);
-    } catch (err) {
-      flash('error', err.response?.data?.detail || 'Could not withdraw the request.');
-    } finally {
-      setWithdrawingId(null);
-    }
-  };
-
-  const handleClockIn = async (shiftId, item) => {
-    try {
-      setClockActionLoading(shiftId);
-      let body = {};
-      if (item?.geofence_on) {
-        flash('info', 'Checking your location…');
-        body = await getCurrentPosition();
-      }
-      const res = await api.post(`/shifts/${shiftId}/clock-in`, body);
-      setActiveClockIns((prev) => new Set([...prev, shiftId]));
-      flash(res.data?.geo_status === 'outside_geofence' ? 'info' : 'success', res.data?.message || 'Clocked in.');
-      fetchWorkerData(false);
-    } catch (err) {
-      flash('error', err.response?.data?.detail || err.message || 'Could not clock in.');
-    } finally {
-      setClockActionLoading(null);
-    }
-  };
-
-  const handleClockOut = async (shiftId, item) => {
-    try {
-      setClockActionLoading(shiftId);
-      const body = item?.geofence_on ? await getCurrentPosition({ timeoutMs: 8000 }).catch(() => ({})) : {};
-      const res = await api.post(`/shifts/${shiftId}/clock-out`, body);
-      setActiveClockIns((prev) => {
-        const next = new Set(prev);
-        next.delete(shiftId);
-        return next;
-      });
-      flash(res.data?.status === 'undone' ? 'info' : 'success', res.data?.message || 'Clocked out.');
-      fetchWorkerData(false);
-    } catch (err) {
-      flash('error', err.response?.data?.detail || 'Could not clock out.');
-    } finally {
-      setClockActionLoading(null);
-    }
-  };
-
-  const handoffAction = async (t, action) => {
-    setHandoffBusy(t.id);
-    try {
-      await api.post(`/transfers/${t.id}/${action === 'accept' ? 'accept' : 'reject'}`);
-      flash(
-        action === 'accept' ? 'success' : 'info',
-        action === 'accept'
-          ? 'Accepted. Your manager still has to approve it before the shift is yours.'
-          : action === 'withdraw'
-            ? 'Hand-off withdrawn. You still have the shift.'
-            : 'Declined. They keep the shift.',
-      );
-      fetchWorkerData(false);
-    } catch (err) {
-      flash('error', err.response?.data?.detail || 'Could not update the hand-off.');
-    } finally {
-      setHandoffBusy(null);
-    }
-  };
-
-  // ---- Derived data ----------------------------------------------------------------------
-  const confirmedShifts = myShifts.filter((s) => ['approved', 'checked_in', 'confirmed'].includes(String(s.status || '').toLowerCase()));
-
-  const calendarByRequest = useMemo(() => {
-    const m = new Map();
-    calendar.items.forEach((i) => m.set(i.request_id, i));
-    return m;
-  }, [calendar.items]);
-  const detailItem = detailRequestId ? calendarByRequest.get(detailRequestId) || null : null;
-  const firstUnread = calendar.items.find((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()) || null;
-
-  const handleAcknowledged = (requestId, seenAt) => {
-    setCalendar((prev) => {
-      const items = prev.items.map((i) =>
-        i.request_id === requestId ? { ...i, needs_ack: false, info_change: null, info_seen_at: seenAt || new Date().toISOString() } : i
-      );
-      const unread = items.filter((i) => i.needs_ack && new Date(i.end_time).getTime() > Date.now()).length;
-      return { items, unread_count: unread };
-    });
-  };
-
-  const openDetailsForRequest = (req) => {
-    if (calendarByRequest.has(req.id)) setDetailRequestId(req.id);
-    else if (req.shift?.event_id) setOpenListing({ eventId: req.shift.event_id, initial: null });
-  };
-
-  // Deep links from notifications (?tab=, ?request=, ?event=)
-  const [pendingDeepLink, setPendingDeepLink] = useState(null);
-  useEffect(() => {
-    const tab = searchParams.get('tab');
-    const request = searchParams.get('request');
-    const event = searchParams.get('event');
-    if (!tab && !request && !event) return;
-    if (tab && TAB_IDS.includes(tab)) setActiveTab(tab);
-    if (event) setOpenListing({ eventId: event, initial: null });
-    if (request) {
-      setPendingDeepLink(request);
-      fetchWorkerData(false);
-    }
-    const next = new URLSearchParams(searchParams);
-    ['tab', 'request', 'event'].forEach((k) => next.delete(k));
-    setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
-
-  useEffect(() => {
-    if (pendingDeepLink && calendarByRequest.has(pendingDeepLink)) {
-      setDetailRequestId(pendingDeepLink);
-      setPendingDeepLink(null);
-    }
-  }, [pendingDeepLink, calendarByRequest]);
-
-  // Find Shifts
-  const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;
-  const roleOptions = useMemo(
-    () => Array.from(new Set(listings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN').map((p) => p.role_type)))).sort(),
-    [listings]
-  );
-  const venueOptions = useMemo(() => {
-    const m = new Map();
-    listings.forEach((l) => l.venue && m.set(l.venue.id, l.venue.name));
-    return Array.from(m.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [listings]);
-  const filteredListings = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const weekEnd = Date.now() + 7 * 86400000;
-    return listings.filter((l) => {
-      const tz = l.venue?.timezone;
-      if (q) {
-        const hay = [l.title, l.venue?.name, l.venue?.address, l.location?.name, l.location?.address, ...l.positions.map((p) => p.role_type)]
-          .join(' ')
-          .toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      if (whenFilter === 'today' && !isOnDay(l.start_time, tz, 0)) return false;
-      if (whenFilter === 'tomorrow' && !isOnDay(l.start_time, tz, 1)) return false;
-      if (whenFilter === 'week' && new Date(l.start_time).getTime() > weekEnd) return false;
-      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.my_status))) return false;
-      if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
-      if (instantOnly && !l.any_instant) return false;
-      if (hideRequested && l.my_request) return false;
-      return true;
-    });
-  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested]);
-  const listingGroups = useMemo(() => {
-    const groups = [];
-    filteredListings.forEach((l) => {
-      const label = dayGroupLabel(l.start_time, l.venue?.timezone);
-      const last = groups[groups.length - 1];
-      if (last && last.label === label) last.items.push(l);
-      else groups.push({ label, items: [l] });
-    });
-    return groups;
-  }, [filteredListings]);
-  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested;
-  const clearFilters = () => {
-    setSearch('');
-    setWhenFilter('all');
-    setRoleFilter('ALL');
-    setVenueFilter('ALL');
-    setInstantOnly(false);
-    setHideRequested(false);
-  };
-
-  // My shifts: coming up / dropped (can still ask back) / history
-  const nowMs = Date.now();
-  const isUpcomingReq = (req) => {
-    const st = String(req.status || '').toLowerCase();
-    if (!UPCOMING_STATUSES.includes(st)) return false;
-    if (st === 'checked_in') return true;
-    const end = new Date(req.shift?.end_time).getTime();
-    return Number.isNaN(end) ? true : end >= nowMs;
-  };
-  const canAskBack = (req) =>
-    String(req.status || '').toLowerCase() === 'dropped'
-    && new Date(req.shift?.start_time).getTime() > nowMs
-    && String(req.shift?.status || '').toUpperCase() !== 'CANCELLED';
-  const upcomingRequests = myShifts.filter(isUpcomingReq).sort((a, b) => new Date(a.shift?.start_time) - new Date(b.shift?.start_time));
-  const droppedRequests = myShifts.filter(canAskBack).sort((a, b) => new Date(a.shift?.start_time) - new Date(b.shift?.start_time));
-  const historyRequests = myShifts
-    .filter((r) => !isUpcomingReq(r) && !canAskBack(r))
-    .sort((a, b) => new Date(b.shift?.start_time) - new Date(a.shift?.start_time));
-  const needsAnswer = offers.length + incomingTransfers.length;
-
-  const addShiftToCalendar = (req) => {
-    const shift = req.shift;
-    if (!shift) return;
-    downloadIcs({
-      uid: `${req.id}@shiftboard`,
-      title: `${shift.title} — ${shift.role_type || 'Shift'} (${shift.venue?.name || ''})`,
-      start: shift.start_time,
-      end: shift.end_time,
-      location: calendarByRequest.get(req.id) ? whereOf(calendarByRequest.get(req.id)).address : shift.venue?.address,
-      description: [shift.event_notes, shift.description, shift.venue?.arrival_instructions].filter(Boolean).join('\n\n'),
-    });
-  };
-
-  const renderCard = (req) => {
-    const shiftId = req.shift_id || req.shift?.id;
-    const calItem = calendarByRequest.get(req.id);
-    const place = calItem ? whereOf(calItem) : req.shift?.venue;
-    return (
-      <MyShiftCard
-        key={req.id}
-        req={req}
-        calItem={calItem}
-        clockedIn={activeClockIns.has(shiftId)}
-        busy={clockActionLoading === shiftId ? 'clock' : withdrawingId === req.id ? 'withdraw' : null}
-        onDetails={(calItem || req.shift?.event_id) ? () => openDetailsForRequest(req) : null}
-        onClockIn={() => handleClockIn(shiftId, calItem)}
-        onClockOut={() => handleClockOut(shiftId, calItem)}
-        onBoard={() => setActiveDiscussionShift(req.shift)}
-        onHandOff={() => {
-          setTransferShiftId(shiftId);
-          setTransferModalOpen(true);
-        }}
-        onDrop={() => setShiftToDrop(req)}
-        onWithdraw={() => handleWithdraw(req)}
-        onAddCalendar={() => addShiftToCalendar(req)}
-        onDirections={place ? () => window.open(mapsUrl(place), '_blank', 'noopener') : null}
-        onAskBack={req.shift?.event_id ? () => setOpenListing({ eventId: req.shift.event_id, initial: null }) : null}
-      />
-    );
-  };
-
-  const tabs = [
-    { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length },
-    { id: 'find', label: 'Find shifts', icon: Search, count: openListingCount },
-    { id: 'calendar', label: 'Calendar', icon: CalendarDays, badge: calendar.unread_count },
-    { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft, badge: incomingTransfers.length },
-  ];
-  const isWorker = String(user?.role || '').toLowerCase() === 'worker';
-  const chipBtn = 'px-3 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-600 text-xs text-slate-300 inline-flex items-center gap-1.5';
-
-  return (
-    <div className="w-full min-h-screen bg-slate-950 text-slate-100 pb-16">
-      {/* Header */}
-      <section className="bg-slate-900 border-b border-slate-800 py-6 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto w-full flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <Avatar person={user} size="w-12 h-12 text-base" />
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-bold text-white truncate">{`${user?.first_name || ''} ${user?.last_name || ''}`.trim() || 'Your shifts'}</h1>
-                {!isWorker && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">Worker preview</span>
-                )}
-              </div>
-              {user?.bio && <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">{user.bio}</p>}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={chipBtn.replace('hover:border-slate-600', '')}>
-              <RatingBadge rating={user?.aggregate_rating ?? user?.rating_average} count={user?.rating_count} />
-            </span>
-            <button type="button" onClick={() => setActiveTab('schedule')} className={chipBtn}>
-              <b className="text-white">{upcomingRequests.length}</b> coming up
-            </button>
-            {needsAnswer > 0 && (
-              <button type="button" onClick={() => setActiveTab(offers.length ? 'schedule' : 'transfers')}
-                className={`${chipBtn} border-amber-500/50 text-amber-200`}>
-                <b className="text-amber-100">{needsAnswer}</b> waiting for your answer
-              </button>
-            )}
-            <button type="button" onClick={() => setActiveTab('find')} className={chipBtn}>
-              <b className="text-white">{openListingCount}</b> open to pick up
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-6">
-        {notification && (
-          <div className={`mb-5 p-3.5 rounded-xl border flex items-start justify-between gap-3 ${
-            notification.type === 'success'
-              ? 'bg-emerald-950/80 border-emerald-700 text-emerald-200'
-              : notification.type === 'error'
-                ? 'bg-rose-950/80 border-rose-700 text-rose-200'
-                : 'bg-indigo-950/80 border-indigo-700 text-indigo-200'
-          }`}>
-            <div className="flex items-start gap-2">
-              {notification.type === 'success' ? <Check className="w-5 h-5 text-emerald-400 flex-shrink-0" /> : <AlertCircle className="w-5 h-5 flex-shrink-0" />}
-              <span className="text-sm font-medium">{notification.message}</span>
-            </div>
-            <button type="button" onClick={() => setNotification(null)} aria-label="Dismiss" className="p-1 rounded-lg hover:bg-white/10">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {!isWorker && (
-          <div className="mb-5 p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-indigo-100 text-xs flex items-start gap-2">
-            <Info className="w-4 h-4 text-indigo-300 flex-shrink-0 mt-0.5" />
-            <span>
-              <b>Worker preview.</b> You're seeing this page exactly as a worker would: hidden pay and staff-only notes stay
-              hidden unless you're booked on that position. Your manager screens still show full pay.
-            </span>
-          </div>
-        )}
-
-        {calendar.unread_count > 0 && firstUnread && (
-          <div className="mb-5 p-4 rounded-xl border-2 border-amber-500 bg-amber-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-2.5">
-              <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <div className="text-sm font-black text-amber-100">
-                  {calendar.unread_count === 1 ? "1 of your shifts has info you haven't read" : `${calendar.unread_count} of your shifts have info you haven't read`}
-                </div>
-                <div className="text-xs text-amber-200/80">Notes or times can change after you book. Open the shift and tap “Got it”.</div>
-              </div>
-            </div>
-            <button type="button" onClick={() => setDetailRequestId(firstUnread.request_id)}
-              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black whitespace-nowrap">
-              Review now
-            </button>
-          </div>
-        )}
-
-        {/* Tabs: 2×2 on phones so none are hidden */}
-        <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 border-b border-slate-800 pb-4">
-          {tabs.map((t) => {
-            const Icon = t.icon;
-            const on = activeTab === t.id;
-            return (
-              <button key={t.id} type="button" onClick={() => setActiveTab(t.id)}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition inline-flex items-center justify-center gap-1.5 ${
-                  on ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}>
-                <Icon className="w-3.5 h-3.5" />
-                <span>{t.label}</span>
-                {t.count !== undefined && <span className={on ? 'text-slate-900' : 'text-slate-500'}>{t.count}</span>}
-                {t.badge > 0 && (
-                  <span className="min-w-[1.25rem] h-5 px-1 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black inline-flex items-center justify-center">{t.badge}</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Offers get answered on My shifts; elsewhere a slim reminder */}
-        {offers.length > 0 && activeTab !== 'schedule' && (
-          <button type="button" onClick={() => setActiveTab('schedule')}
-            className="mt-4 w-full p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/5 text-left text-sm text-indigo-100 flex items-center gap-2 hover:bg-indigo-500/10">
-            <Send className="w-4 h-4 text-indigo-300" />
-            <span className="flex-1">{plural(offers.length, 'shift')} offered to you. Answer on My shifts.</span>
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        )}
-
-        {activeTab === null && <div className="py-20 text-center text-slate-500 text-xs">Loading your shifts…</div>}
-
-        {/* My shifts */}
-        {activeTab === 'schedule' && (
-          <div className="mt-2 space-y-6">
-            <WorkerOffers offers={offers} busyId={offerBusy} onAccept={(o) => handleOffer(o, 'accept')} onDecline={(o) => handleOffer(o, 'decline')} />
-            <section className="space-y-3">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-4">Coming up</h2>
-              {loading ? (
-                <div className="py-12 text-center text-slate-500 text-xs">Loading…</div>
-              ) : upcomingRequests.length === 0 ? (
-                <div className="text-center py-12 bg-slate-900/40 rounded-2xl border border-slate-800">
-                  <Calendar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                  <h3 className="text-sm font-semibold text-slate-300">Nothing coming up</h3>
-                  <button type="button" onClick={() => setActiveTab('find')} className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 font-semibold">
-                    Find a shift →
-                  </button>
-                </div>
-              ) : (
-                upcomingRequests.map(renderCard)
-              )}
-            </section>
-
-            {droppedRequests.length > 0 && (
-              <section className="space-y-3">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <RotateCcw className="w-3.5 h-3.5" /> Dropped · you can still ask to come back
-                </h2>
-                <p className="text-[11px] text-slate-500 -mt-1">Your manager has to approve it, and they'll see why you can make it now.</p>
-                {droppedRequests.map(renderCard)}
-              </section>
-            )}
-
-            {historyRequests.length > 0 && (
-              <details className="group pt-1">
-                <summary className="cursor-pointer select-none text-xs font-bold uppercase tracking-wider text-slate-400 hover:text-white">
-                  Past & closed ({historyRequests.length})
-                </summary>
-                <div className="mt-4 space-y-3 opacity-80">{historyRequests.map(renderCard)}</div>
-              </details>
-            )}
-          </div>
-        )}
-
-        {/* Find shifts */}
-        {activeTab === 'find' && (
-          <div className="mt-6">
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-3 sm:p-4 space-y-3">
-              <div className="flex flex-col lg:flex-row gap-3">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search events, venues, positions"
-                    className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-emerald-500" />
-                </div>
-                <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1 overflow-x-auto">
-                  {[{ id: 'all', label: 'All dates' }, { id: 'today', label: 'Today' }, { id: 'tomorrow', label: 'Tomorrow' }, { id: 'week', label: 'Next 7 days' }].map((w) => (
-                    <button key={w.id} type="button" onClick={() => setWhenFilter(w.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${whenFilter === w.id ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-                      {w.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Filter className="w-3.5 h-3.5 text-slate-400" />
-                <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}
-                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-emerald-500">
-                  <option value="ALL">All positions</option>
-                  {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
-                </select>
-                <select value={venueFilter} onChange={(e) => setVenueFilter(e.target.value)}
-                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-emerald-500">
-                  <option value="ALL">All venues</option>
-                  {venueOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-                </select>
-                <button type="button" onClick={() => setInstantOnly((v) => !v)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1 transition ${
-                    instantOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
-                  <Zap className="w-3.5 h-3.5" /> Instant book
-                </button>
-                <button type="button" onClick={() => setHideRequested((v) => !v)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-                    hideRequested ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
-                  Hide ones I've requested
-                </button>
-                {filtersActive && (
-                  <button type="button" onClick={clearFilters} className="text-xs text-slate-400 underline hover:text-white ml-auto">Clear filters</button>
-                )}
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="py-20 text-center text-slate-500 text-xs">Loading open shifts…</div>
-            ) : filteredListings.length === 0 ? (
-              <div className="mt-6 text-center py-20 bg-slate-900/40 rounded-2xl border border-slate-800">
-                <Briefcase className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                <h3 className="text-sm font-semibold text-slate-300">{listings.length === 0 ? 'No shifts open right now' : 'Nothing matches these filters'}</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  {listings.length === 0 ? "Check back soon. You'll get a notification when a venue you work with posts a shift." : 'Try clearing a filter or two.'}
-                </p>
-              </div>
-            ) : (
-              <div className="mt-6 space-y-8">
-                {listingGroups.map((g) => (
-                  <section key={g.label}>
-                    <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
-                      <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                      {g.label}
-                      <span className="text-slate-600 font-semibold normal-case tracking-normal">· {plural(g.items.length, 'event')}</span>
-                    </h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
-                      {g.items.map((l) => (
-                        <EventListingCard key={l.event_id} listing={l} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Calendar */}
-        {activeTab === 'calendar' && (
-          <div className="mt-6">
-            {loading ? (
-              <div className="py-20 text-center text-slate-500 text-xs">Loading your calendar…</div>
-            ) : (
-              <WorkerCalendar
-                items={calendar.items}
-                openListings={listings}
-                onSelectItem={(item) => setDetailRequestId(item.request_id)}
-                onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
-              />
-            )}
-          </div>
-        )}
-
-        {/* Hand-offs */}
-        {activeTab === 'transfers' && (
-          <div className="mt-6">
-            <HandoffsPanel
-              incoming={incomingTransfers}
-              outgoing={outgoingTransfers}
-              busyId={handoffBusy}
-              onAccept={(t) => handoffAction(t, 'accept')}
-              onDecline={(t) => handoffAction(t, 'decline')}
-              onWithdraw={(t) => handoffAction(t, 'withdraw')}
-            />
-          </div>
-        )}
-      </main>
-
-      {detailItem && (
-        <ShiftDetailsModal
-          key={detailItem.request_id}
-          item={detailItem}
-          onClose={() => setDetailRequestId(null)}
-          onAcknowledged={handleAcknowledged}
-          onOpenBoard={(shiftLike) => setActiveDiscussionShift(shiftLike)}
-        />
-      )}
-
-      {openListing && (
-        <EventListingModal
-          eventId={openListing.eventId}
-          initial={openListing.initial}
-          onClose={() => setOpenListing(null)}
-          onChanged={() => fetchWorkerData(false)}
-          onGoToSchedule={() => {
-            setOpenListing(null);
-            setActiveTab('schedule');
-          }}
-        />
-      )}
-
-      {transferModalOpen && (
-        <TransferModal
-          isOpen={transferModalOpen}
-          onClose={() => setTransferModalOpen(false)}
-          myConfirmedShifts={confirmedShifts}
-          preselectedShiftId={transferShiftId}
-          onTransferSuccess={() => {
-            flash('success', "Hand-off sent. Once they accept and your manager approves, it's theirs. Until then it's still yours.");
-            fetchWorkerData(false);
-          }}
-        />
-      )}
-
-      {activeDiscussionShift && (
-        <ShiftBoardModal
-          shiftId={activeDiscussionShift.id}
-          shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.venue?.name || ''})`}
-          currentUserRole={user?.role}
-          onClose={() => setActiveDiscussionShift(null)}
-        />
-      )}
-
-      {shiftToDrop && (
-        <DropShiftDialog
-          req={shiftToDrop}
-          onClose={() => setShiftToDrop(null)}
-          onDropped={(message) => {
-            flash('success', message);
-            fetchWorkerData(false);
-          }}
-        />
-      )}
-    </div>
-  );
+**Edit 1.** Find:
+```python
+    "team_added": ("booking", False),        # Phase 29.1: a manager added you to their team
+    "shift_dropped": ("manager", True),      # Phase 29.1: a worker dropped a booked shift
+    "test": ("test", True),
+}
+```
+Replace with:
+```python
+    "team_added": ("booking", False),        # Phase 29.1: a manager added you to their team
+    "shift_dropped": ("manager", True),      # Phase 29.1: a worker dropped a booked shift
+    "no_show": ("booking", True),            # Phase 30: a manager marked you a no-show
+    "unfilled_soon": ("manager", True),      # Phase 30: spots still open 3 h before start
+    "test": ("test", True),
 }
 ```
 
 ---
 
-## C2. NEW FILE `frontend/src/components/worker/MyShiftCard.jsx`
+## B6. `backend/src/services/activity.py` (EDITS)
+New kinds: `no_show`, `manager_clock_in` and `unfilled_soon`, all in the **Alerts** filter.
+
+**Edit 1.** Find:
+```python
+  team      - team changes, invites, joins, co-managers
+  changes   - events posted / edited / cancelled / copied, venue settings
+  alerts    - not clocked in
+"""
+import logging
+```
+Replace with:
+```python
+  team      - team changes, invites, joins, co-managers
+  changes   - events posted / edited / cancelled / copied, venue settings
+  alerts    - not clocked in, no-shows, manager clock-ins, spots still open close to start (Phase 30)
+"""
+import logging
+```
+
+**Edit 2.** Find:
+```python
+    "venue_settings": "changes",
+    "not_clocked_in": "alerts",
+}
+CATEGORIES = ("bookings", "staffing", "team", "changes", "alerts")
+```
+Replace with:
+```python
+    "venue_settings": "changes",
+    "not_clocked_in": "alerts",
+    "no_show": "alerts",                # Phase 30
+    "manager_clock_in": "alerts",
+    "unfilled_soon": "alerts",
+}
+CATEGORIES = ("bookings", "staffing", "team", "changes", "alerts")
+```
+
+**Edit 3.** Find:
+```python
+        "assigned": f"Assigned {name} to {what}",
+        "offer_accepted": f"{name} accepted the offer for {what}",
+    }.get(kind, f"{name}: {what}")
+    if extra:
+```
+Replace with:
+```python
+        "assigned": f"Assigned {name} to {what}",
+        "offer_accepted": f"{name} accepted the offer for {what}",
+        "no_show": f"Marked {name} as a no-show for {what}",               # Phase 30
+        "manager_clock_in": f"Clocked {name} in for {what}",
+    }.get(kind, f"{name}: {what}")
+    if extra:
+```
+
+---
+
+## B7. `backend/src/services/notification_worker.py` (EDITS)
+New `scan_unfilled` step. It runs once a minute with the other scans; the dedupe key makes it fire once per position.
+
+**Edit 1.** Find:
+```python
+  3. "not clocked in" 10 minutes after start -> the worker (urgent) and the venue's managers
+  4. managers: people who haven't read an UPDATE to a shift starting within 24h (once per update)
+  5. send due email / SMS from the outbox
+
+Only one process runs a tick at a time (Redis lock). If Redis is unreachable the tick still runs;
+```
+Replace with:
+```python
+  3. "not clocked in" 10 minutes after start -> the worker (urgent) and the venue's managers
+  4. managers: people who haven't read an UPDATE to a shift starting within 24h (once per update)
+  5. managers: a position still has open spots 3 hours before it starts (once per position; Phase 30)
+  6. send due email / SMS from the outbox
+
+Only one process runs a tick at a time (Redis lock). If Redis is unreachable the tick still runs;
+```
+
+**Edit 2.** Find:
+```python
+
+
+async def run_tick() -> None:
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        await auto_close_open_entries(db)
+    for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates)):
+        try:
+            async with AsyncSessionLocal() as db:
+```
+Replace with:
+```python
+
+
+UNFILLED_WINDOW = timedelta(hours=3)
+
+
+async def scan_unfilled(db: AsyncSession, now: datetime) -> int:
+    """Phase 30: one alert per position that still has open spots when it's 3 h (or less) from starting."""
+    rows = (await db.execute(
+        select(Shift).where(
+            func.upper(Shift.status) == "OPEN",
+            Shift.start_time > now,
+            Shift.start_time <= now + UNFILLED_WINDOW,
+            Shift.spots_filled < Shift.capacity,
+        )
+    )).scalars().all()
+    sent = 0
+    for s in rows:
+        ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == s.event_id)) if s.event_id else None
+        if ev is not None and (ev.cancelled_at is not None or (ev.status or "published") != "published"):
+            continue
+        venue = await db.scalar(select(Venue).where(Venue.id == s.venue_id))
+        open_n = (s.capacity or 1) - (s.spots_filled or 0)
+        name = ev.title if ev else s.title
+        n = await notify_in(
+            db, await manager_ids(db, s.venue_id), "unfilled_soon",
+            f"{open_n} {s.role_type} spot{'s' if open_n != 1 else ''} still open: {name}",
+            f"Starts {when_text(s.start_time, venue)}. Offer it or assign someone from the Today board.",
+            manager_link(s.venue_id, s.event_id), venue_id=s.venue_id, event_id=s.event_id,
+            urgent=True, dedupe_key=f"unfilled3h:{s.id}",
+        )
+        if n:
+            sent += n
+            await record_in(db, s.venue_id, "unfilled_soon",
+                            f"{open_n} {s.role_type} spot{'s' if open_n != 1 else ''} still open 3 h before {name}",
+                            event_id=s.event_id)
+    return sent
+
+
+async def run_tick() -> None:
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        await auto_close_open_entries(db)
+    for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
+                      ("unfilled", scan_unfilled)):
+        try:
+            async with AsyncSessionLocal() as db:
+```
+
+---
+
+# PART C: Frontend
+
+New folder: `frontend/src/components/manager/`.
+
+## C1. NEW FILE `frontend/src/components/manager/TonightBoard.jsx`
+Fetches `/venues/{id}/tonight`, polls every 60 s while visible, and owns the Clock in / No-show dialogs (existing `ConfirmDialog`) and Find cover (existing `StaffPositionModal`).
 
 ```jsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Timer, Info, Navigation, CalendarPlus, MessageSquare, ArrowRightLeft, LogOut, MoreHorizontal, AlertTriangle,
-  Clock, Undo2, Check, RotateCcw,
+  Sun, CalendarDays, RefreshCw, AlarmClock, UserX, UserPlus, EyeOff, MapPinOff, Phone, LogIn, ClipboardList, MessageSquare, CheckCircle2,
 } from 'lucide-react';
-import PayLabel from '../PayLabel';
-import TipBadge from '../TipBadge';
-import { fmtTime, fmtTimeRange, fmtShortDate } from '../../utils/venueTime';
-import { STATUS_LABELS, PENDING_STATUSES } from '../../utils/listingFormat';
+import api from '../../api/client';
+import ConfirmDialog from '../ConfirmDialog';
+import StaffPositionModal from '../StaffPositionModal';
+import TodayEventCard from './TodayEventCard';
+import WeekAtGlance from './WeekAtGlance';
+import { fmtDate, fmtTime } from '../../utils/venueTime';
 
-const SOURCE_LABELS = {
-  manager_assign: 'Assigned by your manager',
-  manager_manual: 'Approved by your manager',
-  offer: 'You accepted an offer',
-  transfer: 'Handed to you by a teammate',
-  venue_whitelist: 'Booked instantly (team)',
-  venue_everyone_auto: 'Booked instantly',
-  shift_auto_confirm: 'Booked instantly',
-  rating_threshold: 'Booked instantly (your rating)',
+const POLL_MS = 60000;          // live refresh while the tab is visible
+const ALERTS_SHOWN = 4;
+const ALERT_ICON = {
+  late: [AlarmClock, 'text-rose-400'],
+  missed: [UserX, 'text-rose-300'],
+  open_spot: [UserPlus, 'text-amber-300'],
+  unread: [EyeOff, 'text-amber-200'],
+  geo: [MapPinOff, 'text-amber-300'],
 };
 
-function dateParts(value, tz) {
-  const d = new Date(value);
-  const make = (opts) => {
-    try {
-      return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: tz || undefined }).format(d);
-    } catch (e) {
-      return new Intl.DateTimeFormat('en-US', opts).format(d);
-    }
-  };
-  return { month: make({ month: 'short' }).toUpperCase(), day: make({ day: 'numeric' }), weekday: make({ weekday: 'short' }) };
+function agoText(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 45) return 'just now';
+  const m = Math.round(s / 60);
+  return `${m} min ago`;
 }
 
-function Menu({ items }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+/**
+ * Phase 30: The manager's "Today / This week" board (top of the dashboard).
+ * Today: every event touching today with live clock status and one-tap actions, plus alerts.
+ * This week: today + 6 days at a glance.
+ * Refreshes every minute while visible, when the tab comes back, and when refreshKey changes.
+ * Props: venueId, timeZone, refreshKey, reliabilityMap,
+ *        onOpenBoard({ id, title, role_type }), onOpenEvent(eventId), onTimesheet(eventId), onOpenWorker(workerId),
+ *        onChanged(message)   -> parent reloads everything and shows the message
+ *        onSummary({ late, openSpots })
+ */
+export default function TonightBoard({
+  venueId, timeZone, refreshKey = 0, reliabilityMap = {},
+  onOpenBoard, onOpenEvent, onTimesheet, onOpenWorker, onChanged, onSummary,
+}) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState(null);                 // 'today' | 'week' (picked after the first load)
+  const [loadedAt, setLoadedAt] = useState(0);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
+  const [confirm, setConfirm] = useState(null);         // ConfirmDialog props
+  const [cover, setCover] = useState(null);             // { event, position } for StaffPositionModal
+  const [highlight, setHighlight] = useState(null);     // request id flashed after tapping an alert
+  const venueRef = useRef(venueId);
+  venueRef.current = venueId;
+
+  const load = useCallback(async (quiet = false) => {
+    if (!venueId) return;
+    if (!quiet) setLoading(true);
+    try {
+      const res = await api.get(`/venues/${venueId}/tonight`);
+      if (venueRef.current !== venueId) return;
+      setData(res.data);
+      setError('');
+      setLoadedAt(Date.now());
+      setTab((t) => t || ((res.data.events || []).length ? 'today' : 'week'));
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Could not load today’s board.');
+    } finally {
+      setLoading(false);
+    }
+  }, [venueId]);
+
   useEffect(() => {
-    if (!open) return undefined;
-    const close = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    setData(null);
+    setTab(null);
+    load();
+  }, [venueId, load]);
+
+  useEffect(() => {
+    if (refreshKey) load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  // live: poll while visible, reload when the tab comes back, tick the clock for "starts in" text
+  useEffect(() => {
+    const poll = setInterval(() => {
+      if (document.visibilityState === 'visible') load(true);
+    }, POLL_MS);
+    const tick = setInterval(() => setNowMs(Date.now()), 15000);
+    const onVis = () => document.visibilityState === 'visible' && load(true);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(poll);
+      clearInterval(tick);
+      document.removeEventListener('visibilitychange', onVis);
     };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-  const shown = items.filter(Boolean);
-  if (!shown.length) return null;
+  }, [load]);
+
+  useEffect(() => {
+    if (!data || !onSummary) return;
+    onSummary({
+      late: (data.counts?.late || 0) + (data.counts?.missed || 0),
+      openSpots: (data.alerts || []).filter((a) => a.kind === 'open_spot').length,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const lookup = useMemo(() => {
+    const people = {};
+    const positions = {};
+    const events = {};
+    (data?.events || []).forEach((ev) => {
+      events[ev.event_key] = ev;
+      ev.positions.forEach((pos) => {
+        positions[pos.shift_id] = { pos, ev };
+        pos.people.forEach((p) => { people[p.request_id] = { p, pos, ev }; });
+      });
+    });
+    return { people, positions, events };
+  }, [data]);
+
+  const done = (message) => {
+    load(true);
+    onChanged?.(message);
+  };
+
+  // ---- actions ----
+  const openBoard = (pos, ev) => onOpenBoard?.({ id: pos.shift_id, title: ev.title, role_type: pos.role_type });
+
+  const askClockIn = (p) => setConfirm({
+    title: `Clock ${p.first_name} in now?`,
+    message: `Records ${p.first_name} as clocked in at ${fmtTime(new Date(), timeZone)}. They clock out as usual, or you can fix the times on the time sheet.`,
+    confirmLabel: 'Clock in',
+    input: { label: 'Reason (saved on the time sheet)', placeholder: 'e.g. Phone died, signed in at the door', required: true },
+    onConfirm: async (reason) => {
+      await api.post(`/requests/${p.request_id}/time-entries`, { clock_in_time: new Date().toISOString(), clock_out_time: null, reason });
+      done(`${p.first_name} is clocked in.`);
+    },
+  });
+
+  const askNoShow = (p, ev) => setConfirm({
+    title: `Mark ${p.first_name} as a no-show?`,
+    message: ev.state === 'ended'
+      ? 'This counts against their reliability, and they’ll be told. If they did work, add their hours on the time sheet instead.'
+      : 'This counts against their reliability, and they’ll be told. Their spot opens up so you can find cover.',
+    confirmLabel: 'Mark no-show',
+    danger: true,
+    input: { label: 'Note (optional, they’ll see it)', placeholder: 'e.g. No answer on the phone' },
+    onConfirm: async (reason) => {
+      const res = await api.post(`/requests/${p.request_id}/no-show`, { reason: reason || null });
+      done(res.data?.spot_reopened
+        ? `${p.first_name} marked as a no-show. Their spot is open: tap “Find cover”.`
+        : `${p.first_name} marked as a no-show.`);
+    },
+  });
+
+  const findCover = (pos, ev) => setCover({
+    event: { title: ev.title, start_time: ev.start_time },
+    position: {
+      shift_id: pos.shift_id, role_type: pos.role_type, capacity: pos.capacity,
+      assigned: pos.people.filter((p) => p.clock_state !== 'no_show'),
+    },
+  });
+
+  const alertActions = (a) => {
+    const person = a.request_id ? lookup.people[a.request_id] : null;
+    const position = a.shift_id ? lookup.positions[a.shift_id] : null;
+    const ev = lookup.events[a.event_key];
+    const btn = 'px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 border transition';
+    const out = [];
+    if (a.kind === 'late' && person) {
+      if (person.p.phone) {
+        out.push(<a key="call" href={`tel:${person.p.phone}`} className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}><Phone className="w-3 h-3" /> Call</a>);
+      }
+      out.push(<button key="in" type="button" onClick={() => askClockIn(person.p)} className={`${btn} border-emerald-500/40 bg-emerald-600/20 text-emerald-200`}><LogIn className="w-3 h-3" /> Clock in</button>);
+      out.push(<button key="ns" type="button" onClick={() => askNoShow(person.p, person.ev)} className={`${btn} border-rose-500/40 bg-rose-600/15 text-rose-200`}><UserX className="w-3 h-3" /> No-show</button>);
+    }
+    if (a.kind === 'missed' && person) {
+      out.push(<button key="ns" type="button" onClick={() => askNoShow(person.p, person.ev)} className={`${btn} border-rose-500/40 bg-rose-600/15 text-rose-200`}><UserX className="w-3 h-3" /> No-show</button>);
+      if (a.event_id) out.push(<button key="ts" type="button" onClick={() => onTimesheet?.(a.event_id)} className={`${btn} border-slate-700 bg-slate-800 text-slate-200`}><ClipboardList className="w-3 h-3" /> Add hours</button>);
+    }
+    if (a.kind === 'open_spot' && position) {
+      out.push(<button key="cover" type="button" onClick={() => findCover(position.pos, position.ev)} className={`${btn} border-amber-500 bg-amber-500 text-slate-950`}><UserPlus className="w-3 h-3" /> Find cover</button>);
+    }
+    if (a.kind === 'unread' && ev && ev.positions[0]) {
+      out.push(<button key="board" type="button" onClick={() => openBoard(ev.positions[0], ev)} className={`${btn} border-slate-700 bg-slate-800 text-slate-200`}><MessageSquare className="w-3 h-3" /> Message</button>);
+    }
+    if (a.kind === 'geo' && a.event_id) {
+      out.push(<button key="ts" type="button" onClick={() => onTimesheet?.(a.event_id)} className={`${btn} border-slate-700 bg-slate-800 text-slate-200`}><ClipboardList className="w-3 h-3" /> Time sheet</button>);
+    }
+    return out;
+  };
+
+  const events = data?.events || [];
+  const alerts = data?.alerts || [];
+  const shownAlerts = showAllAlerts ? alerts : alerts.slice(0, ALERTS_SHOWN);
+  const nextUp = (data?.week || []).slice(1).flatMap((d) => d.events.map((e) => ({ ...e, day: d.label }))).find((e) => e.status !== 'draft');
+  const c = data?.counts || {};
+  const tabBtn = (id) => `px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition ${
+    tab === id ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:bg-slate-800'
+  }`;
+  // live events first, then upcoming, then ended
+  const ordered = [...events].sort((a, b) => {
+    const rank = { live: 0, upcoming: 1, ended: 2 };
+    return (rank[a.state] - rank[b.state]) || (new Date(a.start_time) - new Date(b.start_time));
+  });
+
   return (
-    <div className="relative" ref={ref}>
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-label="More actions" aria-expanded={open}
-        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
-        <MoreHorizontal className="w-4 h-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 z-30 w-60 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
-          {shown.map((it) => (
-            <button key={it.label} type="button" disabled={it.disabled}
-              onClick={() => { setOpen(false); it.onClick(); }}
-              className={`w-full text-left px-3 py-2 text-xs inline-flex items-start gap-2 hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent ${it.danger ? 'text-rose-300' : 'text-slate-200'}`}>
-              <it.icon className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-              <span>
-                {it.label}
-                {it.hint && <span className="block text-[10px] text-slate-500">{it.hint}</span>}
+    <section id="tonight-board" className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 space-y-4 scroll-mt-4">
+      <header className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <h2 className="text-lg font-bold text-white">
+            {tab === 'week' ? 'This week' : 'Today'}
+            {data && <span className="ml-2 text-sm font-normal text-slate-400">{fmtDate(data.now, timeZone)}</span>}
+          </h2>
+          {data && (
+            <p className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3">
+              <span className="inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live · updated {agoText(nowMs - loadedAt)}
               </span>
+              {c.events > 0 && (
+                <span>
+                  {c.events} event{c.events === 1 ? '' : 's'} · {c.booked} booked · {c.clocked_in} in now
+                  {c.late > 0 && <strong className="text-rose-300"> · {c.late} late</strong>}
+                  {c.open_spots > 0 && <strong className="text-amber-300"> · {c.open_spots} open</strong>}
+                </span>
+              )}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="p-1 bg-slate-900 border border-slate-800 rounded-xl flex gap-1" role="tablist">
+            <button type="button" role="tab" aria-selected={tab === 'today'} onClick={() => setTab('today')} className={tabBtn('today')}>
+              <Sun className="w-3.5 h-3.5" /> Today
             </button>
+            <button type="button" role="tab" aria-selected={tab === 'week'} onClick={() => setTab('week')} className={tabBtn('week')}>
+              <CalendarDays className="w-3.5 h-3.5" /> This week
+            </button>
+          </div>
+          <button type="button" onClick={() => load()} disabled={loading} aria-label="Refresh"
+            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 disabled:opacity-50">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+      </header>
+
+      {error && <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-sm">{error}</div>}
+      {!data && !error && <div className="h-24 rounded-xl bg-slate-900 animate-pulse" />}
+
+      {data && tab === 'today' && (
+        <>
+          {alerts.length > 0 && (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/50 divide-y divide-slate-800/70">
+              {shownAlerts.map((a, i) => {
+                const [Icon, tone] = ALERT_ICON[a.kind] || [AlarmClock, 'text-slate-400'];
+                return (
+                  <div key={`${a.kind}-${a.request_id || a.shift_id || a.event_key}-${i}`}
+                    className={`p-2.5 flex flex-col sm:flex-row sm:items-center gap-2 ${a.severity === 'high' ? 'bg-rose-500/5' : ''}`}>
+                    <button type="button" onClick={() => setHighlight(a.request_id)} className="flex-1 min-w-0 flex items-start gap-2 text-left">
+                      <Icon className={`w-4 h-4 flex-shrink-0 mt-0.5 ${tone}`} />
+                      <span className={`text-xs ${a.severity === 'high' ? 'text-white font-semibold' : 'text-slate-300'}`}>{a.text}</span>
+                    </button>
+                    <div className="flex flex-wrap gap-1.5 pl-6 sm:pl-0">{alertActions(a)}</div>
+                  </div>
+                );
+              })}
+              {alerts.length > ALERTS_SHOWN && (
+                <button type="button" onClick={() => setShowAllAlerts((s) => !s)} className="w-full p-2 text-[11px] text-slate-400 hover:text-white">
+                  {showAllAlerts ? 'Show fewer' : `Show all ${alerts.length} alerts`}
+                </button>
+              )}
+            </div>
+          )}
+
+          {events.length === 0 ? (
+            <div className="p-6 rounded-xl border border-slate-800 bg-slate-900/60 text-center">
+              <CheckCircle2 className="w-6 h-6 text-slate-600 mx-auto mb-1" />
+              <p className="text-sm text-slate-300 font-semibold">Nothing on today.</p>
+              {nextUp && (
+                <p className="text-xs text-slate-500 mt-1">
+                  Next up: <strong className="text-slate-300">{nextUp.title}</strong> · {nextUp.day} {fmtTime(nextUp.start_time, timeZone)}
+                </p>
+              )}
+              <button type="button" onClick={() => setTab('week')} className="mt-3 text-xs font-bold text-amber-300 hover:text-amber-200">See the week →</button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
+              {ordered.map((ev) => (
+                <TodayEventCard
+                  key={ev.event_key}
+                  event={ev}
+                  timeZone={timeZone}
+                  nowMs={nowMs}
+                  reliabilityMap={reliabilityMap}
+                  highlightRequestId={highlight}
+                  onBoard={(pos) => openBoard(pos, ev)}
+                  onClockIn={(p) => askClockIn(p)}
+                  onNoShow={(p) => askNoShow(p, ev)}
+                  onFindCover={(pos) => findCover(pos, ev)}
+                  onOpenEvent={onOpenEvent}
+                  onTimesheet={onTimesheet}
+                  onOpenWorker={onOpenWorker}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {data && tab === 'week' && <WeekAtGlance week={data.week} timeZone={timeZone} onOpenEvent={onOpenEvent} />}
+
+      {confirm && <ConfirmDialog {...confirm} onClose={() => setConfirm(null)} />}
+      {cover && (
+        <StaffPositionModal
+          event={cover.event}
+          position={cover.position}
+          onClose={() => setCover(null)}
+          onDone={(message) => {
+            setCover(null);
+            done(message);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+```
+
+---
+
+## C2. NEW FILE `frontend/src/components/manager/TodayEventCard.jsx`
+
+```jsx
+import React, { useState } from 'react';
+import {
+  Phone, MessageSquare, LogIn, UserX, UserPlus, ClipboardList, Users, MapPin, MapPinOff, EyeOff, ChevronDown, ChevronUp, Radio,
+} from 'lucide-react';
+import ReliabilityBadge from '../ReliabilityBadge';
+import { fmtTime, fmtTimeRange } from '../../utils/venueTime';
+
+const STATE = {
+  upcoming: { label: 'Not open yet', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  due: { label: 'Not in yet', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/30' },
+  late: { label: 'Late', cls: 'bg-rose-500/15 text-rose-300 border-rose-500/40 animate-pulse' },
+  in: { label: 'In', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' },
+  done: { label: 'Done', cls: 'bg-slate-800 text-slate-300 border-slate-700' },
+  missed: { label: 'Never clocked in', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/30' },
+  no_show: { label: 'No-show', cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30 line-through' },
+};
+
+function minutesText(m) {
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return `${h} h ${m % 60} min`;
+}
+
+function startsText(event, nowMs) {
+  const start = new Date(event.start_time).getTime();
+  const end = new Date(event.end_time).getTime();
+  if (event.state === 'ended') return 'Ended';
+  if (event.state === 'live') {
+    const left = Math.max(0, Math.round((end - nowMs) / 60000));
+    return `Live now · ends in ${minutesText(left)}`;
+  }
+  const until = Math.max(0, Math.round((start - nowMs) / 60000));
+  return until <= 0 ? 'Starting now' : `Starts in ${minutesText(until)}`;
+}
+
+/**
+ * Phase 30: One event on the manager's Today board: each position, who is booked and whether
+ * they're in, plus one-tap actions (call, message the shift board, clock them in, no-show, find cover).
+ * Props: event (TonightEvent), timeZone, nowMs, reliabilityMap, highlightRequestId,
+ *        onBoard(position), onClockIn(person, position), onNoShow(person, position), onFindCover(position),
+ *        onOpenEvent(eventId), onTimesheet(eventId), onOpenWorker(workerId)
+ */
+export default function TodayEventCard({
+  event, timeZone, nowMs, reliabilityMap = {}, highlightRequestId,
+  onBoard, onClockIn, onNoShow, onFindCover, onOpenEvent, onTimesheet, onOpenWorker,
+}) {
+  const ended = event.state === 'ended';
+  const [open, setOpen] = useState(!ended || event.missed > 0);
+  const tone = event.late > 0
+    ? 'border-rose-500/50'
+    : event.state === 'live' ? 'border-emerald-500/40' : ended ? 'border-slate-800' : 'border-slate-700';
+  const iconBtn = 'p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition';
+  const actBtn = 'px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition disabled:opacity-50';
+
+  return (
+    <article className={`bg-slate-900 border rounded-2xl ${tone} ${ended ? 'opacity-80' : ''}`}>
+      <header className="p-4 flex flex-col sm:flex-row sm:items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            {event.state === 'live' && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 inline-flex items-center gap-1">
+                <Radio className="w-3 h-3" /> LIVE
+              </span>
+            )}
+            <h3 className="text-base font-bold text-white truncate">{event.title}</h3>
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-semibold text-slate-200">{fmtTimeRange(event.start_time, event.end_time, timeZone)}</span>
+            <span>·</span>
+            <span>{startsText(event, nowMs)}</span>
+            {event.location_name && (
+              <span className="inline-flex items-center gap-1"><MapPin className="w-3 h-3" /> {event.location_name}</span>
+            )}
+          </p>
+          <p className="text-[11px] mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-slate-400">
+            <span><strong className="text-white">{event.booked}</strong> booked</span>
+            {(event.state !== 'upcoming' || event.clocked_in > 0) && (
+              <span><strong className="text-emerald-300">{event.clocked_in + event.done}</strong> clocked in</span>
+            )}
+            {event.late > 0 && <span className="text-rose-300 font-bold">{event.late} late</span>}
+            {event.missed > 0 && <span className="text-rose-300">{event.missed} never clocked in</span>}
+            {event.no_show > 0 && <span className="text-rose-400">{event.no_show} no-show</span>}
+            {event.open_spots > 0 && <span className="text-amber-300 font-bold">{event.open_spots} open</span>}
+            {event.unread > 0 && <span className="text-amber-200">{event.unread} haven't read the update</span>}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {event.event_id && !ended && (
+            <button type="button" onClick={() => onOpenEvent?.(event.event_id)}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1">
+              <Users className="w-3.5 h-3.5" /> Roster
+            </button>
+          )}
+          {event.event_id && event.state !== 'upcoming' && (
+            <button type="button" onClick={() => onTimesheet?.(event.event_id)}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1">
+              <ClipboardList className="w-3.5 h-3.5" /> Time sheet
+            </button>
+          )}
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-label={open ? 'Hide people' : 'Show people'} className={iconBtn}>
+            {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        </div>
+      </header>
+
+      {open && (
+        <div className="border-t border-slate-800 divide-y divide-slate-800/70">
+          {event.positions.map((pos) => (
+            <section key={pos.shift_id} className="px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-slate-300">{pos.role_type}</h4>
+                <span className="text-[11px] text-slate-500">
+                  {pos.people.filter((p) => p.clock_state !== 'no_show').length}/{pos.capacity} booked
+                </span>
+                <button type="button" onClick={() => onBoard?.(pos)} className="ml-auto text-[11px] text-slate-400 hover:text-white inline-flex items-center gap-1">
+                  <MessageSquare className="w-3.5 h-3.5" /> Message this shift
+                </button>
+              </div>
+
+              {pos.people.length === 0 && pos.open_spots === 0 && (
+                <p className="text-xs text-slate-500">Nobody booked.</p>
+              )}
+
+              <ul className="space-y-1.5">
+                {pos.people.map((p) => {
+                  const st = STATE[p.clock_state] || STATE.upcoming;
+                  let sub = '';
+                  if (p.clock_state === 'upcoming') sub = `Clock-in opens ${fmtTime(event.clock_in_opens_at, timeZone)}`;
+                  if (p.clock_state === 'due') sub = 'Clock-in is open';
+                  if (p.clock_state === 'late') sub = `${minutesText(p.late_minutes)} past the start`;
+                  if (p.clock_state === 'in') sub = `Since ${fmtTime(p.clock_in_time, timeZone)}${p.late_minutes ? ` · ${p.late_minutes} min late` : ''}`;
+                  if (p.clock_state === 'done') sub = `${fmtTime(p.clock_in_time, timeZone)} – ${fmtTime(p.clock_out_time, timeZone)}`;
+                  if (p.clock_state === 'missed') sub = 'Shift ended with no clock-in';
+                  const canClockIn = ['due', 'late'].includes(p.clock_state);
+                  const canNoShow = ['late', 'missed'].includes(p.clock_state);
+                  return (
+                    <li key={p.request_id}
+                      className={`flex flex-col sm:flex-row sm:items-center gap-2 p-2 rounded-xl ${
+                        String(highlightRequestId) === String(p.request_id) ? 'bg-amber-500/10 ring-1 ring-amber-500/40' : 'bg-slate-950/40'
+                      }`}>
+                      <div className="flex-1 min-w-0 flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${st.cls}`}>{st.label}</span>
+                        <div className="min-w-0">
+                          <button type="button" onClick={() => onOpenWorker?.(p.worker_id)} className="text-sm font-semibold text-white hover:underline truncate text-left">
+                            {p.first_name} {p.last_name}
+                          </button>
+                          <p className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-2">
+                            {sub && <span className={p.clock_state === 'late' ? 'text-rose-300 font-semibold' : ''}>{sub}</span>}
+                            {p.manager_clock && <span className="text-indigo-300">clocked in by a manager</span>}
+                            {p.geo_flag && <span className="text-amber-300 inline-flex items-center gap-0.5"><MapPinOff className="w-3 h-3" /> away from site</span>}
+                            {p.info_seen === false && ['upcoming', 'due', 'late'].includes(p.clock_state) && (
+                              <span className="text-amber-200 inline-flex items-center gap-0.5"><EyeOff className="w-3 h-3" /> hasn't read the update</span>
+                            )}
+                            <ReliabilityBadge data={reliabilityMap[p.worker_id]} />
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+                        {p.phone ? (
+                          <a href={`tel:${p.phone}`} className={iconBtn} aria-label={`Call ${p.first_name}`} title={`Call ${p.phone}`}>
+                            <Phone className="w-3.5 h-3.5" />
+                          </a>
+                        ) : (
+                          <span className={`${iconBtn} opacity-30 cursor-not-allowed`} title="No phone number on file"><Phone className="w-3.5 h-3.5" /></span>
+                        )}
+                        {canClockIn && (
+                          <button type="button" onClick={() => onClockIn?.(p, pos)}
+                            className={`${actBtn} bg-emerald-600/20 border border-emerald-500/40 text-emerald-200 hover:bg-emerald-600/30`}>
+                            <LogIn className="w-3.5 h-3.5" /> Clock in
+                          </button>
+                        )}
+                        {canNoShow && (
+                          <button type="button" onClick={() => onNoShow?.(p, pos)}
+                            className={`${actBtn} bg-rose-600/15 border border-rose-500/40 text-rose-200 hover:bg-rose-600/25`}>
+                            <UserX className="w-3.5 h-3.5" /> No-show
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {pos.open_spots > 0 && (
+                <div className="mt-2 p-2 rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-amber-200">
+                    {pos.open_spots} open spot{pos.open_spots === 1 ? '' : 's'}
+                  </span>
+                  {(pos.pending_requests > 0 || pos.pending_offers > 0) && (
+                    <span className="text-[11px] text-amber-100/70">
+                      {[pos.pending_requests && `${pos.pending_requests} asked`, pos.pending_offers && `${pos.pending_offers} offered`].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
+                  <button type="button" onClick={() => onFindCover?.(pos)}
+                    className={`${actBtn} ml-auto bg-amber-500 hover:bg-amber-400 text-slate-950`}>
+                    <UserPlus className="w-3.5 h-3.5" /> Find cover
+                  </button>
+                </div>
+              )}
+            </section>
           ))}
         </div>
       )}
+    </article>
+  );
+}
+```
+
+---
+
+## C3. NEW FILE `frontend/src/components/manager/WeekAtGlance.jsx`
+
+```jsx
+import React from 'react';
+import { FilePen, EyeOff, Users } from 'lucide-react';
+import { fmtTime } from '../../utils/venueTime';
+
+function fillTone(e) {
+  if (e.status === 'draft') return 'border-slate-600 border-dashed text-slate-300';
+  if (e.capacity > 0 && e.filled >= e.capacity) return 'border-emerald-500/40 text-emerald-100';
+  if (e.filled === 0) return 'border-rose-500/40 text-rose-100';
+  return 'border-amber-500/40 text-amber-100';
+}
+
+/** "2026-09-30" -> "Sep 30" without timezone drift (it's already a venue-local date) */
+function shortDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+/**
+ * Phase 30: Today + the next 6 days. Each day shows how full it is; each event is a chip
+ * (green = full, amber = partly filled, red = nobody yet, dashed = draft). Tap to open the roster.
+ * Props: week (WeekDay[]), timeZone, onOpenEvent(eventId)
+ */
+export default function WeekAtGlance({ week = [], timeZone, onOpenEvent }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2">
+      {week.map((d, i) => {
+        const pct = d.capacity ? Math.round((100 * Math.min(d.filled, d.capacity)) / d.capacity) : 0;
+        return (
+          <section key={d.date} className={`rounded-xl border p-2.5 min-w-0 ${i === 0 ? 'bg-slate-900 border-amber-500/30' : 'bg-slate-900/60 border-slate-800'}`}>
+            <header className="flex items-baseline justify-between gap-2">
+              <h4 className={`text-xs font-bold ${i === 0 ? 'text-amber-300' : 'text-white'}`}>{d.label}</h4>
+              <span className="text-[10px] text-slate-500">{shortDate(d.date)}</span>
+            </header>
+            {d.capacity > 0 ? (
+              <div className="mt-1.5">
+                <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                  <div className={`h-full ${pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${pct}%` }} />
+                </div>
+                <p className="text-[10px] text-slate-500 mt-0.5">{d.filled}/{d.capacity} spots filled</p>
+              </div>
+            ) : (
+              <p className="text-[10px] text-slate-600 mt-1.5">{d.events.length ? 'Drafts only' : 'Nothing posted'}</p>
+            )}
+            <ul className="mt-2 space-y-1.5">
+              {d.events.map((e) => (
+                <li key={e.event_key}>
+                  <button type="button" disabled={!e.event_id} onClick={() => e.event_id && onOpenEvent?.(e.event_id)}
+                    className={`w-full text-left px-2 py-1.5 rounded-lg border bg-slate-950/50 hover:bg-slate-800/80 transition ${fillTone(e)}`}>
+                    <p className="text-[10px] text-slate-400">{fmtTime(e.start_time, timeZone)}</p>
+                    <p className="text-xs font-semibold truncate">{e.title}</p>
+                    <p className="text-[10px] flex flex-wrap items-center gap-x-1.5 mt-0.5">
+                      {e.status === 'draft' ? (
+                        <span className="inline-flex items-center gap-0.5 text-slate-400"><FilePen className="w-3 h-3" /> Draft</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-0.5"><Users className="w-3 h-3" /> {e.filled}/{e.capacity}</span>
+                      )}
+                      {e.requested > 0 && <span className="text-amber-300">{e.requested} asked</span>}
+                      {e.unread > 0 && <span className="text-amber-200 inline-flex items-center gap-0.5"><EyeOff className="w-3 h-3" />{e.unread}</span>}
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
     </div>
   );
 }
+```
 
-const btn = 'px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50';
+---
+
+## C4. NEW FILE `frontend/src/components/manager/NeedsYouStrip.jsx`
+
+```jsx
+import React from 'react';
+import { CheckCircle2, Users, ArrowRightLeft, AlarmClock, UserPlus, BellRing } from 'lucide-react';
 
 /**
- * Phase 29.4: One of my shifts (My shifts tab). The one thing to do now is the big button;
- * everything else lives in the ⋯ menu.
- * Props: req, calItem (calendar item for booked shifts), clockedIn, busy ('clock' | 'withdraw' | null),
- *        onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw, onAddCalendar, onDirections, onAskBack
+ * Phase 30: One slim strip at the top of the manager dashboard.
+ * Everything waiting on the manager, with a tap to jump to it. When nothing is waiting it shrinks
+ * to a single "all caught up" line (the request / hand-off cards are hidden while they're empty).
+ * Props: requests (number), transfers (number), late (number: late + missed), openSpots (number: open-spot alerts),
+ *        onJump(targetId)  -> 'approval-queue' | 'pending-transfers' | 'tonight-board'
  */
-export default function MyShiftCard({
-  req, calItem, clockedIn = false, busy = null, onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw,
-  onAddCalendar, onDirections, onAskBack,
-}) {
-  const shift = req.shift || {};
-  const tz = shift.venue?.timezone;
-  const st = String(req.status || '').toLowerCase();
-  const isBooked = ['approved', 'confirmed'].includes(st);
-  const isCheckedIn = st === 'checked_in' || clockedIn;
-  const isPending = PENDING_STATUSES.includes(st);
-  const isCompleted = st === 'completed';
-  const isDropped = st === 'dropped';
-  const now = Date.now();
-  const startMs = new Date(shift.start_time).getTime();
-  const endMs = new Date(shift.end_time).getTime();
-  const ended = now >= endMs;
-  const hoursLeft = (startMs - now) / 3600000;
-  const canDrop = isBooked && !isCheckedIn && hoursLeft >= 24;
-  const opensAt = calItem?.clock_in_opens_at ? new Date(calItem.clock_in_opens_at) : null;
-  const tooEarly = !!opensAt && now < opensAt.getTime();
-  const needsAck = !!calItem?.needs_ack;
-  const shiftCancelled = String(shift.status || '').toUpperCase() === 'CANCELLED';
-  const canAskBack = isDropped && startMs > now && !shiftCancelled && onAskBack;
-  const { month, day, weekday } = dateParts(shift.start_time, tz);
+export default function NeedsYouStrip({ requests = 0, transfers = 0, late = 0, openSpots = 0, onJump }) {
+  const total = requests + transfers + late + openSpots;
 
-  const chip = isCheckedIn
-    ? ['Clocked in', 'bg-sky-500/15 text-sky-300 border-sky-500/40']
-    : isBooked
-      ? ['Confirmed', 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30']
-      : isPending
-        ? ['Waiting for the manager', 'bg-amber-500/15 text-amber-300 border-amber-500/30']
-        : isCompleted
-          ? ['Worked', 'bg-slate-800 text-slate-300 border-slate-700']
-          : isDropped
-            ? ['You dropped this', 'bg-rose-500/10 text-rose-300 border-rose-500/30']
-            : [STATUS_LABELS[st] || st, 'bg-slate-800 text-slate-400 border-slate-700'];
-
-  // The one main action
-  let primary = null;
-  if (isCheckedIn) {
-    primary = (
-      <button type="button" onClick={onClockOut} disabled={busy === 'clock'} className={`${btn} bg-rose-600 hover:bg-rose-500 text-white`}>
-        <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : 'Clock out'}
-      </button>
+  if (total === 0) {
+    return (
+      <div className="px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 inline-flex items-center gap-2">
+        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+        <span><strong className="text-slate-200">Nothing needs you right now.</strong> New requests, hand-offs and late arrivals show up here.</span>
+      </div>
     );
-  } else if (isBooked && needsAck && (ended || tooEarly)) {
-    primary = (
-      <button type="button" onClick={onDetails} className={`${btn} bg-amber-500 hover:bg-amber-400 text-slate-950`}>
-        <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the shift notes'}
-      </button>
-    );
-  } else if (isBooked && needsAck) {
-    // Clock-in is open: never hide it behind "read the notes"
-    primary = (
-      <>
-        <button type="button" onClick={onDetails} className={`${btn} bg-amber-500/15 hover:bg-amber-500 text-amber-200 hover:text-slate-950 border border-amber-500/40`}>
-          <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the notes'}
-        </button>
-        <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
-          <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
-        </button>
-      </>
-    );
-  } else if (isBooked && !ended && !tooEarly) {
-    primary = (
-      <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
-        <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
-      </button>
-    );
-  } else if (isBooked && tooEarly) {
-    primary = (
-      <span className={`${btn} bg-slate-800 text-slate-400 border border-slate-700 font-semibold`} title="Clock-in opens shortly before your shift starts">
-        <Clock className="w-4 h-4" /> Clock-in opens {fmtShortDate(opensAt, tz) !== fmtShortDate(new Date(), tz) ? `${fmtShortDate(opensAt, tz)}, ` : ''}{fmtTime(opensAt, tz)}
-      </span>
-    );
-  } else if (isBooked && ended) {
-    primary = <span className="text-[11px] text-slate-500 italic">Shift over. Ask your manager to add your hours.</span>;
-  } else if (isPending) {
-    primary = (
-      <button type="button" onClick={onWithdraw} disabled={busy === 'withdraw'}
-        className={`${btn} border border-rose-500/50 text-rose-300 hover:bg-rose-500/10 font-semibold`}>
-        <Undo2 className="w-4 h-4" /> {busy === 'withdraw' ? 'Withdrawing…' : 'Withdraw request'}
-      </button>
-    );
-  } else if (canAskBack) {
-    primary = (
-      <button type="button" onClick={onAskBack} className={`${btn} bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40`}>
-        <RotateCcw className="w-4 h-4" /> Ask to come back
-      </button>
-    );
-  } else if (isCompleted) {
-    primary = <span className="text-xs text-emerald-400 font-semibold inline-flex items-center gap-1"><Check className="w-4 h-4" /> Worked</span>;
   }
 
-  const menu = [
-    onDetails && { label: 'Details & notes', icon: Info, onClick: onDetails },
-    (isBooked || isCheckedIn) && onDirections && { label: 'Directions', icon: Navigation, onClick: onDirections },
-    isBooked && !ended && { label: 'Add to my calendar', icon: CalendarPlus, onClick: onAddCalendar },
-    (isBooked || isCheckedIn || isCompleted) && { label: 'Shift chat', icon: MessageSquare, onClick: onBoard },
-    isBooked && !isCheckedIn && !ended && { label: 'Hand off to a teammate', icon: ArrowRightLeft, onClick: onHandOff },
-    isBooked && !isCheckedIn && !ended && {
-      label: 'Drop shift', icon: LogOut, onClick: onDrop, danger: true, disabled: !canDrop,
-      hint: canDrop ? null : 'Not within 24 hours of the start. Hand it off or message your manager.',
-    },
-  ];
-
-  const reasonLine = req.status_reason && ['cancelled', 'removed', 'no_show', 'withdrawn', 'dropped', 'rejected'].includes(st);
+  const chip = 'px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition';
+  const items = [
+    late > 0 && { id: 'tonight-board', n: late, label: 'late or not clocked in', icon: AlarmClock,
+      cls: 'bg-rose-500/15 border border-rose-500/40 text-rose-200 hover:bg-rose-500/25' },
+    openSpots > 0 && { id: 'tonight-board', n: openSpots, label: openSpots === 1 ? 'open spot soon' : 'open spots soon', icon: UserPlus,
+      cls: 'bg-amber-500/15 border border-amber-500/40 text-amber-200 hover:bg-amber-500/25' },
+    requests > 0 && { id: 'approval-queue', n: requests, label: requests === 1 ? 'request' : 'requests', icon: Users,
+      cls: 'bg-amber-500/15 border border-amber-500/40 text-amber-200 hover:bg-amber-500/25' },
+    transfers > 0 && { id: 'pending-transfers', n: transfers, label: transfers === 1 ? 'hand-off' : 'hand-offs', icon: ArrowRightLeft,
+      cls: 'bg-amber-500/15 border border-amber-500/40 text-amber-200 hover:bg-amber-500/25' },
+  ].filter(Boolean);
 
   return (
-    <div className={`bg-slate-900 border rounded-2xl p-4 shadow-lg flex gap-4 ${
-      isCheckedIn ? 'border-sky-500/50' : needsAck && isBooked ? 'border-amber-500/50' : 'border-slate-800'}`}>
-      <div className="flex-shrink-0 w-14 h-fit rounded-xl bg-slate-950 border border-slate-800 text-center py-1.5">
-        <div className="text-[10px] font-bold text-emerald-400 tracking-wider">{month}</div>
-        <div className="text-xl font-black text-white leading-none">{day}</div>
-        <div className="text-[10px] text-slate-400 mt-0.5">{weekday}</div>
-      </div>
-      <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-center gap-3">
-        <div className="flex-1 min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${chip[1]}`}>{chip[0]}</span>
-            {req.previous_drop_at && (isBooked || isPending) && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-slate-800 text-slate-300 border-slate-600">After a drop</span>
-            )}
-            {(isBooked || isCheckedIn) && SOURCE_LABELS[req.approval_source] && (
-              <span className="text-[10px] text-slate-500">{SOURCE_LABELS[req.approval_source]}</span>
-            )}
-          </div>
-          <h3 className="text-base font-bold text-white leading-snug">{shift.title}</h3>
-          <p className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="font-semibold text-slate-200">{shift.role_type}</span>
-            <span>·</span>
-            <span>{shift.venue?.name}</span>
-            <span>·</span>
-            <PayLabel rate={shift.hourly_rate} rateMax={shift.hourly_rate_max} className="text-emerald-400 font-semibold" />
-            <TipBadge shift={shift} />
-          </p>
-          <p className="text-xs text-slate-300 inline-flex items-center gap-1">
-            <Clock className="w-3.5 h-3.5 text-emerald-400" /> {fmtTimeRange(shift.start_time, shift.end_time, tz)}
-          </p>
-          {isPending && req.notes && <p className="text-[11px] text-slate-400">Your note: <span className="text-slate-300">{req.notes}</span></p>}
-          {reasonLine && <p className="text-[11px] text-rose-300">Reason: {req.status_reason}</p>}
-        </div>
-        <div className="flex items-center gap-2 md:justify-end flex-wrap">
-          {primary}
-          <Menu items={menu} />
-        </div>
-      </div>
+    <div className="p-2.5 rounded-2xl bg-slate-900 border border-amber-500/30 flex flex-wrap items-center gap-2" role="status">
+      <span className="px-2 text-sm font-bold text-white inline-flex items-center gap-2">
+        <BellRing className="w-4 h-4 text-amber-400" /> Needs you ({total})
+      </span>
+      {items.map((it) => (
+        <button key={it.label} type="button" onClick={() => onJump?.(it.id)} className={`${chip} ${it.cls}`}>
+          <it.icon className="w-3.5 h-3.5" /> {it.n} {it.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -2026,952 +1665,235 @@ export default function MyShiftCard({
 
 ---
 
-## C3. NEW FILE `frontend/src/components/worker/DropShiftDialog.jsx`
-
-```jsx
-import React, { useState } from 'react';
-import { AlertTriangle, LogOut } from 'lucide-react';
-import api from '../../api/client';
-import ModalShell from '../ModalShell';
-import PayLabel from '../PayLabel';
-import { fmtDateTime } from '../../utils/venueTime';
-
-const LATE_DROP_HOURS = 72;   // matches backend reliability (dropped with < 72h notice = late drop)
-
-/**
- * Phase 29.4: Drop a booked shift (replaces the old hand-built confirm box).
- * Optional reason goes to the managers. Explains the late-drop rule and that coming back needs approval.
- * Props: req (ShiftRequestResponse), onClose, onDropped(message)
- */
-export default function DropShiftDialog({ req, onClose, onDropped }) {
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const shift = req.shift || {};
-  const hoursLeft = (new Date(shift.start_time).getTime() - Date.now()) / 3600000;
-  const late = hoursLeft < LATE_DROP_HOURS;
-
-  const submit = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await api.post(`/shifts/${req.shift_id || shift.id}/drop`, { reason: reason.trim() || null });
-      onDropped('Shift dropped. Your manager has been told and the spot is open again.');
-      onClose();
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not drop this shift.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <ModalShell
-      title="Drop this shift?"
-      icon={<LogOut className="w-5 h-5 text-rose-400" />}
-      onClose={onClose}
-      maxWidth="max-w-md"
-      footer={(
-        <>
-          <button type="button" onClick={onClose} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-            Keep it
-          </button>
-          <button type="button" onClick={submit} disabled={busy}
-            className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold disabled:opacity-50">
-            {busy ? 'Dropping…' : 'Drop shift'}
-          </button>
-        </>
-      )}
-    >
-      <div className="space-y-3">
-        {error && <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-sm">{error}</div>}
-        <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
-          <p className="font-bold text-white">{shift.title}</p>
-          <p className="text-slate-400">
-            {shift.venue?.name} · {shift.role_type} · <PayLabel rate={shift.hourly_rate} rateMax={shift.hourly_rate_max} />
-          </p>
-          <p className="text-slate-500">{fmtDateTime(shift.start_time, shift.venue?.timezone)}</p>
-        </div>
-        {late && (
-          <p className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5 flex gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-            <span>It starts in less than {LATE_DROP_HOURS} hours, so this counts as a late drop on your reliability score.</span>
-          </p>
-        )}
-        <label className="block text-xs font-semibold text-slate-300">
-          Tell your manager why (optional)
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value.slice(0, 500))}
-            rows={2}
-            placeholder="e.g. My car broke down"
-            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
-          />
-        </label>
-        <p className="text-[11px] text-slate-500">
-          The spot opens for other workers straight away. If you can make it after all, you can ask to come back from
-          My shifts. Your manager has to approve it.
-        </p>
-      </div>
-    </ModalShell>
-  );
-}
-```
-
----
-
-## C4. NEW FILE `frontend/src/components/worker/HandoffsPanel.jsx`
-
-```jsx
-import React from 'react';
-import { ArrowRightLeft, Check, X, Inbox, Send, MessageSquareQuote } from 'lucide-react';
-import PayLabel from '../PayLabel';
-import TipBadge from '../TipBadge';
-import { fmtDateTime } from '../../utils/venueTime';
-
-const OUT_STATUS = {
-  pending_worker_acceptance: ['Waiting for them', 'text-amber-300'],
-  pending_manager_approval: ['They accepted · waiting for the manager', 'text-amber-300'],
-  approved: ['Done · they have the shift', 'text-emerald-300'],
-  declined: ['They said no · you still have the shift', 'text-slate-400'],
-  denied: ['Manager said no · you still have the shift', 'text-slate-400'],
-  cancelled_by_sender: ['You withdrew it', 'text-slate-500'],
-};
-const WAITING = ['pending_worker_acceptance', 'pending_manager_approval'];
-const RECENT_DAYS = 14;
-
-function ShiftLine({ shift }) {
-  return (
-    <>
-      <h3 className="text-sm font-bold text-white mt-1">{shift?.title}</h3>
-      <p className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-        <span className="font-semibold text-slate-200">{shift?.role_type}</span>
-        <span>·</span>
-        <span>{shift?.venue?.name}</span>
-        <span>·</span>
-        <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} className="text-emerald-400 font-semibold" />
-        <TipBadge shift={shift} />
-      </p>
-      <p className="text-xs text-slate-500 mt-0.5">{fmtDateTime(shift?.start_time, shift?.venue?.timezone)}</p>
-    </>
-  );
-}
-
-/**
- * Phase 29.4: Hand-offs tab. Incoming (accept / decline) and the ones I sent (withdraw while waiting).
- * Props: incoming[], outgoing[] (ShiftTransferResponse), busyId, onAccept(t), onDecline(t), onWithdraw(t)
- */
-export default function HandoffsPanel({ incoming = [], outgoing = [], busyId, onAccept, onDecline, onWithdraw }) {
-  const cutoff = Date.now() - RECENT_DAYS * 86400000;
-  const sent = outgoing.filter((t) => WAITING.includes(t.status) || new Date(t.updated_at).getTime() >= cutoff);
-
-  return (
-    <div className="space-y-8">
-      <section className="space-y-3">
-        <h2 className="text-sm font-bold text-white flex items-center gap-2">
-          <Inbox className="w-4 h-4 text-amber-400" /> Offered to you by teammates ({incoming.length})
-        </h2>
-        {incoming.length === 0 ? (
-          <p className="text-xs text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 text-center">
-            When a teammate wants to hand you one of their shifts, it shows up here.
-          </p>
-        ) : incoming.map((t) => (
-          <div key={t.id} className="p-4 bg-slate-900 border border-amber-500/30 rounded-2xl flex flex-col md:flex-row md:items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-slate-400">
-                <strong className="text-white">{t.from_worker?.first_name} {t.from_worker?.last_name}</strong> wants to hand you this shift
-              </p>
-              <ShiftLine shift={t.shift} />
-              {t.notes && (
-                <p className="mt-2 text-[11px] text-amber-100 bg-amber-500/5 border border-amber-500/30 rounded-lg px-2 py-1 inline-flex gap-1">
-                  <MessageSquareQuote className="w-3 h-3 text-amber-300 flex-shrink-0 mt-0.5" /> “{t.notes}”
-                </p>
-              )}
-              <p className="text-[10px] text-slate-500 mt-1">If you accept, your manager still has to approve it.</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => onDecline(t)} disabled={busyId === t.id}
-                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50">
-                <X className="w-3.5 h-3.5" /> Decline
-              </button>
-              <button type="button" onClick={() => onAccept(t)} disabled={busyId === t.id}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
-                <Check className="w-3.5 h-3.5" /> {busyId === t.id ? 'Working…' : 'Accept'}
-              </button>
-            </div>
-          </div>
-        ))}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-sm font-bold text-white flex items-center gap-2">
-          <Send className="w-4 h-4 text-slate-400" /> Sent by you
-          <span className="text-[11px] font-normal text-slate-500">(last {RECENT_DAYS} days)</span>
-        </h2>
-        {sent.length === 0 ? (
-          <p className="text-xs text-slate-500 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 text-center flex flex-col items-center gap-1">
-            <ArrowRightLeft className="w-5 h-5 text-slate-600" />
-            To hand off a shift, open it in My shifts and choose “Hand off to a teammate” from its ⋯ menu.
-          </p>
-        ) : sent.map((t) => {
-          const [label, tone] = OUT_STATUS[t.status] || [t.status, 'text-slate-400'];
-          const waiting = WAITING.includes(t.status);
-          return (
-            <div key={t.id} className={`p-4 bg-slate-900 border rounded-2xl flex flex-col md:flex-row md:items-center gap-3 ${waiting ? 'border-slate-700' : 'border-slate-800 opacity-80'}`}>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-slate-400">
-                  To <strong className="text-white">{t.to_worker?.first_name} {t.to_worker?.last_name}</strong>
-                  <span className={`ml-2 font-semibold ${tone}`}>{label}</span>
-                </p>
-                <ShiftLine shift={t.shift} />
-              </div>
-              {waiting && (
-                <button type="button" onClick={() => onWithdraw(t)} disabled={busyId === t.id}
-                  className="px-3.5 py-2 rounded-xl border border-rose-500/50 text-rose-300 hover:bg-rose-500/10 text-xs font-semibold disabled:opacity-50 self-start md:self-auto">
-                  {busyId === t.id ? 'Withdrawing…' : 'Withdraw'}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </section>
-    </div>
-  );
-}
-```
-
----
-
-## C5. `frontend/src/components/TransferModal.jsx` (FULL FILE REPLACEMENT)
-Same props as before.
-
-```jsx
-import React, { useState, useEffect } from 'react';
-import api from '../api/client';
-import { ArrowRightLeft, AlertCircle, Info } from 'lucide-react';
-import ModalShell from './ModalShell';
-import { fmtShortDate, fmtDateTime } from '../utils/venueTime';
-import PayLabel from './PayLabel';
-
-/**
- * Hand off one of my booked shifts to a teammate (they accept, then the manager approves).
- * Phase 29.4: ModalShell (Esc closes it) and "hand off" wording everywhere.
- * Props: isOpen, onClose, myConfirmedShifts (ShiftRequestResponse[]), preselectedShiftId, onTransferSuccess()
- */
-export default function TransferModal({ isOpen, onClose, myConfirmedShifts = [], preselectedShiftId = null, onTransferSuccess }) {
-  const [selectedShiftId, setSelectedShiftId] = useState(preselectedShiftId || '');
-  const [eligibleWorkers, setEligibleWorkers] = useState([]);
-  const [selectedWorkerId, setSelectedWorkerId] = useState('');
-  const [loadingWorkers, setLoadingWorkers] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [notes, setNotes] = useState('');
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    if (preselectedShiftId) {
-      setSelectedShiftId(preselectedShiftId);
-    } else if (myConfirmedShifts.length > 0 && !selectedShiftId) {
-      setSelectedShiftId(myConfirmedShifts[0].shift_id || myConfirmedShifts[0].shift?.id || '');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preselectedShiftId, myConfirmedShifts]);
-
-  useEffect(() => {
-    if (!isOpen || !selectedShiftId) return undefined;
-    let active = true;
-    setLoadingWorkers(true);
-    setError(null);
-    api
-      .get(`/transfers/eligible-workers/${selectedShiftId}`)
-      .then((res) => {
-        if (!active) return;
-        const list = res.data || [];
-        setEligibleWorkers(list);
-        setSelectedWorkerId(list.length ? list[0].id : '');
-      })
-      .catch(() => active && setError('Could not load teammates for this shift.'))
-      .finally(() => active && setLoadingWorkers(false));
-    return () => {
-      active = false;
-    };
-  }, [isOpen, selectedShiftId]);
-
-  if (!isOpen) return null;
-
-  const currentShiftObj = myConfirmedShifts.find((item) => (item.shift_id || item.shift?.id) === selectedShiftId)?.shift;
-
-  const handleSubmit = async () => {
-    if (!selectedShiftId || !selectedWorkerId || submitting) return;
-    try {
-      setSubmitting(true);
-      setError(null);
-      await api.post('/transfers/propose', {
-        shift_id: selectedShiftId,
-        to_worker_id: selectedWorkerId,
-        notes: notes.trim() || undefined,
-      });
-      if (onTransferSuccess) onTransferSuccess();
-      onClose();
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not send the hand-off.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const selectCls = 'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-amber-500';
-
-  return (
-    <ModalShell
-      title="Hand off a shift"
-      icon={<ArrowRightLeft className="w-5 h-5 text-amber-400" />}
-      onClose={onClose}
-      maxWidth="max-w-lg"
-      footer={(
-        <>
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!selectedShiftId || !selectedWorkerId || submitting || eligibleWorkers.length === 0}
-            className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold disabled:opacity-40"
-          >
-            {submitting ? 'Sending…' : 'Send hand-off'}
-          </button>
-        </>
-      )}
-    >
-      <div className="space-y-4">
-        {error && (
-          <div className="p-3 bg-rose-950/80 border border-rose-800 rounded-xl text-rose-300 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-        <label className="block text-xs font-semibold text-slate-300">
-          Shift
-          <select value={selectedShiftId} onChange={(e) => setSelectedShiftId(e.target.value)} className={`${selectCls} mt-1`}>
-            {myConfirmedShifts.map((req) => {
-              const s = req.shift;
-              const id = req.shift_id || s?.id;
-              return (
-                <option key={id} value={id}>
-                  {s?.title} ({s?.role_type}) · {fmtShortDate(s?.start_time, s?.venue?.timezone)}
-                </option>
-              );
-            })}
-          </select>
-        </label>
-
-        {currentShiftObj && (
-          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1 text-slate-300">
-            <p className="font-bold text-white">{currentShiftObj.title}</p>
-            <p className="text-slate-400">
-              {currentShiftObj.venue?.name} · {currentShiftObj.role_type} ·{' '}
-              <PayLabel rate={currentShiftObj.hourly_rate} rateMax={currentShiftObj.hourly_rate_max} />
-            </p>
-            <p className="text-slate-500 text-[11px]">{fmtDateTime(currentShiftObj.start_time, currentShiftObj.venue?.timezone)}</p>
-          </div>
-        )}
-
-        <label className="block text-xs font-semibold text-slate-300">
-          Hand it to
-          {loadingWorkers ? (
-            <div className="text-xs text-slate-500 py-2 font-normal">Finding teammates who are free…</div>
-          ) : eligibleWorkers.length === 0 ? (
-            <div className="text-xs text-slate-400 bg-slate-950 p-3 rounded-xl border border-slate-800 mt-1 font-normal">
-              Nobody on this venue's team is free for this shift. You can still drop it (more than 24 hours before it starts), or message your manager.
-            </div>
-          ) : (
-            <select value={selectedWorkerId} onChange={(e) => setSelectedWorkerId(e.target.value)} className={`${selectCls} mt-1`}>
-              {eligibleWorkers.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.first_name} {w.last_name} · {w.rating_count ? `★ ${Number(w.aggregate_rating || 0).toFixed(1)}` : 'New'}
-                </option>
-              ))}
-            </select>
-          )}
-        </label>
-
-        <label className="block text-xs font-semibold text-slate-300">
-          Note for them and your manager (optional)
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value.slice(0, 500))}
-            placeholder="e.g. Family thing came up. Thanks for covering!"
-            rows={2}
-            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 resize-none"
-          />
-        </label>
-
-        <p className="text-[11px] text-slate-400 bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-xl flex gap-2">
-          <Info className="w-3.5 h-3.5 text-amber-300 flex-shrink-0 mt-0.5" />
-          <span>
-            They accept first, then your manager approves. <b className="text-slate-200">You stay on the shift until the manager approves.</b>{' '}
-            You can withdraw it from the Hand-offs tab while it's waiting.
-          </span>
-        </p>
-      </div>
-    </ModalShell>
-  );
-}
-```
-
----
-
-## C6. `frontend/src/components/EventListingModal.jsx` (EDITS)
-Ask to come back: reason required, the button label, and a banner.
+## C5. `frontend/src/pages/VenueManagerDashboard.jsx` (EDITS)
+New layout: strip → board → Posted Shifts + side column. The queue cards render only while they have items. The old phone-only "jump to queues" strip is replaced by `NeedsYouStrip`, which shows on all sizes.
 
 **Edit 1.** Find:
 ```jsx
-
-// Statuses on a position that the server will refuse to re-open.
-const LOCKED_POSITION_STATUSES = ['rejected', 'removed', 'no_show', 'dropped', 'transferred', 'cancelled'];
-
-function pickDefault(listing, prev) {
+import api from '../api/client';
+import {
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X, LayoutTemplate,
+} from 'lucide-react';
+import PostedShiftsBoard from '../components/PostedShiftsBoard';
 ```
 Replace with:
 ```jsx
-
-// Statuses on a position that the server will refuse to re-open.
-const LOCKED_POSITION_STATUSES = ['rejected', 'removed', 'no_show', 'transferred', 'cancelled'];   // Phase 29.4: 'dropped' can ask back
-const ASK_BACK_MIN = 5;
-
-function pickDefault(listing, prev) {
+import api from '../api/client';
+import {
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, X, LayoutTemplate,
+} from 'lucide-react';
+import PostedShiftsBoard from '../components/PostedShiftsBoard';
 ```
 
 **Edit 2.** Find:
 ```jsx
-  const selectedIsMine = selected && mine && selected.shift_id === mine.shift_id;
-  const bookedPosition = isBooked ? listing.positions.find((p) => p.shift_id === mine.shift_id) : null;
+import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
+import { WorkerProfileModal } from '../components/WorkerProfilePanel';
 
-  const addToCalendar = () =>
+/**
+ * Venue manager dashboard.
+ * Phase 29.1 layout: Posted Shifts on the left (2/3), and on the right the things that need you
+ * (requests, hand-offs) plus the venue's activity log. On phones a "Needs attention" strip at the
+ * top jumps to the queues. The old Phase 16 roster/calendar code (never shown) was removed.
+ */
+export default function VenueManagerDashboard() {
 ```
 Replace with:
 ```jsx
-  const selectedIsMine = selected && mine && selected.shift_id === mine.shift_id;
-  const bookedPosition = isBooked ? listing.positions.find((p) => p.shift_id === mine.shift_id) : null;
-  // Phase 29.4: they dropped a position in this event -> asking back needs a reason and the manager's OK
-  const askingBack = !!listing.dropped_here && !isBooked;
-  const noteOk = !askingBack || note.trim().length >= ASK_BACK_MIN;
+import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
+import { WorkerProfileModal } from '../components/WorkerProfilePanel';
+import TonightBoard from '../components/manager/TonightBoard';
+import NeedsYouStrip from '../components/manager/NeedsYouStrip';
 
-  const addToCalendar = () =>
+/**
+ * Venue manager dashboard.
+ * Phase 30 layout, top to bottom:
+ *   1. "Needs you (N)" strip: requests, hand-offs, late people, open spots soon (tap to jump)
+ *   2. Today / This week board: live clock status and one-tap actions (TonightBoard)
+ *   3. Posted Shifts (2/3) + right column: request / hand-off cards (only while they have items) and the activity log
+ */
+export default function VenueManagerDashboard() {
 ```
 
 **Edit 3.** Find:
 ```jsx
-      const label = isWaiting
-        ? `Switch to ${selected.role_type}`
-        : selected.booking === 'instant'
-        ? 'Book instantly'
+  const [review, setReview] = useState(null);         // Phase 29.1: { type: 'request' | 'transfer', data }
+  const [profileWorkerId, setProfileWorkerId] = useState(null); // Phase 29.1: from the activity log
+  const noticeTimer = useRef(null);
+
 ```
 Replace with:
 ```jsx
-      const label = isWaiting
-        ? `Switch to ${selected.role_type}`
-        : askingBack
-        ? 'Ask to come back'
-        : selected.booking === 'instant'
-        ? 'Book instantly'
+  const [review, setReview] = useState(null);         // Phase 29.1: { type: 'request' | 'transfer', data }
+  const [profileWorkerId, setProfileWorkerId] = useState(null); // Phase 29.1: from the activity log
+  const [tonightSummary, setTonightSummary] = useState({ late: 0, openSpots: 0 }); // Phase 30: from TonightBoard
+  const noticeTimer = useRef(null);
+
 ```
 
 **Edit 4.** Find:
 ```jsx
-          type="button"
-          onClick={() => sendRequest(isWaiting)}
-          disabled={submitting || !listing.can_request || selected.status !== 'OPEN'}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
-        >
+
+  const tz = venueDetails?.timezone;
+  const attention = pendingRequests.length + pendingTransfers.length;
+  const headerBtn =
+    'px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm disabled:opacity-50';
 ```
 Replace with:
 ```jsx
-          type="button"
-          onClick={() => sendRequest(isWaiting)}
-          disabled={submitting || !listing.can_request || selected.status !== 'OPEN' || !noteOk}
-          title={noteOk ? undefined : 'Tell the manager why you can make it now'}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
-        >
+
+  const tz = venueDetails?.timezone;
+  const headerBtn =
+    'px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm disabled:opacity-50';
 ```
 
 **Edit 5.** Find:
 ```jsx
-          {result.type === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-          <span>{result.message}</span>
-        </div>
-      )}
+        )}
+
+        {/* Phones / tablets: jump to the queues that sit below the shifts */}
+        {attention > 0 && (
+          <div className="lg:hidden flex flex-wrap gap-2">
+            {pendingRequests.length > 0 && (
+              <button type="button" onClick={() => scrollTo('approval-queue')}
+                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
+                <Users className="w-4 h-4" /> {pendingRequests.length} request{pendingRequests.length === 1 ? '' : 's'} to review
+              </button>
+            )}
+            {pendingTransfers.length > 0 && (
+              <button type="button" onClick={() => scrollTo('pending-transfers')}
+                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
+                <ArrowRightLeft className="w-4 h-4" /> {pendingTransfers.length} hand-off{pendingTransfers.length === 1 ? '' : 's'} to approve
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          {/* Left: posted shifts */}
+          <div className="lg:col-span-2 min-w-0">
+            <PostedShiftsBoard
 ```
 Replace with:
 ```jsx
-          {result.type === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-          <span>{result.message}</span>
-        </div>
-      )}
+        )}
 
-      {askingBack && !listing.cancelled && !listing.started && (
-        <div className="mb-4 p-3 rounded-xl border border-slate-600 bg-slate-800/60 text-slate-200 text-xs flex items-start gap-2">
-          <Info className="w-4 h-4 flex-shrink-0 text-slate-300" />
-          <span>
-            You dropped a shift at this event. You can ask to come back: tell the manager why you can make it now.
-            It always needs their approval, and until they say yes the drop still counts on your reliability.
-          </span>
-        </div>
-      )}
-```
-
-**Edit 6.** Find:
-```jsx
-                      {ps && (
-                        <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
-                          You: {STATUS_LABELS[ps] || ps}
-                          {p.my_status_reason ? ` — ${p.my_status_reason}` : ''}
-                        </p>
-```
-Replace with:
-```jsx
-                      {ps && (
-                        <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
-                          {ps === 'dropped' ? 'You dropped this' : `You: ${STATUS_LABELS[ps] || ps}`}
-                          {p.my_status_reason ? ` — ${p.my_status_reason}` : ''}
-                        </p>
-```
-
-**Edit 7.** Find:
-```jsx
-          {showNoteBox && (
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">Note for the manager (optional)</label>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value.slice(0, 500))}
-                rows={2}
-                placeholder="e.g. 3 years behind the bar, can stay late"
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
-              />
-```
-Replace with:
-```jsx
-          {showNoteBox && (
-            <div>
-              <label className={`block text-[11px] font-semibold mb-1 ${askingBack ? 'text-amber-200' : 'text-slate-400'}`}>
-                {askingBack ? 'Why you can make it now (required)' : 'Note for the manager (optional)'}
-              </label>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value.slice(0, 500))}
-                rows={2}
-                placeholder={askingBack ? 'e.g. My appointment moved, I can do the full shift' : 'e.g. 3 years behind the bar, can stay late'}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
-              />
-```
-
----
-
-## C7. `frontend/src/components/EventListingCard.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
-                )}
-                <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
-                {p.my_status && <span className="text-[10px] text-amber-300">• you</span>}
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
-```
-Replace with:
-```jsx
-                )}
-                <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
-                {p.my_status && (
-                  <span className={`text-[10px] whitespace-nowrap ${p.my_status === 'dropped' ? 'text-rose-300' : 'text-amber-300'}`}>
-                    • {p.my_status === 'dropped' ? 'you dropped' : 'you'}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
-```
-
-**Edit 2.** Find:
-```jsx
-        </span>
-        <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
-          {mine ? 'View details' : 'View & request'}
-          <ChevronRight className="w-4 h-4" />
-        </span>
-```
-Replace with:
-```jsx
-        </span>
-        <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
-          {mine ? 'View details' : listing.dropped_here ? 'Ask to come back' : 'View & request'}
-          <ChevronRight className="w-4 h-4" />
-        </span>
-```
-
----
-
-## C8. `frontend/src/utils/listingFormat.js` (EDIT)
-
-**Edit 1.** Find:
-```js
-  completed: 'Completed',
-  rejected: 'Not selected',
-  dropped: 'Released',
-  transferred: 'Handed off',
-  cancelled: 'Cancelled by venue',
-```
-Replace with:
-```js
-  completed: 'Completed',
-  rejected: 'Not selected',
-  dropped: 'You dropped this',
-  transferred: 'Handed off',
-  cancelled: 'Cancelled by venue',
-```
-
----
-
-# PART D: Frontend, manager
-
-## D1. `frontend/src/components/ManagerQueues.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
-import React from 'react';
-import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight } from 'lucide-react';
-import RatingBadge from './RatingBadge';
-import ReliabilityBadge from './ReliabilityBadge';
-```
-Replace with:
-```jsx
-import React from 'react';
-import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight, RotateCcw } from 'lucide-react';
-import RatingBadge from './RatingBadge';
-import ReliabilityBadge from './ReliabilityBadge';
-```
-
-**Edit 2.** Find:
-```jsx
-                  </button>
-                </div>
-                {req.notes && (
-                  <div className="text-[11px] text-amber-100 bg-amber-500/5 border border-amber-500/30 rounded-lg px-2 py-1 flex gap-1">
-```
-Replace with:
-```jsx
-                  </button>
-                </div>
-                {req.previous_drop_at && (
-                  <div className="text-[11px] text-rose-100 bg-rose-500/10 border border-rose-500/40 rounded-lg px-2 py-1 flex gap-1">
-                    <RotateCcw className="w-3 h-3 text-rose-300 flex-shrink-0 mt-0.5" />
-                    <span>Dropped this event on {fmtDate(req.previous_drop_at, timeZone)} and is asking back. Needs your OK.</span>
-                  </div>
-                )}
-                {req.notes && (
-                  <div className="text-[11px] text-amber-100 bg-amber-500/5 border border-amber-500/30 rounded-lg px-2 py-1 flex gap-1">
-```
-
----
-
-## D2. `frontend/src/components/ReviewModal.jsx` (EDIT)
-
-**Edit 1.** Find:
-```jsx
-            </div>
-          )}
-          <div className={`p-3 rounded-xl border text-sm ${note ? 'bg-amber-500/5 border-amber-500/40 text-amber-50' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>
-            <div className="text-[11px] font-semibold uppercase tracking-wider mb-1 inline-flex items-center gap-1 text-amber-300">
-              <MessageSquareQuote className="w-3.5 h-3.5" /> {isTransfer ? 'Their note' : 'Note with the request'}
-            </div>
-            <div className="whitespace-pre-line">{note ? `“${note}”` : 'No note.'}</div>
-```
-Replace with:
-```jsx
-            </div>
-          )}
-          {!isTransfer && d.previous_drop_at && (
-            <div className="p-3 rounded-xl border border-rose-500/40 bg-rose-500/10 text-sm text-rose-100">
-              <div className="font-bold text-rose-200">Dropped this event on {fmtDateTime(d.previous_drop_at, timeZone)}</div>
-              <div className="text-xs mt-0.5">They're asking to come back. Their reason is below. Approving books them. If they work the shift, the earlier drop stops counting against their reliability.</div>
-            </div>
-          )}
-          <div className={`p-3 rounded-xl border text-sm ${note ? 'bg-amber-500/5 border-amber-500/40 text-amber-50' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>
-            <div className="text-[11px] font-semibold uppercase tracking-wider mb-1 inline-flex items-center gap-1 text-amber-300">
-              <MessageSquareQuote className="w-3.5 h-3.5" /> {isTransfer ? 'Their note' : d.previous_drop_at ? 'Why they can make it now' : 'Note with the request'}
-            </div>
-            <div className="whitespace-pre-line">{note ? `“${note}”` : 'No note.'}</div>
-```
-
----
-
-## D3. `frontend/src/components/EventRosterModal.jsx` (EDITS)
-The Dropped list, **Book back…** (uses the Phase 29.3 `ConfirmDialog`), and the flags.
-
-**Edit 1.** Find:
-```jsx
-import React, { useState } from 'react';
-import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle, MapPin, Send, Clock } from 'lucide-react';
-import api from '../api/client';
-import ModalShell from './ModalShell';
-import RatingBadge from './RatingBadge';
-import RateWorker from './RateWorker';
-import StaffPositionModal from './StaffPositionModal';
-import TipBadge from './TipBadge';
-import ReliabilityBadge from './ReliabilityBadge';
-```
-Replace with:
-```jsx
-import React, { useState } from 'react';
-import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle, MapPin, Send, Clock, RotateCcw, LogOut } from 'lucide-react';
-import api from '../api/client';
-import ModalShell from './ModalShell';
-import RatingBadge from './RatingBadge';
-import RateWorker from './RateWorker';
-import StaffPositionModal from './StaffPositionModal';
-import ConfirmDialog from './ConfirmDialog';
-import TipBadge from './TipBadge';
-import ReliabilityBadge from './ReliabilityBadge';
-```
-
-**Edit 2.** Find:
-```jsx
-  const [flash, setFlash] = useState(null);           // Phase 29: { type, text }
-  const [withdrawing, setWithdrawing] = useState(null);
-  if (!event) return null;
-  const ended = new Date(event.end_time).getTime() < Date.now();
-```
-Replace with:
-```jsx
-  const [flash, setFlash] = useState(null);           // Phase 29: { type, text }
-  const [withdrawing, setWithdrawing] = useState(null);
-  const [bookBack, setBookBack] = useState(null);     // Phase 29.4: { person, pos }
-  if (!event) return null;
-  const ended = new Date(event.end_time).getTime() < Date.now();
-```
-
-**Edit 3.** Find:
-```jsx
-                                <div className="text-[10px] text-slate-500">{SOURCE_LABEL[p.approval_source]}</div>
-                              )}
-                              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
-                                {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
-```
-Replace with:
-```jsx
-                                <div className="text-[10px] text-slate-500">{SOURCE_LABEL[p.approval_source]}</div>
-                              )}
-                              {p.previous_drop_at && (
-                                <div className="text-[10px] text-rose-300 inline-flex items-center gap-1" title={p.rebook_reason || ''}>
-                                  <RotateCcw className="w-3 h-3" /> Back after dropping on {fmtDate(p.previous_drop_at, timeZone)}
-                                  {p.rebook_reason ? ` · “${p.rebook_reason}”` : ''}
-                                </div>
-                              )}
-                              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
-                                {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
-```
-
-**Edit 4.** Find:
-```jsx
-                              <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
-                              <div className="text-[11px] text-slate-400 mt-0.5">Requested {p.requested_at ? fmtDateTime(p.requested_at, timeZone) : ''}</div>
-                              {p.note && (
-                                <div className="text-[11px] text-slate-300 mt-1 italic whitespace-pre-line">“{p.note}”</div>
-```
-Replace with:
-```jsx
-                              <div className="text-sm font-semibold text-white">{p.first_name} {p.last_name}</div>
-                              <div className="text-[11px] text-slate-400 mt-0.5">Requested {p.requested_at ? fmtDateTime(p.requested_at, timeZone) : ''}</div>
-                              {p.previous_drop_at && (
-                                <div className="text-[11px] text-rose-300 mt-0.5 inline-flex items-center gap-1">
-                                  <RotateCcw className="w-3 h-3" /> Dropped this event on {fmtDate(p.previous_drop_at, timeZone)}, asking back
-                                </div>
-                              )}
-                              {p.note && (
-                                <div className="text-[11px] text-slate-300 mt-1 italic whitespace-pre-line">“{p.note}”</div>
-```
-
-**Edit 5.** Find:
-```jsx
-                  )}
-                </div>
-
-                {pos.offers && pos.offers.length > 0 && (
-```
-Replace with:
-```jsx
-                  )}
-                </div>
-
-                {pos.dropped && pos.dropped.length > 0 && (
-                  <div>
-                    <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <LogOut className="w-3.5 h-3.5 text-rose-400" /> Dropped ({pos.dropped.length})
-                    </div>
-                    <div className="space-y-2">
-                      {pos.dropped.map((p) => (
-                        <div key={p.request_id} className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                          <div>
-                            <div className="text-sm font-semibold text-slate-200">{p.first_name} {p.last_name}</div>
-                            <div className="text-[11px] text-slate-500">
-                              Dropped {p.dropped_at ? fmtDateTime(p.dropped_at, timeZone) : ''}
-                              {p.drop_reason ? ` · “${p.drop_reason}”` : ''}
-                            </div>
-                          </div>
-                          {venueId && !event.cancelled && !ended && pos.status !== 'CANCELLED' && event.status !== 'draft' && (
-                            <button type="button" onClick={() => setBookBack({ person: p, pos })}
-                              disabled={pos.assigned.length >= pos.capacity}
-                              title={pos.assigned.length >= pos.capacity ? 'Position is full' : 'Book them back on this position'}
-                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-slate-700 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
-                              <RotateCcw className="w-3 h-3" /> Book back…
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {pos.offers && pos.offers.length > 0 && (
-```
-
-**Edit 6.** Find:
-```jsx
-        })}
-      </div>
-      {staffPos && (
-        <StaffPositionModal
-```
-Replace with:
-```jsx
-        })}
-      </div>
-      {bookBack && (
-        <ConfirmDialog
-          title={`Book ${bookBack.person.first_name} back?`}
-          message={`${bookBack.person.first_name} dropped ${bookBack.pos.role_type} on this event. Booking them back is logged with your reason, and they're told they're booked.`}
-          confirmLabel="Book back"
-          input={{ label: 'Reason (required)', placeholder: 'e.g. They sorted out their conflict', required: true }}
-          onConfirm={async (reason) => {
-            if (reason.length < 5) throw new Error('Add a slightly longer reason.');
-            const res = await api.post(`/shifts/${bookBack.pos.shift_id}/assign`, { worker_id: bookBack.person.worker_id, reason });
-            setFlash({ type: 'success', text: res.data.message });
-            if (onChanged) onChanged();
-          }}
-          onClose={() => setBookBack(null)}
+        {/* Phase 30: everything waiting on you, then today's board */}
+        <NeedsYouStrip
+          requests={pendingRequests.length}
+          transfers={pendingTransfers.length}
+          late={tonightSummary.late}
+          openSpots={tonightSummary.openSpots}
+          onJump={scrollTo}
         />
-      )}
-      {staffPos && (
-        <StaffPositionModal
+
+        <TonightBoard
+          venueId={currentVenueId}
+          timeZone={tz}
+          refreshKey={boardRefreshKey}
+          reliabilityMap={reliabilityMap}
+          onOpenBoard={setActiveDiscussionShift}
+          onOpenEvent={openEvent}
+          onTimesheet={(eventId) => setTimesheetEventId(eventId)}
+          onOpenWorker={setProfileWorkerId}
+          onChanged={afterChange}
+          onSummary={setTonightSummary}
+        />
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          {/* Left: posted shifts (Phase 30: now below the Today board) */}
+          <div className="lg:col-span-2 min-w-0">
+            <PostedShiftsBoard
+```
+
+**Edit 6.** Find:
+```jsx
+          </div>
+
+          {/* Right: what needs you + activity */}
+          <aside className="space-y-6 min-w-0">
+            <ApprovalQueueCard
+              requests={pendingRequests}
+              reliabilityMap={reliabilityMap}
+              timeZone={tz}
+              actionLoading={actionLoading}
+              onReview={(req) => setReview({ type: 'request', data: req })}
+              onApprove={handleApprove}
+              onDeny={handleDeny}
+            />
+            <TransfersCard
+              transfers={pendingTransfers}
+              timeZone={tz}
+              actionLoading={actionLoading}
+              onReview={(t) => setReview({ type: 'transfer', data: t })}
+              onApprove={handleApproveTransfer}
+              onDeny={handleDenyTransfer}
+            />
+            <ActivityFeed
+              venueId={currentVenueId}
+```
+Replace with:
+```jsx
+          </div>
+
+          {/* Right: requests / hand-offs (only while something is waiting) + activity */}
+          <aside className="space-y-6 min-w-0">
+            {pendingRequests.length > 0 && (
+              <ApprovalQueueCard
+                requests={pendingRequests}
+                reliabilityMap={reliabilityMap}
+                timeZone={tz}
+                actionLoading={actionLoading}
+                onReview={(req) => setReview({ type: 'request', data: req })}
+                onApprove={handleApprove}
+                onDeny={handleDeny}
+              />
+            )}
+            {pendingTransfers.length > 0 && (
+              <TransfersCard
+                transfers={pendingTransfers}
+                timeZone={tz}
+                actionLoading={actionLoading}
+                onReview={(t) => setReview({ type: 'transfer', data: t })}
+                onApprove={handleApproveTransfer}
+                onDeny={handleDenyTransfer}
+              />
+            )}
+            <ActivityFeed
+              venueId={currentVenueId}
 ```
 
 ---
 
-## D4. `frontend/src/components/StaffPositionModal.jsx` (EDITS)
-An inline reason when assigning someone who dropped. They can't be ticked for offers.
+## C6. `frontend/src/components/TimesheetModal.jsx` (EDIT)
+Copy only: the no-show confirmation now says the worker is told and the spot reopens.
 
 **Edit 1.** Find:
 ```jsx
-  }, [position.shift_id, debouncedQ]);
-
-  const selectable = (c) => (c.available || c.requested_this) && !c.offered;
-  const toggle = (c) => {
-    if (!selectable(c)) return;
+        )}
+        {f.kind === 'delete' && <p className="text-xs text-rose-300">Delete this time entry?</p>}
+        {f.kind === 'noshow' && <p className="text-xs text-rose-300">Mark as a no-show? This counts against their reliability.</p>}
+        <input
+          value={f.reason}
 ```
 Replace with:
 ```jsx
-  }, [position.shift_id, debouncedQ]);
-
-  const selectable = (c) => (c.available || c.requested_this) && !c.offered && !(c.dropped_at && !c.requested_this);   // Phase 29.4
-  const toggle = (c) => {
-    if (!selectable(c)) return;
-```
-
-**Edit 2.** Find:
-```jsx
-  };
-
-  const assign = async (c) => {
-    setBusy(`assign-${c.worker_id}`);
-    setError('');
-    try {
-      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id });
-      onDone(res.data.message);
-    } catch (err) {
-```
-Replace with:
-```jsx
-  };
-
-  const [reasonFor, setReasonFor] = useState(null);   // Phase 29.4: candidate who dropped this event
-  const [reason, setReason] = useState('');
-
-  const assign = async (c, why = null) => {
-    // Phase 29.4: someone who dropped this event needs a reason (unless they asked back themselves)
-    if (c.dropped_at && !c.requested_this && why === null) {
-      setReasonFor(c.worker_id);
-      setReason('');
-      return;
-    }
-    setBusy(`assign-${c.worker_id}`);
-    setError('');
-    try {
-      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id, reason: why || undefined });
-      onDone(res.data.message);
-    } catch (err) {
-```
-
-**Edit 3.** Find:
-```jsx
-                      </div>
-                    )}
-                  </div>
-                  <button
-```
-Replace with:
-```jsx
-                      </div>
-                    )}
-                    {c.dropped_at && (
-                      <div className="text-[11px] text-rose-300 mt-0.5">
-                        Dropped this event on {new Date(c.dropped_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                        {c.drop_reason ? ` · “${c.drop_reason}”` : ''}. {c.requested_this ? 'They asked to come back.' : 'Assign needs a reason; offers skip them.'}
-                      </div>
-                    )}
-                    {reasonFor === c.worker_id && (
-                      <div className="mt-2 flex flex-wrap items-center gap-2 w-full">
-                        <input autoFocus value={reason} onChange={(e) => setReason(e.target.value.slice(0, 500))}
-                          onKeyDown={(e) => e.key === 'Enter' && reason.trim().length >= 5 && assign(c, reason.trim())}
-                          placeholder="Why are you booking them back?"
-                          className="flex-1 min-w-[12rem] px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500" />
-                        <button type="button" onClick={() => assign(c, reason.trim())} disabled={reason.trim().length < 5 || busy !== null}
-                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40">Book back</button>
-                        <button type="button" onClick={() => setReasonFor(null)} className="text-xs text-slate-400 hover:text-white">Cancel</button>
-                      </div>
-                    )}
-                  </div>
-                  <button
+        )}
+        {f.kind === 'delete' && <p className="text-xs text-rose-300">Delete this time entry?</p>}
+        {f.kind === 'noshow' && <p className="text-xs text-rose-300">Mark as a no-show? This counts against their reliability, they’re told, and their spot opens again.</p>}
+        <input
+          value={f.reason}
 ```
 
 ---
 
 ## E. Rebuild & verification
 
-**Schema changed.** Choose ONE:
-
-* **Standard (wipes data):**
+**No schema change.** Just rebuild:
 ```bash
-docker compose down -v
 docker compose up -d --build
 ```
-* **Keep current data:**
-```bash
-docker compose exec -T database psql -U shiftboard_user -d shiftboard <<'SQL'
-ALTER TABLE shift_requests ADD COLUMN IF NOT EXISTS previous_drop_at TIMESTAMPTZ;
-ALTER TABLE shift_requests ADD COLUMN IF NOT EXISTS rebook_reason TEXT;
-SQL
-docker compose up -d --build
-```
-(Use the database service name, user and DB from `docker-compose.yml` if they differ.)
+(`docker compose down -v` is **not** needed. The standard `docker compose down -v && docker compose up -d --build` also works if you want a clean database.)
 
 If the page is blank or shows "Invalid hook call" after the rebuild:
 ```bash
@@ -2979,38 +1901,47 @@ docker compose exec frontend rm -rf node_modules/.vite && docker compose restart
 ```
 then hard-refresh.
 
+**Quick API check** (manager token):
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/venues/<venue_id>/tonight | head -c 600
+```
+It returns `events`, `alerts`, `counts` and `week` (7 days). A worker token returns 403.
+
 ### Checklist
-**As a worker** with an upcoming booking:
-1. **Landing and tabs:**
-   * `/worker` opens on **My shifts**.
-   * The tabs read My shifts · Find shifts · Calendar · Hand-offs.
-   * On a phone all four are visible in a 2×2 grid.
-2. **Cards:**
-   * Each shift shows a date tile, status, role · venue · pay, the times, **one** main button and a ⋯ menu.
-   * A shift starting within the clock-in window shows **Clock in**. If it has unread notes, **Read the notes** sits next to it and doesn't replace it.
-3. **⋯ menu:**
-   * It lists Details & notes, Directions, Add to my calendar, Shift chat, Hand off to a teammate and Drop shift.
-   * Inside 24 h, Drop is greyed out with the reason.
-4. **Drop:**
-   * Drop a shift 3+ days out with a reason. The dialog closes with Esc and warns about late drops inside 72 h.
-   * The manager's bell shows the drop **with the reason**.
-5. **Ask back:**
-   * The dropped shift shows under "Dropped · you can still ask to come back". **Ask to come back** opens the event.
-   * The reason box is required, and the button stays disabled until you type 5+ characters.
-   * Send it: it shows "Waiting for the manager" and "After a drop", **even at a team venue that normally books instantly**.
-6. **Find shifts:** the dropped event's card shows "• you dropped" and "Ask to come back". No position in it shows Instant book.
-7. **Hand-offs:**
-   * Propose a hand-off from ⋯. Under **Hand-offs → Sent by you** it shows "Waiting for them", and **Withdraw** works.
-   * An incoming hand-off shows the teammate's note.
+**Set-up:** post an event starting ~15 minutes from now with 2–3 positions. Assign three people and leave one spot open. Have one person clock in from their phone.
 
-**As the manager:**
+1. **Layout:** `/venue` shows, top to bottom:
+   * the "Needs you" strip
+   * **Today** (with a Today / This week toggle)
+   * Posted Shifts on the left, with the activity log on the right
 
-8. **Queue and review:** the ask-back request shows a red "Dropped this event on … and is asking back". **Review** shows the flag and "Why they can make it now".
-9. **Roster:**
-   * The event's **Dropped** list shows who dropped, when and why.
-   * **Book back…** asks for a reason, then books them. The roster shows "Back after dropping on … · "reason"", and the activity log says "booked back after a drop".
-10. **Assign / Offer:**
-    * Search someone who dropped the event. They show "Dropped this event on…".
-    * **Assign** asks for a reason inline.
-    * Ticking them for an offer isn't possible, and the API skips them anyway.
-11. **Reliability:** someone who drops inside 72 h and then asks back still shows the late drop until they actually work the shift.
+   With no pending requests or hand-offs, those two cards aren't shown at all.
+2. **Before the start:**
+   * People show **Not open yet** until the clock-in window opens, then **Not in yet**.
+   * The open position shows **1 open spot → Find cover**, and an alert "1 Server spot open · … starts 7:00 PM" appears at the top.
+3. **After start + 10 min:**
+   * Anyone not in shows a pulsing **Late · 12 min past the start**.
+   * An alert appears with **Call / Clock in / No-show**.
+   * The strip shows "N late or not clocked in".
+   * The board updates on its own within a minute; no refresh is needed.
+4. **Clock in for them:**
+   * **Clock in** asks for a reason. Afterwards they show **In · clocked in by a manager**.
+   * The activity log (Alerts filter) shows "Clocked … in for …".
+   * The time sheet shows the entry with the manager marker.
+5. **No-show:**
+   * On a late person, **No-show** asks for an optional note. Afterwards they show **No-show** and the position shows **1 open spot**.
+   * **Find cover → Assign** books someone else (offers are disabled after the start, as before).
+   * The worker gets "Marked as a no-show…", and the activity log shows it.
+6. **Undo:** on the time sheet, add time for the no-show person. They become checked in, and the spot count goes back up if there's room.
+7. **Message:** "Message this shift" opens the shift board for that position.
+8. **Call:** 📞 dials on a phone. It's greyed out for someone with no phone number.
+9. **This week:**
+   * Seven day columns (stacked on phones), each with a fill bar and chips.
+   * Drafts are dashed; full events are green, partly filled amber, empty red.
+   * Tapping a chip opens its roster.
+10. **Unfilled alert:** a published position with open spots starting in under 3 h gets **one** bell alert, "N … spots still open: …", and an `unfilled_soon` line in the activity log. It isn't repeated on the next minute's tick.
+11. **Phone width:**
+    * The strip chips wrap.
+    * Alert actions sit under the alert text.
+    * Person rows stack name/state above their action buttons.
+    * Nothing scrolls sideways.

@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X, LayoutTemplate,
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, X, LayoutTemplate,
 } from 'lucide-react';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
@@ -18,12 +18,15 @@ import ReviewModal from '../components/ReviewModal';
 import ActivityFeed from '../components/ActivityFeed';
 import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
 import { WorkerProfileModal } from '../components/WorkerProfilePanel';
+import TonightBoard from '../components/manager/TonightBoard';
+import NeedsYouStrip from '../components/manager/NeedsYouStrip';
 
 /**
  * Venue manager dashboard.
- * Phase 29.1 layout: Posted Shifts on the left (2/3), and on the right the things that need you
- * (requests, hand-offs) plus the venue's activity log. On phones a "Needs attention" strip at the
- * top jumps to the queues. The old Phase 16 roster/calendar code (never shown) was removed.
+ * Phase 30 layout, top to bottom:
+ *   1. "Needs you (N)" strip: requests, hand-offs, late people, open spots soon (tap to jump)
+ *   2. Today / This week board: live clock status and one-tap actions (TonightBoard)
+ *   3. Posted Shifts (2/3) + right column: request / hand-off cards (only while they have items) and the activity log
  */
 export default function VenueManagerDashboard() {
   const { user } = useAuth();
@@ -64,6 +67,7 @@ export default function VenueManagerDashboard() {
   const [showTeam, setShowTeam] = useState(false);    // Phase 29: Team page
   const [review, setReview] = useState(null);         // Phase 29.1: { type: 'request' | 'transfer', data }
   const [profileWorkerId, setProfileWorkerId] = useState(null); // Phase 29.1: from the activity log
+  const [tonightSummary, setTonightSummary] = useState({ late: 0, openSpots: 0 }); // Phase 30: from TonightBoard
   const noticeTimer = useRef(null);
 
   // Phase 29.1: success / info banners clear themselves after 6 s; errors stay until dismissed
@@ -394,7 +398,6 @@ export default function VenueManagerDashboard() {
   }
 
   const tz = venueDetails?.timezone;
-  const attention = pendingRequests.length + pendingTransfers.length;
   const headerBtn =
     'px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm disabled:opacity-50';
 
@@ -483,26 +486,30 @@ export default function VenueManagerDashboard() {
           </div>
         )}
 
-        {/* Phones / tablets: jump to the queues that sit below the shifts */}
-        {attention > 0 && (
-          <div className="lg:hidden flex flex-wrap gap-2">
-            {pendingRequests.length > 0 && (
-              <button type="button" onClick={() => scrollTo('approval-queue')}
-                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
-                <Users className="w-4 h-4" /> {pendingRequests.length} request{pendingRequests.length === 1 ? '' : 's'} to review
-              </button>
-            )}
-            {pendingTransfers.length > 0 && (
-              <button type="button" onClick={() => scrollTo('pending-transfers')}
-                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
-                <ArrowRightLeft className="w-4 h-4" /> {pendingTransfers.length} hand-off{pendingTransfers.length === 1 ? '' : 's'} to approve
-              </button>
-            )}
-          </div>
-        )}
+        {/* Phase 30: everything waiting on you, then today's board */}
+        <NeedsYouStrip
+          requests={pendingRequests.length}
+          transfers={pendingTransfers.length}
+          late={tonightSummary.late}
+          openSpots={tonightSummary.openSpots}
+          onJump={scrollTo}
+        />
+
+        <TonightBoard
+          venueId={currentVenueId}
+          timeZone={tz}
+          refreshKey={boardRefreshKey}
+          reliabilityMap={reliabilityMap}
+          onOpenBoard={setActiveDiscussionShift}
+          onOpenEvent={openEvent}
+          onTimesheet={(eventId) => setTimesheetEventId(eventId)}
+          onOpenWorker={setProfileWorkerId}
+          onChanged={afterChange}
+          onSummary={setTonightSummary}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          {/* Left: posted shifts */}
+          {/* Left: posted shifts (Phase 30: now below the Today board) */}
           <div className="lg:col-span-2 min-w-0">
             <PostedShiftsBoard
               venueId={currentVenueId}
@@ -529,25 +536,29 @@ export default function VenueManagerDashboard() {
             />
           </div>
 
-          {/* Right: what needs you + activity */}
+          {/* Right: requests / hand-offs (only while something is waiting) + activity */}
           <aside className="space-y-6 min-w-0">
-            <ApprovalQueueCard
-              requests={pendingRequests}
-              reliabilityMap={reliabilityMap}
-              timeZone={tz}
-              actionLoading={actionLoading}
-              onReview={(req) => setReview({ type: 'request', data: req })}
-              onApprove={handleApprove}
-              onDeny={handleDeny}
-            />
-            <TransfersCard
-              transfers={pendingTransfers}
-              timeZone={tz}
-              actionLoading={actionLoading}
-              onReview={(t) => setReview({ type: 'transfer', data: t })}
-              onApprove={handleApproveTransfer}
-              onDeny={handleDenyTransfer}
-            />
+            {pendingRequests.length > 0 && (
+              <ApprovalQueueCard
+                requests={pendingRequests}
+                reliabilityMap={reliabilityMap}
+                timeZone={tz}
+                actionLoading={actionLoading}
+                onReview={(req) => setReview({ type: 'request', data: req })}
+                onApprove={handleApprove}
+                onDeny={handleDeny}
+              />
+            )}
+            {pendingTransfers.length > 0 && (
+              <TransfersCard
+                transfers={pendingTransfers}
+                timeZone={tz}
+                actionLoading={actionLoading}
+                onReview={(t) => setReview({ type: 'transfer', data: t })}
+                onApprove={handleApproveTransfer}
+                onDeny={handleDenyTransfer}
+              />
+            )}
             <ActivityFeed
               venueId={currentVenueId}
               refreshKey={boardRefreshKey}

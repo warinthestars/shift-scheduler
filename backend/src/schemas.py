@@ -1627,3 +1627,103 @@ class SaveAsTemplateRequest(BaseModel):
 # ------------------------------------------------------------------------------
 class DropShiftBody(BaseModel):
     reason: Optional[str] = Field(None, max_length=500)   # optional; managers see it
+
+
+# ------------------------------------------------------------------------------
+# Phase 30: Manager "Tonight" board
+# ------------------------------------------------------------------------------
+class TonightPerson(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    phone: Optional[str] = None
+    request_status: str                          # approved | confirmed | checked_in | completed | no_show
+    clock_state: str                             # upcoming | due | late | in | done | missed | no_show
+    clock_in_time: Optional[datetime] = None     # first clock-in
+    clock_out_time: Optional[datetime] = None    # last clock-out (when done)
+    late_minutes: int = 0                        # late: minutes past start right now; in/done: recorded lateness
+    geo_flag: bool = False                       # clocked in outside the geofence
+    manager_clock: bool = False                  # a manager entered the clock-in
+    info_seen: Optional[bool] = None             # None = nothing to read
+    previous_drop_at: Optional[datetime] = None  # Phase 29.4 re-booked after a drop
+
+
+class TonightPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    capacity: int
+    spots_filled: int
+    open_spots: int
+    pending_requests: int = 0
+    pending_offers: int = 0
+    people: List[TonightPerson] = []
+
+
+class TonightEvent(BaseModel):
+    event_key: str
+    event_id: Optional[UUID] = None
+    title: str
+    start_time: datetime
+    end_time: datetime
+    location_name: Optional[str] = None
+    state: str                                   # upcoming | live | ended
+    clock_in_opens_at: datetime
+    positions: List[TonightPosition] = []
+    booked: int = 0
+    clocked_in: int = 0
+    done: int = 0
+    late: int = 0
+    missed: int = 0
+    no_show: int = 0
+    unread: int = 0
+    open_spots: int = 0
+
+
+class TonightAlert(BaseModel):
+    kind: str                                    # late | missed | open_spot | unread | geo
+    severity: str                                # high | medium | low
+    text: str
+    event_id: Optional[UUID] = None
+    event_key: Optional[str] = None
+    shift_id: Optional[UUID] = None
+    request_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
+
+
+class WeekEvent(BaseModel):
+    event_key: str
+    event_id: Optional[UUID] = None
+    title: str
+    start_time: datetime
+    end_time: datetime
+    status: str = "published"                    # draft | published
+    capacity: int = 0
+    filled: int = 0
+    requested: int = 0
+    open_spots: int = 0
+    unread: int = 0
+
+
+class WeekDay(BaseModel):
+    date: str                                    # YYYY-MM-DD in the venue's time zone
+    label: str                                   # Today | Tomorrow | Wed
+    events: List[WeekEvent] = []
+    capacity: int = 0
+    filled: int = 0
+
+
+class TonightResponse(BaseModel):
+    venue_id: UUID
+    timezone: str
+    now: datetime
+    date: str                                    # today's YYYY-MM-DD (venue time)
+    events: List[TonightEvent] = []
+    alerts: List[TonightAlert] = []
+    counts: dict = {}
+    week: List[WeekDay] = []
+
+
+class NoShowResult(BaseModel):
+    detail: str
+    spot_reopened: bool = False
