@@ -27,6 +27,8 @@ from src.services.booking import (
 )
 
 MAX_EVENTS = 200
+SERIES_DAYS = 120        # Phase 32.3: how far ahead the "more dates in this series" list looks
+SERIES_MAX = 12
 WORKED_STATUSES = ("approved", "confirmed", "checked_in", "completed", "transferred")
 
 
@@ -51,11 +53,15 @@ async def build_listings(
     venue_id: Optional[UUID] = None,
     days: int = 60,
     event_id: Optional[UUID] = None,
+    series_id: Optional[UUID] = None,
+    exclude_event_id: Optional[UUID] = None,
 ) -> List[EventListing]:
     """
     List mode (event_id None): upcoming, not-cancelled events in the next `days` days that have
     at least one open spot OR where the viewer has an active request.
     Single mode (event_id given): that event, whatever its state (used by the details modal).
+    Phase 32.3: in single mode, `series` holds the series' other upcoming dates (list-mode rules);
+    series_id / exclude_event_id narrow list mode to one series.
     """
     now = datetime.now(timezone.utc)
 
@@ -70,6 +76,10 @@ async def build_listings(
         )
         if venue_id is not None:
             q = q.where(ShiftEvent.venue_id == venue_id)
+        if series_id is not None:                                     # Phase 32.3
+            q = q.where(ShiftEvent.series_id == series_id)
+        if exclude_event_id is not None:
+            q = q.where(ShiftEvent.id != exclude_event_id)
         q = q.order_by(ShiftEvent.start_time.asc()).limit(MAX_EVENTS)
     events = (await db.execute(q)).scalars().all()
     if not events:
@@ -275,5 +285,22 @@ async def build_listings(
             availability=my_fit.availability(ev.start_time, ev.end_time, vtz),          # Phase 31
             time_off=my_fit.off(ev.start_time, ev.end_time, vtz),
             department_match=_event_match(open_positions or positions),                 # Phase 32.2
+            series_id=ev.series_id,                                                     # Phase 32.3
         ))
+
+    # Phase 32.3: list view: each card says how many other dates of its series are listed
+    if event_id is None:
+        per_series = defaultdict(int)
+        for row in out:
+            if row.series_id is not None:
+                per_series[row.series_id] += 1
+        for row in out:
+            if row.series_id is not None:
+                row.series_more = per_series[row.series_id] - 1
+
+    # Phase 32.3: the details modal lists the series' other upcoming dates so the worker can request several at once
+    if event_id is not None and out and out[0].series_id is not None:
+        out[0].series = (await build_listings(
+            db, user, series_id=out[0].series_id, exclude_event_id=event_id, days=SERIES_DAYS,
+        ))[:SERIES_MAX]
     return out

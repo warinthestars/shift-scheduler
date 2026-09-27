@@ -45,14 +45,15 @@ export default function WorkerOffers({ offers = [], busyId, onAccept, onDecline 
                 </div>
               )}
             </div>
+            {/* Phase 32.3: Decline left, Accept right, like hand-offs and the manager queues */}
             <div className="flex gap-2">
-              <button type="button" onClick={() => onAccept(o)} disabled={busy}
-                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
-                <Check className="w-4 h-4" /> {busy ? '…' : 'Accept'}
-              </button>
               <button type="button" onClick={() => onDecline(o)} disabled={busy}
                 className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-sm font-semibold inline-flex items-center gap-1.5 disabled:opacity-50">
                 <X className="w-4 h-4" /> Decline
+              </button>
+              <button type="button" onClick={() => onAccept(o)} disabled={busy}
+                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+                <Check className="w-4 h-4" /> {busy ? '…' : 'Accept'}
               </button>
             </div>
           </div>

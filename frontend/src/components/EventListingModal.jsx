@@ -2,14 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Calendar, Clock, MapPin, Phone, Shirt, Info, StickyNote, Navigation, CalendarPlus,
-  Zap, ShieldCheck, AlertTriangle, CheckCircle2, ExternalLink, Briefcase, Lock,
+  Zap, ShieldCheck, AlertTriangle, CheckCircle2, ExternalLink, Briefcase, Lock, Repeat,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { DeptChip } from '../utils/departments';
 import PayLabel from './PayLabel';
 import TipBadge from './TipBadge';
-import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
+import { fmtLongDate, fmtTimeRange, fmtDate } from '../utils/venueTime';
 import {
   hoursText, estPayText, mapsUrl, downloadIcs, STATUS_LABELS, PENDING_STATUSES, whereOf,
 } from '../utils/listingFormat';
@@ -24,6 +24,29 @@ function pickDefault(listing, prev) {
   if (listing.my_request) return listing.my_request.shift_id;
   const open = listing.positions.filter((p) => p.status === 'OPEN' && !(p.missing_certs || []).length);   // Phase 32
   return open.length === 1 ? open[0].shift_id : null;
+}
+
+/**
+ * Phase 32.3: one other date in this event's series, for the position the worker picked (matched by name).
+ * reason = why it can't be picked; warn = pickable but not ticked by default.
+ */
+function seriesRow(ev, roleType) {
+  const role = (roleType || '').trim().toLowerCase();
+  const pos = (ev.positions || []).find((p) => (p.role_type || '').trim().toLowerCase() === role) || null;
+  let reason = null;
+  if (ev.my_request) {
+    reason = PENDING_STATUSES.includes(String(ev.my_request.status).toLowerCase())
+      ? `You already asked for ${ev.my_request.role_type}`
+      : `You're booked as ${ev.my_request.role_type}`;
+  } else if (!pos) reason = `No ${roleType} spot on this date`;
+  else if (pos.status !== 'OPEN') reason = 'Full';
+  else if ((pos.missing_certs || []).length) reason = `You need: ${pos.missing_certs.join(', ')}`;
+  else if (ev.conflict) reason = `Overlaps your shift (${ev.conflict})`;
+  else if (ev.dropped_here) reason = 'You dropped a shift here. Open that date to ask back.';
+  else if (!ev.can_request) reason = "Can't be requested";
+  const pickable = !reason;
+  const warn = !pickable ? null : ev.time_off ? 'During your time off' : ev.availability === 'outside' ? 'Outside your weekly availability' : null;
+  return { pos, reason, pickable, warn, defaultOn: pickable && !warn };
 }
 
 function InfoBlock({ icon: Icon, label, children }) {
@@ -56,6 +79,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null); // { type: 'success' | 'info' | 'error', message }
+  const [seriesPicks, setSeriesPicks] = useState(() => new Set());   // Phase 32.3: event_ids of other dates to request too
 
   const applyListing = (next, resetSelection = false) => {
     setListing(next);
@@ -92,18 +116,50 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
 
-  const sendRequest = async (isSwitch) => {
+  // Phase 32.3: whenever the event or the picked position changes, tick the other dates that are open and fit
+  useEffect(() => {
+    const sel = listing?.positions?.find((p) => p.shift_id === selectedId);
+    if (!sel || !(listing?.series || []).length) {
+      setSeriesPicks(new Set());
+      return;
+    }
+    setSeriesPicks(new Set(listing.series.filter((ev) => seriesRow(ev, sel.role_type).defaultOn).map((ev) => ev.event_id)));
+  }, [listing, selectedId]);
+
+  const sendRequest = async (isSwitch, extraDates = []) => {
     if (!selectedId) return;
     setSubmitting(true);
     setResult(null);
+    const noteText = note.trim() ? note.trim() : null;
     try {
       const res = await api.post(`/listings/${eventId}/request`, {
         shift_id: selectedId,
-        note: note.trim() ? note.trim() : null,
+        note: noteText,
         switch: Boolean(isSwitch),
       });
-      setResult({ type: res.data.instant ? 'success' : 'info', message: res.data.message });
-      if (res.data.listing) applyListing(res.data.listing, true);
+      if (!extraDates.length) {
+        setResult({ type: res.data.instant ? 'success' : 'info', message: res.data.message });
+        if (res.data.listing) applyListing(res.data.listing, true);
+      } else {
+        // Phase 32.3: one request per extra date, each checked by the server on its own
+        let booked = res.data.instant ? 1 : 0;
+        let waiting = res.data.instant ? 0 : 1;
+        const failed = [];
+        for (const d of extraDates) {
+          try {
+            const r = await api.post(`/listings/${d.event_id}/request`, { shift_id: d.shift_id, note: noteText });
+            if (r.data.instant) booked += 1; else waiting += 1;
+          } catch (err) {
+            failed.push(`${d.label}: ${err.response?.data?.detail || 'could not be sent'}`);
+          }
+        }
+        const lines = [];
+        if (booked) lines.push(`Booked ${booked} ${booked === 1 ? 'date' : 'dates'}. They're on your schedule.`);
+        if (waiting) lines.push(`${waiting} ${waiting === 1 ? 'request' : 'requests'} sent. The manager reviews each date.`);
+        if (failed.length) lines.push(`Not sent:\n${failed.join('\n')}`);
+        setResult({ type: failed.length ? 'error' : booked && !waiting ? 'success' : 'info', message: lines.join('\n') });
+        await reload(true);
+      }
       setNote('');
       if (onChanged) onChanged(res.data);
     } catch (err) {
@@ -152,6 +208,17 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
   // Phase 29.4: they dropped a position in this event -> asking back needs a reason and the manager's OK
   const askingBack = !!listing.dropped_here && !isBooked;
   const noteOk = !askingBack || note.trim().length >= ASK_BACK_MIN;
+  // Phase 32.3: other dates of this series, offered only for a fresh request (not a switch or an ask-back)
+  const seriesOn = !!selected && !selectedIsMine && !mine && !askingBack && !listing.cancelled && !listing.started
+    && !listing.conflict && (listing.series || []).length > 0;
+  const seriesRows = seriesOn ? listing.series.map((ev) => ({ ev, row: seriesRow(ev, selected.role_type) })) : [];
+  const pickableIds = seriesRows.filter((x) => x.row.pickable).map((x) => x.ev.event_id);
+  const allPicked = pickableIds.length > 0 && pickableIds.every((id) => seriesPicks.has(id));
+  const togglePick = (id) => setSeriesPicks((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const addToCalendar = () =>
     downloadIcs({
@@ -174,6 +241,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
   // ---- Footer actions --------------------------------------------------------------------
   let primary = null;
   let secondary = null;
+  let danger = null;          // Phase 32.3: undo-type action (Withdraw). Always far left, never where the primary button was.
   let blockedReason = null;
   if (listing.cancelled) {
     blockedReason = `This event was cancelled${listing.cancel_reason ? `: ${listing.cancel_reason}` : '.'}`;
@@ -194,8 +262,8 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
     blockedReason = 'This shift has already started.';
   } else {
     if (isWaiting) {
-      secondary = (
-        <button type="button" onClick={withdraw} disabled={submitting} className="px-4 py-2 rounded-xl border border-rose-500/50 text-rose-300 hover:bg-rose-500/10 text-xs font-semibold disabled:opacity-50">
+      danger = (
+        <button type="button" onClick={withdraw} disabled={submitting} className="px-4 py-2 rounded-xl border border-rose-500/50 text-rose-300 hover:bg-rose-500/10 text-xs font-semibold disabled:opacity-50 mr-auto">
           Withdraw request
         </button>
       );
@@ -209,31 +277,39 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
         </button>
       );
     } else if (!selectedIsMine) {
+      const extraDates = seriesOn ? seriesRows.filter((x) => x.row.pickable && seriesPicks.has(x.ev.event_id)) : [];   // Phase 32.3
       const label = isWaiting
         ? `Switch to ${selected.role_type}`
         : askingBack
         ? 'Ask to come back'
+        : extraDates.length
+        ? `Request ${extraDates.length + 1} dates`
         : selected.booking === 'instant'
         ? 'Book instantly'
         : 'Send request';
       primary = (
         <button
           type="button"
-          onClick={() => sendRequest(isWaiting)}
+          onClick={() => sendRequest(isWaiting, extraDates.map((x) => ({
+            event_id: x.ev.event_id, shift_id: x.row.pos.shift_id, label: fmtDate(x.ev.start_time, x.ev.venue?.timezone || tz),
+          })))}
           disabled={submitting || !listing.can_request || selected.status !== 'OPEN' || !noteOk}
           title={noteOk ? undefined : 'Tell the manager why you can make it now'}
           className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
         >
-          {selected.booking === 'instant' && <Zap className="w-4 h-4" />}
+          {selected.booking === 'instant' && !extraDates.length && <Zap className="w-4 h-4" />}
           {submitting ? 'Sending…' : label}
         </button>
       );
     }
   }
 
+  // Phase 32.3: Withdraw sits far left; Close takes the right-hand spot when there's no primary action,
+  // so a second click right after "Send request" closes the popup instead of withdrawing.
   const footer = (
     <>
-      <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 mr-auto">
+      {danger}
+      <button type="button" onClick={onClose} className={`px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 ${danger ? '' : 'mr-auto'}`}>
         Close
       </button>
       {secondary}
@@ -267,7 +343,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
           }`}
         >
           {result.type === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-          <span>{result.message}</span>
+          <span className="whitespace-pre-line">{result.message}</span>
         </div>
       )}
 
@@ -479,6 +555,55 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
 
           {listing.positions.some((p) => p.est_pay_min !== null && p.est_pay_min !== undefined) && (
             <p className="text-[10px] text-slate-500">Estimates are hours × hourly rate, before tips and taxes.</p>
+          )}
+
+          {/* Phase 32.3: request the same position on other dates of this series */}
+          {seriesOn && (
+            <div className="p-3 rounded-xl border border-slate-800 bg-slate-950/60">
+              <div className="flex items-baseline justify-between gap-2">
+                <h5 className="text-xs font-bold text-white inline-flex items-center gap-1.5">
+                  <Repeat className="w-3.5 h-3.5 text-emerald-400" /> Also request {selected.role_type} on other dates
+                </h5>
+                {pickableIds.length > 1 && (
+                  <button type="button" disabled={submitting}
+                    onClick={() => setSeriesPicks(allPicked ? new Set() : new Set(pickableIds))}
+                    className="text-[11px] font-semibold text-emerald-300 hover:text-emerald-200 flex-shrink-0">
+                    {allPicked ? 'Clear' : 'Pick all'}
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                This event repeats. Each date is its own request: it's checked on its own, the manager decides each one,
+                and you can withdraw any of them later.
+              </p>
+              <div className="mt-2 space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                {seriesRows.map(({ ev, row }) => {
+                  const on = row.pickable && seriesPicks.has(ev.event_id);
+                  const evTz = ev.venue?.timezone || tz;
+                  return (
+                    <label key={ev.event_id}
+                      className={`flex items-center gap-2.5 p-2 rounded-lg border ${
+                        on ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-slate-800'
+                      } ${row.pickable ? 'cursor-pointer hover:border-slate-600' : 'opacity-60 cursor-not-allowed'}`}>
+                      <input type="checkbox" className="w-4 h-4 accent-emerald-500 flex-shrink-0" checked={on}
+                        disabled={!row.pickable || submitting} onChange={() => togglePick(ev.event_id)} />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-xs font-semibold text-white">
+                          {fmtDate(ev.start_time, evTz)} · {fmtTimeRange(ev.start_time, ev.end_time, evTz)}
+                          {ev.title !== listing.title && <span className="font-normal text-slate-400"> · {ev.title}</span>}
+                        </span>
+                        <span className={`block text-[11px] ${row.reason ? 'text-slate-500' : row.warn ? 'text-amber-300' : 'text-slate-400'}`}>
+                          {row.reason || row.warn || (row.pos.booking === 'instant' ? 'Instant book' : 'Needs approval')}
+                        </span>
+                      </span>
+                      {row.pos && row.pos.hourly_rate !== null && row.pos.hourly_rate !== undefined && (
+                        <PayLabel rate={row.pos.hourly_rate} rateMax={row.pos.hourly_rate_max} className="text-xs font-bold text-emerald-400 flex-shrink-0" />
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
           )}
 
           {isWaiting && selected && !selectedIsMine && !listing.conflict && (

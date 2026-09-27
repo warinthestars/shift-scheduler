@@ -17,6 +17,7 @@ import RatingBadge from '../components/RatingBadge';
 import { Avatar } from '../components/WorkerProfilePanel';
 import MyShiftCard from '../components/worker/MyShiftCard';
 import DropShiftDialog from '../components/worker/DropShiftDialog';
+import ConfirmDialog from '../components/ConfirmDialog';
 import HandoffsPanel from '../components/worker/HandoffsPanel';
 import ProfileNudge from '../components/worker/ProfileNudge';
 import { PENDING_INVITE_KEY } from './JoinPage';
@@ -103,6 +104,7 @@ export default function WorkerDashboard() {
   const [transferShiftId, setTransferShiftId] = useState(null);
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [shiftToDrop, setShiftToDrop] = useState(null);
+  const [clockOutAsk, setClockOutAsk] = useState(null);   // Phase 32.3: { shiftId, item, title } waiting for "Clock out?" confirm
   const [offers, setOffers] = useState([]);
   const [offerBusy, setOfferBusy] = useState(null);
   const navigate = useNavigate();
@@ -392,7 +394,7 @@ export default function WorkerDashboard() {
         busy={clockActionLoading === shiftId ? 'clock' : withdrawingId === req.id ? 'withdraw' : null}
         onDetails={(calItem || req.shift?.event_id) ? () => openDetailsForRequest(req) : null}
         onClockIn={() => handleClockIn(shiftId, calItem)}
-        onClockOut={() => handleClockOut(shiftId, calItem)}
+        onClockOut={() => setClockOutAsk({ shiftId, item: calItem, title: req.shift?.title || calItem?.title || 'this shift' })}
         onBoard={() => setActiveDiscussionShift(req.shift)}
         onHandOff={() => {
           setTransferShiftId(shiftId);
@@ -743,6 +745,18 @@ export default function WorkerDashboard() {
           shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.venue?.name || ''})`}
           currentUserRole={user?.role}
           onClose={() => setActiveDiscussionShift(null)}
+        />
+      )}
+
+      {/* Phase 32.3: Clock out replaces Clock in on the same button, so it asks first (a quick second tap would undo the clock-in) */}
+      {clockOutAsk && (
+        <ConfirmDialog
+          title="Clock out now?"
+          message={`You'll be clocked out of ${clockOutAsk.title} right now. If you clocked in less than a minute ago, this undoes the clock-in instead.`}
+          confirmLabel="Clock out"
+          danger
+          onConfirm={() => handleClockOut(clockOutAsk.shiftId, clockOutAsk.item)}
+          onClose={() => setClockOutAsk(null)}
         />
       )}
 

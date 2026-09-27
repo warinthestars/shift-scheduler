@@ -505,6 +505,14 @@ async def duplicate_event(
             publish=not as_draft,
         ), allow_archived_location=True)
         created.append(ev)
+
+    # Phase 32.3: the original and every copy belong to one series (the original's id), so workers
+    # can request several dates at once. Copying a copy keeps the same series.
+    series_id = event.series_id or event.id
+    event.series_id = series_id
+    for ev in created:
+        ev.series_id = series_id
+    await db.commit()
     return created
 
 

@@ -262,6 +262,7 @@ class ShiftEvent(Base):
     cancel_reason = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, default="published")      # Phase 29.3: draft | published
     published_at = Column(DateTime(timezone=True), nullable=True)          # Phase 29.3
+    series_id = Column(UUID(as_uuid=True), nullable=True, index=True)      # Phase 32.3: shared by an event and its "Copy to dates" copies
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

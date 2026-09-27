@@ -171,6 +171,7 @@ CREATE TABLE shift_events (
     cancel_reason TEXT,
     status VARCHAR(20) NOT NULL DEFAULT 'published',          -- Phase 29.3: draft | published
     published_at TIMESTAMPTZ,                                 -- Phase 29.3: first time it went live
+    series_id UUID,                                           -- Phase 32.3: events made by one "Copy to dates" share this (the original's id)
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_event_time CHECK (end_time > start_time)
@@ -178,6 +179,7 @@ CREATE TABLE shift_events (
 
 CREATE INDEX idx_shift_events_venue ON shift_events(venue_id);
 CREATE INDEX idx_shift_events_start ON shift_events(start_time);
+CREATE INDEX idx_shift_events_series ON shift_events(series_id);
 
 -- ------------------------------------------------------------------------------
 -- 5. Shifts Table

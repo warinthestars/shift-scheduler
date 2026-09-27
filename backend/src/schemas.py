@@ -968,6 +968,9 @@ class EventListing(BaseModel):
     availability: str = "not_set"                     # Phase 31: fits | outside | not_set (the viewer's weekly availability)
     time_off: Optional[str] = None                    # Phase 32.1: 'blocked' = overlaps one of the viewer's time-off blocks
     department_match: str = "not_set"                 # Phase 32.2: match if any open position fits the viewer's departments
+    series_id: Optional[UUID] = None                  # Phase 32.3: set when this event was copied to other dates
+    series: List["EventListing"] = []                 # Phase 32.3: single-event view only: the series' other upcoming dates
+    series_more: int = 0                              # Phase 32.3: list view: how many other dates of this series are listed too
 
 
 class PositionRequestBody(BaseModel):
@@ -1898,4 +1901,5 @@ class MyProfileUpdate(BaseModel):
 
 
 WorkerProfile.model_rebuild()
+EventListing.model_rebuild()   # Phase 32.3: series is a list of EventListing
 MyProfile.model_rebuild()

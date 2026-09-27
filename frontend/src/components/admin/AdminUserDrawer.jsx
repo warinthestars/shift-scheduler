@@ -5,6 +5,7 @@ import {
 import api from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import ResetPasswordModal from '../ResetPasswordModal';
+import ConfirmDialog from '../ConfirmDialog';
 import ReliabilityBadge from '../ReliabilityBadge';
 import { Avatar } from '../WorkerProfilePanel';
 import {
@@ -63,7 +64,8 @@ export default function AdminUserDrawer({ userId, venues = [], onClose, onChange
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
-  const [modal, setModal] = useState(null); // 'reset' | 'delete'
+  const [modal, setModal] = useState(null); // 'reset' | 'delete' | 'deactivate'
+  const [statusBusy, setStatusBusy] = useState(false);   // Phase 32.3
 
   useEffect(() => {
     let active = true;
@@ -123,14 +125,18 @@ export default function AdminUserDrawer({ userId, venues = [], onClose, onChange
     }
   };
 
+  // Phase 32.3: Reactivate and Deactivate share one button, so Deactivate asks first (see the 'deactivate' dialog)
   const toggleActive = async () => {
     setFormError('');
+    setStatusBusy(true);
     try {
       await api.patch(`/admin/users/${userId}`, { is_active: !u.is_active });
       setReload((n) => n + 1);
       onChanged(`${personName(u)} is now ${u.is_active ? 'deactivated and can no longer sign in' : 'active again'}.`);
     } catch (err) {
       setFormError(err.response?.data?.detail || 'Could not change the status.');
+    } finally {
+      setStatusBusy(false);
     }
   };
 
@@ -339,7 +345,8 @@ export default function AdminUserDrawer({ userId, venues = [], onClose, onChange
                   <span className="text-[11px] text-slate-500 self-center">Signs in with Firebase only, so there is no ShiftBoard password to reset.</span>
                 )}
                 {!u.always_admin && (
-                  <button type="button" onClick={toggleActive} className={u.is_active ? btnDanger : btnGhost}>
+                  <button type="button" onClick={u.is_active ? () => setModal('deactivate') : toggleActive} disabled={statusBusy}
+                    className={`${u.is_active ? btnDanger : btnGhost} disabled:opacity-50`}>
                     <Power className="w-3 h-3" /> {u.is_active ? 'Deactivate' : 'Reactivate'}
                   </button>
                 )}
@@ -365,6 +372,17 @@ export default function AdminUserDrawer({ userId, venues = [], onClose, onChange
           }}
         />
       )}
+      {modal === 'deactivate' && u && (
+        <ConfirmDialog
+          title={`Deactivate ${personName(u)}?`}
+          message="They'll be signed out and can't sign in until you reactivate them. Their history stays."
+          confirmLabel="Deactivate"
+          danger
+          onConfirm={toggleActive}
+          onClose={() => setModal(null)}
+        />
+      )}
+
       {modal === 'delete' && u && (
         <TypeToConfirm
           title={`Delete ${personName(u)}?`}

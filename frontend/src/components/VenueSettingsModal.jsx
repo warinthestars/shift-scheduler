@@ -60,6 +60,7 @@ function toDraft(p) {
 function PositionCard({ venueId, position, onChanged, onError }) {
   const [draft, setDraft] = useState(toDraft(position));
   const [saving, setSaving] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);   // Phase 32.3: Remove shares a spot with Bring back, so it asks first
   useEffect(() => setDraft(toDraft(position)), [position]);
 
   const original = toDraft(position);
@@ -93,6 +94,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
 
   const toggleActive = async () => {
     setSaving(true);
+    setConfirmRemove(false);
     try {
       if (position.is_active) await api.delete(`/venues/${venueId}/positions/${position.id}`);
       else await api.patch(`/venues/${venueId}/positions/${position.id}`, { is_active: true });
@@ -115,14 +117,27 @@ function PositionCard({ venueId, position, onChanged, onError }) {
         </select>
         <button
           type="button"
-          onClick={toggleActive}
-          disabled={saving}
+          onClick={position.is_active ? () => setConfirmRemove(true) : toggleActive}
+          disabled={saving || confirmRemove}
           title={position.is_active ? 'Remove from the Post a Shift list' : 'Bring back'}
           className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10"
         >
           {position.is_active ? <Trash2 className="w-4 h-4" /> : <RotateCcw className="w-4 h-4" />}
         </button>
       </div>
+      {confirmRemove && (
+        <div className="p-2.5 rounded-lg border border-rose-500/40 bg-rose-500/10 flex flex-wrap items-center gap-2">
+          <p className="flex-1 min-w-[12rem] text-xs text-rose-100">
+            Remove <b>{position.name}</b> from the Post a Shift list? Shifts already posted keep it, and you can bring it back later.
+          </p>
+          <button type="button" onClick={() => setConfirmRemove(false)} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">
+            Keep it
+          </button>
+          <button type="button" onClick={toggleActive} disabled={saving} className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white disabled:opacity-50">
+            Remove
+          </button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative w-24">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>

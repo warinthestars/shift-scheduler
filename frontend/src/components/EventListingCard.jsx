@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star, Lock, CalendarOff } from 'lucide-react';
+import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star, Lock, CalendarOff, Repeat } from 'lucide-react';
 import PayLabel from './PayLabel';
 import { fmtTimeRange } from '../utils/venueTime';
 import {
@@ -82,6 +82,12 @@ export default function EventListingCard({ listing, onOpen }) {
             {listing.on_team && (
               <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold whitespace-nowrap">
                 <Star className="w-2.5 h-2.5" /> Your venue
+              </span>
+            )}
+            {listing.series_more > 0 && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold whitespace-nowrap"
+                title="This event repeats. Open it to request several dates at once.">
+                <Repeat className="w-2.5 h-2.5" /> +{listing.series_more} {listing.series_more === 1 ? 'date' : 'dates'}
               </span>
             )}
           </p>

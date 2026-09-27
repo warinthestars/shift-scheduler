@@ -268,14 +268,15 @@ export default function EventRosterModal({
                             <div className="flex items-center gap-2">
                               <RatingBadge rating={p.aggregate_rating} count={p.rating_count} />
                               <ReliabilityBadge data={reliabilityMap[p.worker_id]} />
+                              {/* Phase 32.3: Deny left, Approve right, like the approval queue and Review */}
+                              <button type="button" onClick={() => onDeny && onDeny(p.request_id)} disabled={approving || denying}
+                                className="px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold border border-rose-600/30 inline-flex items-center gap-1 disabled:opacity-40">
+                                <X className="w-3 h-3" /> {denying ? '…' : 'Deny'}
+                              </button>
                               <button type="button" onClick={() => onApprove && onApprove(p.request_id)} disabled={isFull || approving || denying}
                                 title={isFull ? 'Position is full' : 'Approve'}
                                 className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                                 <Check className="w-3 h-3" /> {approving ? '…' : 'Approve'}
-                              </button>
-                              <button type="button" onClick={() => onDeny && onDeny(p.request_id)} disabled={approving || denying}
-                                className="px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold border border-rose-600/30 inline-flex items-center gap-1 disabled:opacity-40">
-                                <X className="w-3 h-3" /> {denying ? '…' : 'Deny'}
                               </button>
                             </div>
                           </div>
