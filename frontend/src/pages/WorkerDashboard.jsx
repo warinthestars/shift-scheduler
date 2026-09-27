@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
@@ -36,6 +36,40 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
  *   and a ⋯ menu for the rest (details, directions, calendar, chat, hand off, drop).
  *   Tab ids stay 'schedule' | 'find' | 'calendar' | 'transfers' so notification links keep working.
  */
+// Phase 32.2: an event counts as "other departments" when nothing open in it fits the viewer
+// (and they have no request in it).
+function isOtherDept(l) {
+  return l.department_match === 'outside' && !l.my_request;
+}
+
+function groupByDay(list) {
+  const groups = [];
+  list.forEach((l) => {
+    const label = dayGroupLabel(l.start_time, l.venue?.timezone);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(l);
+    else groups.push({ label, items: [l] });
+  });
+  return groups;
+}
+
+function ListingDayGroups({ groups, onOpen }) {
+  return groups.map((g) => (
+    <section key={g.label}>
+      <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
+        <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+        {g.label}
+        <span className="text-slate-600 font-semibold normal-case tracking-normal">· {plural(g.items.length, 'event')}</span>
+      </h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
+        {g.items.map((l) => (
+          <EventListingCard key={l.event_id} listing={l} onOpen={onOpen} />
+        ))}
+      </div>
+    </section>
+  ));
+}
+
 export default function WorkerDashboard() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -62,6 +96,7 @@ export default function WorkerDashboard() {
   const [instantOnly, setInstantOnly] = useState(false);
   const [hideRequested, setHideRequested] = useState(false);
   const [fitsOnly, setFitsOnly] = useState(false);            // Phase 31: fits my availability, not on time off
+  const [mineOnly, setMineOnly] = useState(false);            // Phase 32.2: hide other departments
 
   const [openListing, setOpenListing] = useState(null); // { eventId, initial }
   const [transferModalOpen, setTransferModalOpen] = useState(false);
@@ -292,20 +327,14 @@ export default function WorkerDashboard() {
       if (instantOnly && !l.any_instant) return false;
       if (hideRequested && l.my_request) return false;
       if (fitsOnly && (l.availability === 'outside' || l.time_off === 'blocked')) return false;   // Phase 31 / 32.1
+      if (mineOnly && isOtherDept(l)) return false;                                              // Phase 32.2
       return true;
     });
-  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested, fitsOnly]);
-  const listingGroups = useMemo(() => {
-    const groups = [];
-    filteredListings.forEach((l) => {
-      const label = dayGroupLabel(l.start_time, l.venue?.timezone);
-      const last = groups[groups.length - 1];
-      if (last && last.label === label) last.items.push(l);
-      else groups.push({ label, items: [l] });
-    });
-    return groups;
-  }, [filteredListings]);
-  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested || fitsOnly;
+  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested, fitsOnly, mineOnly]);
+  // Phase 32.2: shifts in my departments first; everything else under "Other departments"
+  const listingGroups = useMemo(() => groupByDay(filteredListings.filter((l) => !isOtherDept(l))), [filteredListings]);
+  const otherGroups = useMemo(() => groupByDay(filteredListings.filter(isOtherDept)), [filteredListings]);
+  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested || fitsOnly || mineOnly;
   const clearFilters = () => {
     setSearch('');
     setWhenFilter('all');
@@ -314,6 +343,7 @@ export default function WorkerDashboard() {
     setInstantOnly(false);
     setHideRequested(false);
     setFitsOnly(false);
+    setMineOnly(false);
   };
 
   // My shifts: coming up / dropped (can still ask back) / history
@@ -592,6 +622,12 @@ export default function WorkerDashboard() {
                     fitsOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
                   <CalendarDays className="w-3.5 h-3.5" /> Fits my availability
                 </button>
+                <button type="button" onClick={() => setMineOnly((v) => !v)}
+                  title="Hide shifts outside the departments you work"
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1 transition ${
+                    mineOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                  <Briefcase className="w-3.5 h-3.5" /> Only my departments
+                </button>
                 {filtersActive && (
                   <button type="button" onClick={clearFilters} className="text-xs text-slate-400 underline hover:text-white ml-auto">Clear filters</button>
                 )}
@@ -610,20 +646,25 @@ export default function WorkerDashboard() {
               </div>
             ) : (
               <div className="mt-6 space-y-8">
-                {listingGroups.map((g) => (
-                  <section key={g.label}>
-                    <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
-                      <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                      {g.label}
-                      <span className="text-slate-600 font-semibold normal-case tracking-normal">· {plural(g.items.length, 'event')}</span>
-                    </h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
-                      {g.items.map((l) => (
-                        <EventListingCard key={l.event_id} listing={l} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
-                      ))}
+                {listingGroups.length === 0 && otherGroups.length > 0 && (
+                  <p className="text-xs text-slate-400 bg-slate-900/40 border border-slate-800 rounded-2xl p-4 text-center">
+                    Nothing open in your departments right now.{' '}
+                    <Link to="/profile?tab=about" className="text-emerald-300 hover:underline font-semibold">Check your departments</Link>
+                  </p>
+                )}
+                <ListingDayGroups groups={listingGroups} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
+                {otherGroups.length > 0 && (
+                  <div className="space-y-6 pt-2">
+                    <div className="border-t border-slate-800 pt-6">
+                      <h2 className="text-sm font-bold text-slate-200">Other departments</h2>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        These aren't in the departments you work, so a manager has to approve them.{' '}
+                        <Link to="/profile?tab=about" className="text-emerald-300 hover:underline">Change your departments</Link>
+                      </p>
                     </div>
-                  </section>
-                ))}
+                    <ListingDayGroups groups={otherGroups} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
+                  </div>
+                )}
               </div>
             )}
           </div>

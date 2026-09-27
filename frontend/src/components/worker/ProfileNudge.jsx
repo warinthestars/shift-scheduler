@@ -8,6 +8,7 @@ const TEXT = {
   photo: 'photo',
   emergency_contact: 'emergency contact',
   availability: 'weekly availability',
+  departments: 'departments',             // Phase 32.2
 };
 
 /**

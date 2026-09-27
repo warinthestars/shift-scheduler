@@ -63,6 +63,7 @@ class User(Base):
     discoverable = Column(String(20), nullable=False, default="private")   # Phase 29.1: private | venues | everyone
     emergency_contact_name = Column(String(100), nullable=True)            # Phase 32
     emergency_contact_phone = Column(String(30), nullable=True)            # Phase 32
+    departments = Column(ARRAY(String), nullable=False, default=list)     # Phase 32.2: departments they work
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -208,6 +209,7 @@ class VenuePosition(Base):
     sort_order = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, nullable=False, default=True)
     required_certs = Column(ARRAY(String), nullable=False, default=list)   # Phase 32: cert type keys
+    department = Column(String(20), nullable=False, default="general")    # Phase 32.2: services/departments.py
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -381,6 +383,7 @@ class ShiftRequest(Base):
     status_reason = Column(Text, nullable=True)
     previous_drop_at = Column(DateTime(timezone=True), nullable=True)   # Phase 29.4: rebooked / asking back after a drop
     rebook_reason = Column(Text, nullable=True)                         # Phase 29.4
+    outside_department = Column(Boolean, nullable=False, default=False)  # Phase 32.2: outside their departments (needs a manager)
     pay_rate = Column(Numeric(10, 2), nullable=True)
     info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)

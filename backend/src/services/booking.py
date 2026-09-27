@@ -30,6 +30,7 @@ from src.services import notify_events
 from src.services import activity
 from src.services.team import is_blocked
 from src.services.fit import load_fit, load_requirements, required_for, tz_of
+from src.services.departments import load_dept_context   # Phase 32.2
 
 logger = logging.getLogger("shiftboard.booking")
 
@@ -225,6 +226,10 @@ async def request_position(
         status_val = (decision.value if hasattr(decision, "value") else str(decision)).lower()
         if prior_drop is not None:                     # Phase 29.4: never instant after a drop
             status_val, source = "pending", None
+        # Phase 32.2: outside their departments -> always waits for a manager, and is flagged
+        outside = (await load_dept_context(db, [worker.id], [shift.venue_id])).match(worker.id, shift) == "outside"
+        if outside:
+            status_val, source = "pending", None
         now = datetime.now(timezone.utc)
 
         if replaced is not None:
@@ -252,6 +257,7 @@ async def request_position(
             req.notes = _clean_note(note)
             req.previous_drop_at = prior_drop
             req.rebook_reason = clean_note if prior_drop is not None else None
+            req.outside_department = outside
             req.created_at = now
         else:
             req = ShiftRequest(
@@ -263,6 +269,7 @@ async def request_position(
                 notes=_clean_note(note),
                 previous_drop_at=prior_drop,                                    # Phase 29.4
                 rebook_reason=clean_note if prior_drop is not None else None,
+                outside_department=outside,                                      # Phase 32.2
             )
             db.add(req)
 
@@ -280,8 +287,11 @@ async def request_position(
     # Phase 28: tell the venue's managers a request is waiting (runs after the commit; never raises)
     if status_val != "approved":
         await notify_events.request_pending(req_id)
+    extra = f"asking back after dropping · “{clean_note}”" if prior_drop is not None else ""
+    if outside:                                                                             # Phase 32.2
+        extra = f"{extra} · outside their departments" if extra else "outside their departments"
     await activity.for_request("instant_booked" if status_val == "approved" else "request_created", req_id, worker.id,
-                               f"asking back after dropping · “{clean_note}”" if prior_drop is not None else "")   # Phase 29.1 / 29.4
+                               extra)   # Phase 29.1 / 29.4 / 32.2
     return req_id
 
 

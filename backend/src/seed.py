@@ -208,6 +208,7 @@ async def seed_initial_data(db: AsyncSession):
                 avatar_url="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
                 bio="Experienced high-volume banquet bartender and mixologist.",
                 skills=["Bartender", "Barback"],
+                departments=["bar"],                     # Phase 32.2
                 aggregate_rating=4.85,
                 rating_count=12,
                 total_shifts=12,
@@ -231,6 +232,7 @@ async def seed_initial_data(db: AsyncSession):
                 avatar_url="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
                 bio="Senior fine dining server and team lead with sommelier background.",
                 skills=["Server", "Host"],
+                departments=["foh"],                     # Phase 32.2
                 aggregate_rating=4.95,
                 rating_count=24,
                 total_shifts=24,
@@ -254,6 +256,7 @@ async def seed_initial_data(db: AsyncSession):
                 avatar_url="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
                 bio="Experienced craft bartender and banquet captain with 6+ years in hospitality.",
                 skills=["Bartender", "Server", "Barback"],
+                departments=["bar", "foh"],              # Phase 32.2
                 aggregate_rating=4.85,
                 rating_count=16,
                 total_shifts=16,

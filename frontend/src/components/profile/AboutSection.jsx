@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Camera, Trash2, Save, Phone, HeartPulse, X, Plus } from 'lucide-react';
+import { Camera, Trash2, Save, Phone, HeartPulse, X, Plus, Check } from 'lucide-react';
+import { WORKER_DEPARTMENTS } from '../../utils/departments';
 import api from '../../api/client';
 import { Avatar } from '../WorkerProfilePanel';
 import { resizeImage, uploadFile } from '../../utils/files';
@@ -27,6 +28,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
       phone: profile.phone || '',
       bio: profile.bio || '',
       skills: profile.skills || [],
+      departments: profile.departments || [],        // Phase 32.2
       emergency_contact_name: profile.emergency_contact_name || '',
       emergency_contact_phone: profile.emergency_contact_phone || '',
     });
@@ -131,7 +133,34 @@ export default function AboutSection({ profile, onSaved, onError }) {
         </label>
         {isWorker && (
           <div>
-            <p className={labelCls}>Positions I work</p>
+            <p className={labelCls}>Departments I work <span className="text-rose-300">(pick at least one)</span></p>
+            <p className="text-[11px] text-slate-500">
+              Shifts in these departments show up first and book as usual. Anything else needs a manager's OK.
+              A position a manager gives you on their team also counts, at that venue.
+            </p>
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {WORKER_DEPARTMENTS.map((d) => {
+                const on = form.departments.includes(d.key);
+                return (
+                  <button key={d.key} type="button" aria-pressed={on}
+                    onClick={() => set('departments', on ? form.departments.filter((k) => k !== d.key) : [...form.departments, d.key])}
+                    className={`p-2.5 rounded-xl border text-left transition ${on ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-slate-700 bg-slate-950 hover:border-slate-500'}`}>
+                    <span className="flex items-center gap-2">
+                      <span className={`w-4 h-4 rounded border flex items-center justify-center ${on ? 'bg-emerald-500 border-emerald-500' : 'border-slate-600'}`}>
+                        {on && <Check className="w-3 h-3 text-slate-950" />}
+                      </span>
+                      <span className="text-sm font-semibold text-white">{d.label}</span>
+                    </span>
+                    <span className="block text-[11px] text-slate-400 mt-0.5 ml-6">{d.examples}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {isWorker && (
+          <div>
+            <p className={labelCls}>Specific roles <span className="text-slate-500 font-normal">(optional, shown to managers)</span></p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {form.skills.map((s) => (
                 <span key={s} className="px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-xs font-semibold inline-flex items-center gap-1">

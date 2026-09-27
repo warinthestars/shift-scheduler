@@ -123,6 +123,8 @@ async def _request_pending(db: AsyncSession, request_id) -> None:
     if req.previous_drop_at is not None:                      # Phase 29.4: asking back after a drop
         title = f"{person(worker)} dropped this earlier and is asking back · {shift.role_type}"
         body += "\nThey dropped this event earlier. It needs your approval."
+    if req.outside_department:                                # Phase 32.2
+        body += "\nThis is outside the departments they work, so it needs your approval."
     if req.notes:
         body += f"\n“{req.notes}”"
     await notify_in(

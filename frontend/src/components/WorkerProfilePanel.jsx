@@ -5,6 +5,7 @@ import ModalShell from './ModalShell';
 import ConfirmDialog from './ConfirmDialog';
 import { availabilitySummary, fmtDay } from '../utils/availability';
 import { openProtectedFile } from '../utils/files';
+import { DeptChip } from '../utils/departments';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
@@ -170,8 +171,14 @@ export default function WorkerProfilePanel({ venueId, workerId, timeZone, compac
       )}
 
       {/* Phase 32: their own profile */}
-      {(data.bio || data.skills?.length > 0) && (
+      {(data.bio || data.skills?.length > 0 || data.departments?.length > 0) && (
         <div className="text-xs text-slate-300 space-y-1">
+          {data.departments?.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-slate-400 mr-1">Departments:</span>
+              {data.departments.map((k) => <DeptChip key={k} dept={k} />)}
+            </div>
+          )}
           {data.bio && <p className="whitespace-pre-line">{data.bio}</p>}
           {data.skills?.length > 0 && <p className="text-slate-400">Works as: <span className="text-slate-200">{data.skills.join(', ')}</span></p>}
         </div>

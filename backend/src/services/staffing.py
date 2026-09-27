@@ -33,6 +33,7 @@ from src.services.team import get_venue_team, is_blocked, EXCLUDED_STATUSES
 from src.services.reliability import compute_reliability
 from src.services.locations import load_locations
 from src.services.fit import load_fit, load_requirements, required_for, tz_of, unverified_certs   # Phase 31 + 32
+from src.services.departments import load_dept_context   # Phase 32.2
 from src.auth import normalize_role
 
 logger = logging.getLogger("shiftboard.staffing")
@@ -511,6 +512,7 @@ async def list_candidates(
     rel = await compute_reliability(db, ids)
     role_l = (shift.role_type or "").lower()
     fits = await load_fit(db, ids)                                                   # Phase 31 + 32
+    depts = await load_dept_context(db, ids, [venue_id])                             # Phase 32.2
     required = required_for(await load_requirements(db, [venue_id]), shift)
     venue_obj = await db.scalar(select(Venue).where(Venue.id == venue_id))
     tz = tz_of(venue_obj.timezone if venue_obj is not None else None)
@@ -560,11 +562,12 @@ async def list_candidates(
             availability=fits[wid].availability(shift.start_time, shift.end_time, tz),
             time_off="blocked" if block is not None else None,
             time_off_reason=block.reason if block is not None else None,
+            department_match=depts.match(wid, shift),
             missing_certs=fits[wid].missing(required, shift.start_time, shift.end_time, tz),
             unverified_certs=unverified_certs(required, fits[wid].certs),
         ))
     out.sort(key=lambda c: (
-        not c.requested_this, not c.available, not c.position_match, not c.on_team,
+        not c.requested_this, not c.available, not c.position_match, c.department_match == "outside", not c.on_team,
         -c.venue_shifts, (c.first_name or "").lower(), (c.last_name or "").lower(),
     ))
     return out

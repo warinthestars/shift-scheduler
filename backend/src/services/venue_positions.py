@@ -6,6 +6,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import VenuePosition
+from src.services.departments import guess_department   # Phase 32.2
 
 # (name, default_rate, tips_eligible, tip_pool)
 DEFAULT_POSITIONS = [
@@ -36,6 +37,7 @@ async def ensure_default_positions(db: AsyncSession, venue_id) -> None:
         db.add(VenuePosition(
             venue_id=venue_id, name=name, default_rate=rate,
             tips_eligible=tips, tip_pool=(tips and pool), sort_order=idx, is_active=True,
+            department=guess_department(name),
         ))
 
 

@@ -33,7 +33,17 @@ from src.services.shift_views import to_shift_responses
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 from src.services.clock import auto_close_open_entries, late_minutes as clock_late_minutes
 from src.services.locations import load_locations
+from src.services.departments import DEPARTMENTS, guess_department   # Phase 32.2
 from src.services.fit import CERT_TYPES, load_fit, load_requirements, required_for, tz_of, unverified_certs   # Phase 31 + 32
+
+
+def _clean_department(value: Optional[str], name: str) -> str:
+    """Phase 32.2: a known department key; None/blank = guess from the position name."""
+    if value is None or not str(value).strip():
+        return guess_department(name)
+    if value not in DEPARTMENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown department: {value}.")
+    return value
 
 
 def _clean_certs(keys) -> List[str]:
@@ -293,6 +303,7 @@ async def create_venue_position(
     if pos_in.default_rate_max is not None and pos_in.default_rate_max < pos_in.default_rate:
         raise HTTPException(status_code=400, detail="The top of the pay range can't be lower than the bottom.")
     rate_max = pos_in.default_rate_max if (pos_in.default_rate_max and pos_in.default_rate_max > pos_in.default_rate) else None
+    department = _clean_department(pos_in.department, name)                   # Phase 32.2 (400 on unknown)
 
     existing = await db.scalar(
         select(VenuePosition).where(
@@ -312,6 +323,7 @@ async def create_venue_position(
             existing.tips_eligible = bool(pos_in.tips_eligible)
             existing.tip_pool = bool(pos_in.tips_eligible and pos_in.tip_pool)
             existing.required_certs = _clean_certs(pos_in.required_certs)      # Phase 32
+            existing.department = department                                    # Phase 32.2
             await db.commit()
             await db.refresh(existing)
         except Exception as e:
@@ -334,6 +346,7 @@ async def create_venue_position(
             sort_order=int(max_order) + 1,
             is_active=True,
             required_certs=_clean_certs(pos_in.required_certs),                # Phase 32
+            department=department,                                             # Phase 32.2
         )
         db.add(pos)
         await db.commit()
@@ -376,6 +389,11 @@ async def update_venue_position(
         data["name"] = new_name[:100]
     if "default_rate" in data and (data["default_rate"] is None or data["default_rate"] <= 0):
         raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
+    if "department" in data:                                                     # Phase 32.2
+        if data["department"] is None:
+            data.pop("department")
+        else:
+            data["department"] = _clean_department(data["department"], data.get("name") or pos.name)
     if "required_certs" in data:                                                 # Phase 32
         if data["required_certs"] is None:
             data.pop("required_certs")
@@ -906,6 +924,7 @@ async def get_venue_events(
             approval_source=req.approval_source,
             previous_drop_at=req.previous_drop_at,       # Phase 29.4
             rebook_reason=req.rebook_reason,
+            outside_department=bool(req.outside_department),   # Phase 32.2
         )
         if person.status in ASSIGNED_STATUSES:
             assigned_by_shift[req.shift_id].append(person)

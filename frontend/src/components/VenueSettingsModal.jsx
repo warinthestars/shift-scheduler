@@ -6,6 +6,7 @@ import VenueLocationsPanel from './VenueLocationsPanel';
 import EventTemplatesPanel from './EventTemplatesPanel';
 import { TIMEZONE_OPTIONS } from '../utils/venueTime';
 import { CERT_OPTIONS } from '../utils/certs';
+import { DEPARTMENTS } from '../utils/departments';
 
 const POLICIES = [
   { id: 'team_auto', title: 'Book my team instantly', body: "People on this venue's team are confirmed right away. Everyone else waits for a manager." },
@@ -52,6 +53,7 @@ function toDraft(p) {
     tips_eligible: !!p.tips_eligible,
     tip_pool: !!p.tip_pool,
     required_certs: p.required_certs || [],   // Phase 32
+    department: p.department || 'general',     // Phase 32.2
   };
 }
 
@@ -79,6 +81,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
         tips_eligible: draft.tips_eligible,
         tip_pool: draft.tips_eligible ? draft.tip_pool : false,
         required_certs: CERT_OPTIONS.map((c) => c.key).filter((k) => draft.required_certs.includes(k)),   // Phase 32
+        department: draft.department,                                                                      // Phase 32.2
       });
       onChanged();
     } catch (err) {
@@ -105,6 +108,11 @@ function PositionCard({ venueId, position, onChanged, onError }) {
     <div className={`p-3 rounded-xl border space-y-2 ${disabled ? 'border-slate-800 bg-slate-950 opacity-60' : 'border-slate-700 bg-slate-800/40'}`}>
       <div className="flex items-center gap-2">
         <input value={draft.name} disabled={disabled} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className={`${inputCls} flex-1`} />
+        <select aria-label="Department" value={draft.department} disabled={disabled}
+          onChange={(e) => setDraft({ ...draft, department: e.target.value })}
+          className="px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 w-36">
+          {DEPARTMENTS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}
+        </select>
         <button
           type="button"
           onClick={toggleActive}
@@ -286,8 +294,9 @@ export default function VenueSettingsModal({
         hide_rate: newPos.hide_rate,
         tips_eligible: newPos.tips_eligible,
         tip_pool: newPos.tips_eligible ? newPos.tip_pool : false,
+        department: newPos.department || null,     // Phase 32.2: blank = guessed from the name
       });
-      setNewPos({ name: '', default_rate: '25.00', default_rate_max: '', hide_rate: false, tips_eligible: false, tip_pool: false });
+      setNewPos({ name: '', default_rate: '25.00', default_rate_max: '', hide_rate: false, tips_eligible: false, tip_pool: false, department: '' });
       loadPositions();
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not add position.');
@@ -525,6 +534,7 @@ export default function VenueSettingsModal({
         <div className="space-y-4">
           <p className="text-xs text-slate-400">
             These fill in pay and tips when you post a shift. Changing them doesn't change shifts you already posted. "Hide pay" keeps the rate off listings until someone is booked.
+            The department decides who it's offered to first: people who work that department book it as usual, anyone else needs your OK. General is open to anyone.
             "Requires" means people need that certificate on their profile (in date) to request or be offered the position. You can still assign someone yourself after a warning.
           </p>
           {loadingPositions ? (
@@ -540,6 +550,11 @@ export default function VenueSettingsModal({
             <div className="text-xs font-semibold text-slate-300">Add a position</div>
             <div className="flex flex-wrap items-center gap-2">
               <input value={newPos.name} onChange={(e) => setNewPos({ ...newPos, name: e.target.value })} placeholder="e.g. Coat Check" className={`${inputCls} flex-1 min-w-[10rem]`} />
+              <select aria-label="Department" value={newPos.department || ''} onChange={(e) => setNewPos({ ...newPos, department: e.target.value })}
+                className="px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500">
+                <option value="">Department: pick for me</option>
+                {DEPARTMENTS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}
+              </select>
               <div className="relative w-24">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">$</span>
                 <input type="number" step="0.5" min="0" value={newPos.default_rate} onChange={(e) => setNewPos({ ...newPos, default_rate: e.target.value })} className={`${inputCls} pl-6`} />

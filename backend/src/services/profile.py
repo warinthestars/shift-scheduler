@@ -15,9 +15,10 @@ from src.models import (
     WorkerAvailability, TimeOffBlock, WorkerCertification, UserFile,
 )
 from src.schemas import (
-    MyProfile, AvailabilityWindow, TimeOffBlockItem, CertificationItem, CertTypeInfo,
+    MyProfile, AvailabilityWindow, TimeOffBlockItem, CertificationItem, CertTypeInfo, DepartmentInfo,
 )
 from src.services.fit import CERT_TYPES, cert_label, tz_of, as_utc
+from src.services.departments import DEPARTMENTS, WORKER_DEPARTMENTS   # Phase 32.2
 from src.services.time_off import BlockSpec, overlapping_block, summary as block_summary, is_over
 from src.services.team import WORKED_STATUSES, EXCLUDED_STATUSES
 from src.auth import normalize_role
@@ -216,6 +217,8 @@ def profile_missing(user: User, has_availability: bool) -> List[str]:
         missing.append("emergency_contact")
     if not has_availability:
         missing.append("availability")
+    if not (user.departments or []):                     # Phase 32.2
+        missing.append("departments")
     return missing
 
 
@@ -230,10 +233,12 @@ async def build_my_profile(db: AsyncSession, user: User) -> MyProfile:
         id=user.id, email=user.email, role=normalize_role(user.role),
         first_name=user.first_name or "", last_name=user.last_name or "", phone=user.phone,
         avatar_url=user.avatar_url, bio=user.bio, skills=list(user.skills or []),
+        departments=list(user.departments or []),
         emergency_contact_name=user.emergency_contact_name, emergency_contact_phone=user.emergency_contact_phone,
         discoverable=user.discoverable or "private",
         availability=avail, time_off=time_off, certifications=certs,
         cert_types=[CertTypeInfo(key=k, **v) for k, v in CERT_TYPES.items()],
+        department_options=[DepartmentInfo(key=k, **DEPARTMENTS[k]) for k in WORKER_DEPARTMENTS],
         missing=profile_missing(user, bool(avail)) if is_worker else [m for m in profile_missing(user, True) if m == "phone"],
     )
 

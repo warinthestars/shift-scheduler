@@ -258,6 +258,9 @@ export default function EventRosterModal({
                                   <RotateCcw className="w-3 h-3" /> Dropped this event on {fmtDate(p.previous_drop_at, timeZone)}, asking back
                                 </div>
                               )}
+                              {p.outside_department && (
+                                <div className="text-[11px] text-amber-300 mt-0.5">Outside the departments they work</div>
+                              )}
                               {p.note && (
                                 <div className="text-[11px] text-slate-300 mt-1 italic whitespace-pre-line">“{p.note}”</div>
                               )}

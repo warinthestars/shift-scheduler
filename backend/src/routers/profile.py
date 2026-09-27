@@ -45,6 +45,7 @@ from src.routers.venues import verify_venue_manager_access
 from src.services.fit import CERT_TYPES, parse_hm, cert_label
 from src.services.messaging import normalize_phone
 from src.services import time_off as blocks
+from src.services.departments import clean_departments   # Phase 32.2
 from src.services.profile import (
     build_my_profile, block_items, cert_items, related_venue_ids,
     may_view_worker, read_upload, avatar_url, today_utc,
@@ -89,6 +90,11 @@ async def update_my_profile(
                 raise HTTPException(status_code=400, detail="A mobile number is required so venues can reach you and texts can work.")
         elif normalize_phone(raw) is None:
             raise HTTPException(status_code=400, detail="That phone number doesn't look right. Use 10 digits, or +country code.")
+    if data.get("departments") is not None:                                             # Phase 32.2
+        try:
+            clean_departments(data["departments"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if _clean(data.get("emergency_contact_phone")) and normalize_phone(data["emergency_contact_phone"]) is None:
         raise HTTPException(status_code=400, detail="The emergency contact's phone number doesn't look right.")
     try:
@@ -103,6 +109,8 @@ async def update_my_profile(
                     seen.add(s.lower())
                     skills.append(s)
             current_user.skills = skills[:12]
+        if "departments" in data and data["departments"] is not None:                      # Phase 32.2
+            current_user.departments = clean_departments(data["departments"])
         await db.commit()
         await db.refresh(current_user)
     except HTTPException:

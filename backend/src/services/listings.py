@@ -21,12 +21,23 @@ from src.services.auto_confirm import decide_approval
 from src.services.locations import load_locations, to_listing_location, geofence_on
 from src.services.team import blocked_venue_ids
 from src.services.fit import load_fit, load_requirements, required_for, tz_of, cert_label   # Phase 31 + 32
+from src.services.departments import load_dept_context   # Phase 32.2
 from src.services.booking import (
     as_utc, ACTIVE_STATUSES, ASSIGNED_STATUSES, BOOKED_STATUSES, PENDING_STATUSES,
 )
 
 MAX_EVENTS = 200
 WORKED_STATUSES = ("approved", "confirmed", "checked_in", "completed", "transferred")
+
+
+def _event_match(positions) -> str:
+    """Phase 32.2: match if any (open) position fits the viewer; not_set if they have no departments."""
+    kinds = {p.department_match for p in positions}
+    if "match" in kinds:
+        return "match"
+    if "not_set" in kinds or not kinds:
+        return "not_set"
+    return "outside"
 
 
 def _f(v) -> Optional[float]:
@@ -128,6 +139,7 @@ async def build_listings(
     blocked = await blocked_venue_ids(db, user.id)                        # Phase 29
     my_fit = (await load_fit(db, [user.id]))[user.id]                     # Phase 31 + 32
     requirements = await load_requirements(db, venue_ids)
+    depts = await load_dept_context(db, [user.id], venue_ids)            # Phase 32.2
 
     out: List[EventListing] = []
     for ev in events:
@@ -162,6 +174,7 @@ async def build_listings(
             left = max(0, cap - (s.spots_filled or 0))
             is_open = (s.status or "").upper() == "OPEN" and left > 0
             decision, _src = decide_approval(s, venue, user, venue.id in whitelisted)
+            dmatch = depts.match(user.id, s)                                      # Phase 32.2
             positions.append(ListingPosition(
                 shift_id=s.id,
                 role_type=s.role_type or "Worker",
@@ -174,7 +187,7 @@ async def build_listings(
                 capacity=cap,
                 spots_left=left,
                 status="OPEN" if is_open else "FILLED",
-                booking="instant" if decision == RequestStatus.APPROVED and dropped_here is None else "approval",
+                booking="instant" if decision == RequestStatus.APPROVED and dropped_here is None and dmatch != "outside" else "approval",
                 est_pay_min=round(rate * hours, 2) if rate is not None else None,
                 est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
                 my_status=my_status,
@@ -183,6 +196,8 @@ async def build_listings(
                 staff_notes=s.staff_notes if booked_here else None,
                 required_certs=[cert_label(k) for k in required_for(requirements, s)],                # Phase 32
                 missing_certs=my_fit.missing(required_for(requirements, s), s.start_time, s.end_time, vtz),
+                department=depts.dept_of(s.venue_id, s.role_type),
+                department_match=dmatch,
             ))
 
         open_positions = [p for p in positions if p.status == "OPEN"]
@@ -259,5 +274,6 @@ async def build_listings(
             geofence_on=geofence_on(ev, venue),
             availability=my_fit.availability(ev.start_time, ev.end_time, vtz),          # Phase 31
             time_off=my_fit.off(ev.start_time, ev.end_time, vtz),
+            department_match=_event_match(open_positions or positions),                 # Phase 32.2
         ))
     return out

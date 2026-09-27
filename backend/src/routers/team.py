@@ -812,6 +812,7 @@ async def person_profile(
     return WorkerProfile(
         member=member, history=history, pending_here=pending_here, other_venues=other_venues,
         bio=user.bio, avatar_url=user.avatar_url, skills=list(user.skills or []),
+        departments=list(user.departments or []),                   # Phase 32.2
         emergency_contact_name=user.emergency_contact_name if connected else None,
         emergency_contact_phone=user.emergency_contact_phone if connected else None,
         certifications=certs, availability=await availability_of(db, worker_id),

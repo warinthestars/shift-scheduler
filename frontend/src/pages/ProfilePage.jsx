@@ -15,6 +15,7 @@ const MISSING_TEXT = {
   photo: ['Add a profile photo', 'about'],
   emergency_contact: ['Add an emergency contact', 'about'],
   availability: ['Set your weekly availability', 'availability'],
+  departments: ['Pick the departments you work', 'about'],   // Phase 32.2
 };
 
 /**

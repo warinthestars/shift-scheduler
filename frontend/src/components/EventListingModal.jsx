@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
+import { DeptChip } from '../utils/departments';
 import PayLabel from './PayLabel';
 import TipBadge from './TipBadge';
 import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
@@ -433,6 +434,12 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
                             <ShieldCheck className="w-2.5 h-2.5" /> Needs approval
                           </span>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <DeptChip dept={p.department} />
+                        {p.department_match === 'outside' && !full && !isMine && (
+                          <span className="text-[11px] text-amber-300">Outside your departments, so a manager has to approve it</span>
                         )}
                       </div>
                       {p.role_notes && <p className="text-[11px] text-slate-400 mt-1.5 whitespace-pre-line">{p.role_notes}</p>}

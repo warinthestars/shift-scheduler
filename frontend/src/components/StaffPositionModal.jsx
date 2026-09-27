@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { UserPlus, Search, Send, Check, AlertTriangle, Clock, Lock, CalendarOff, BadgeCheck } from 'lucide-react';
+import { UserPlus, Search, Send, Check, AlertTriangle, Clock, Lock, CalendarOff, BadgeCheck, Briefcase } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import RatingBadge from './RatingBadge';
@@ -297,6 +297,7 @@ export function warningsOf(c) {
   const out = [];
   if ((c.missing_certs || []).length) out.push(`Missing ${c.missing_certs.join(', ')}`);
   if (c.availability === 'outside') out.push('Outside their availability');
+  if (c.department_match === 'outside') out.push('Outside the departments they work');   // Phase 32.2
   return out;
 }
 
@@ -313,6 +314,9 @@ function FitChips({ c }) {
     <span key="off" className={`${chip} bg-rose-500/10 text-rose-300 border-rose-500/30`}>
       <CalendarOff className="w-3 h-3" /> Time off{c.time_off_reason ? `: ${c.time_off_reason}` : ''}
     </span>,
+  );
+  if (c.department_match === 'outside') items.push(   // Phase 32.2
+    <span key="dept" className={`${chip} bg-amber-500/10 text-amber-300 border-amber-500/30`}><Briefcase className="w-3 h-3" /> Other department</span>,
   );
   if (c.availability === 'outside') items.push(
     <span key="av" className={`${chip} bg-slate-800 text-slate-300 border-slate-700`}><CalendarOff className="w-3 h-3" /> Outside their availability</span>,

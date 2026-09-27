@@ -355,6 +355,7 @@ class ShiftRequestResponse(BaseModel):
     dropped_at: Optional[datetime] = None            # Phase 29.4
     previous_drop_at: Optional[datetime] = None      # Phase 29.4: asking back / rebooked after dropping this event
     rebook_reason: Optional[str] = None              # Phase 29.4
+    outside_department: bool = False                 # Phase 32.2: asked for a shift outside their departments
     shift: Optional[ShiftResponse] = None
     worker: Optional[UserBrief] = None
 
@@ -489,6 +490,7 @@ class RosterPerson(BaseModel):
     cert_issues: List[str] = []                  # Phase 32: e.g. "Alcohol server card (expired)", "Food handler card not verified"
     time_off: Optional[str] = None               # Phase 32.1: 'blocked' when a time-off block overlaps this shift
     time_off_reason: Optional[str] = None        # Phase 32.1: the block's reason (managers see it)
+    outside_department: bool = False             # Phase 32.2: their request is outside their departments
 
 
 class EventPosition(BaseModel):
@@ -539,6 +541,7 @@ class VenuePositionCreate(BaseModel):
     tips_eligible: bool = False
     tip_pool: bool = False
     required_certs: List[str] = []           # Phase 32: cert type keys (services/fit.py CERT_TYPES)
+    department: Optional[str] = None         # Phase 32.2: None = guessed from the name
 
 
 class VenuePositionUpdate(BaseModel):
@@ -551,6 +554,7 @@ class VenuePositionUpdate(BaseModel):
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
     required_certs: Optional[List[str]] = None   # Phase 32
+    department: Optional[str] = None             # Phase 32.2
 
 
 class VenuePositionResponse(BaseModel):
@@ -565,6 +569,7 @@ class VenuePositionResponse(BaseModel):
     sort_order: int
     is_active: bool
     required_certs: List[str] = []           # Phase 32
+    department: str = "general"              # Phase 32.2
 
     class Config:
         from_attributes = True
@@ -919,6 +924,8 @@ class ListingPosition(BaseModel):
     my_dropped_at: Optional[datetime] = None   # Phase 29.4: the viewer dropped this position
     staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
     required_certs: List[str] = []             # Phase 32: labels of what this position needs
+    department: str = "general"                # Phase 32.2: foh | bar | kitchen | tech | security | ops | general
+    department_match: str = "not_set"          # Phase 32.2: match | outside | not_set (for THIS viewer)
     missing_certs: List[str] = []              # Phase 32: what the VIEWER is missing (non-empty = can't request)
 
 
@@ -960,6 +967,7 @@ class EventListing(BaseModel):
     dropped_here: Optional[datetime] = None           # Phase 29.4: viewer dropped a position in this event -> asking back needs a reason + approval
     availability: str = "not_set"                     # Phase 31: fits | outside | not_set (the viewer's weekly availability)
     time_off: Optional[str] = None                    # Phase 32.1: 'blocked' = overlaps one of the viewer's time-off blocks
+    department_match: str = "not_set"                 # Phase 32.2: match if any open position fits the viewer's departments
 
 
 class PositionRequestBody(BaseModel):
@@ -1260,6 +1268,7 @@ class AssignCandidate(BaseModel):
     availability: str = "not_set"            # Phase 31: fits | outside | not_set
     time_off: Optional[str] = None           # Phase 32.1: 'blocked' (can't be assigned / offered)
     time_off_reason: Optional[str] = None    # Phase 32.1: the block's reason
+    department_match: str = "not_set"        # Phase 32.2: match | outside | not_set
     missing_certs: List[str] = []            # Phase 32: labels (offers skip them; Assign asks first)
     unverified_certs: List[str] = []         # Phase 32: on file but no manager has checked them
 
@@ -1376,6 +1385,7 @@ class WorkerProfile(BaseModel):
     bio: Optional[str] = None                                     # Phase 32
     avatar_url: Optional[str] = None
     skills: List[str] = []                                        # "positions I work" from their profile
+    departments: List[str] = []                                   # Phase 32.2: departments they picked
     emergency_contact_name: Optional[str] = None                  # only for people on the team / booked here
     emergency_contact_phone: Optional[str] = None
     certifications: List["CertificationItem"] = []
@@ -1857,6 +1867,7 @@ class MyProfile(BaseModel):
     avatar_url: Optional[str] = None
     bio: Optional[str] = None
     skills: List[str] = []
+    departments: List[str] = []                      # Phase 32.2
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     discoverable: str = "private"
@@ -1864,7 +1875,15 @@ class MyProfile(BaseModel):
     time_off: List[TimeOffBlockItem] = []        # Phase 32.1
     certifications: List[CertificationItem] = []
     cert_types: List[CertTypeInfo] = []
-    missing: List[str] = []                          # phone | photo | emergency_contact | availability
+    missing: List[str] = []                          # phone | photo | emergency_contact | availability | departments
+    department_options: List["DepartmentInfo"] = []  # Phase 32.2: the catalogue
+
+
+class DepartmentInfo(BaseModel):
+    key: str
+    label: str
+    short: str
+    examples: str
 
 
 class MyProfileUpdate(BaseModel):
@@ -1873,8 +1892,10 @@ class MyProfileUpdate(BaseModel):
     phone: Optional[str] = Field(None, max_length=30)
     bio: Optional[str] = Field(None, max_length=600)
     skills: Optional[List[str]] = None
+    departments: Optional[List[str]] = None          # Phase 32.2: foh | bar | kitchen | tech | security | ops
     emergency_contact_name: Optional[str] = Field(None, max_length=100)
     emergency_contact_phone: Optional[str] = Field(None, max_length=30)
 
 
 WorkerProfile.model_rebuild()
+MyProfile.model_rebuild()

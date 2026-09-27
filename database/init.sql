@@ -34,6 +34,7 @@ CREATE TABLE users (
     discoverable VARCHAR(20) NOT NULL DEFAULT 'private',   -- Phase 29.1: private | venues | everyone
     emergency_contact_name VARCHAR(100),                   -- Phase 32
     emergency_contact_phone VARCHAR(30),                   -- Phase 32
+    departments TEXT[] NOT NULL DEFAULT '{}',              -- Phase 32.2: foh | bar | kitchen | tech | security | ops
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -121,6 +122,7 @@ CREATE TABLE venue_positions (
     sort_order INT NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     required_certs TEXT[] NOT NULL DEFAULT '{}',          -- Phase 32: cert type keys, e.g. {alcohol_server}
+    department VARCHAR(20) NOT NULL DEFAULT 'general',     -- Phase 32.2: foh | bar | kitchen | tech | security | ops | general
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_venue_position_name UNIQUE (venue_id, name),
@@ -238,6 +240,7 @@ CREATE TABLE shift_requests (
     status_reason TEXT,
     previous_drop_at TIMESTAMPTZ,                             -- Phase 29.4: coming back after dropping this event
     rebook_reason TEXT,                                       -- Phase 29.4: why (worker's request note or the manager's reason)
+    outside_department BOOLEAN NOT NULL DEFAULT FALSE,        -- Phase 32.2: asked for a shift outside their departments
     pay_rate NUMERIC(10, 2),
     info_seen_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
