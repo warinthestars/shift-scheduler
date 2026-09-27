@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Camera, Trash2, Save, Phone, HeartPulse, X, Plus, Check } from 'lucide-react';
+import { Camera, Trash2, Save, Phone, HeartPulse, X, Plus, Check, AlertCircle } from 'lucide-react';
 import { WORKER_DEPARTMENTS } from '../../utils/departments';
 import api from '../../api/client';
 import { Avatar } from '../WorkerProfilePanel';
@@ -14,28 +14,33 @@ const BIO_MAX = 600;
  * Phase 32: Photo, name, mobile (required for workers), bio, positions I work, emergency contact.
  * Props: profile (MyProfile), onSaved(profile, message), onError(message)
  */
+// Phase 32.2.1: the form's starting values (also used to tell whether there are unsaved changes)
+const formFrom = (profile) => ({
+  first_name: profile.first_name || '',
+  last_name: profile.last_name || '',
+  phone: profile.phone || '',
+  bio: profile.bio || '',
+  skills: profile.skills || [],
+  departments: profile.departments || [],        // Phase 32.2
+  emergency_contact_name: profile.emergency_contact_name || '',
+  emergency_contact_phone: profile.emergency_contact_phone || '',
+});
+
 export default function AboutSection({ profile, onSaved, onError }) {
   const isWorker = profile.role === 'worker';
   const [form, setForm] = useState(null);
   const [skillDraft, setSkillDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null);   // Phase 32.2.1: { type: 'success' | 'error', text } shown next to Save
 
   useEffect(() => {
-    setForm({
-      first_name: profile.first_name || '',
-      last_name: profile.last_name || '',
-      phone: profile.phone || '',
-      bio: profile.bio || '',
-      skills: profile.skills || [],
-      departments: profile.departments || [],        // Phase 32.2
-      emergency_contact_name: profile.emergency_contact_name || '',
-      emergency_contact_phone: profile.emergency_contact_phone || '',
-    });
+    setForm(formFrom(profile));
   }, [profile]);
 
   if (!form) return null;
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const dirty = JSON.stringify(form) !== JSON.stringify(formFrom(profile));   // Phase 32.2.1
+  const set = (k, v) => { setSaveStatus(null); setForm((f) => ({ ...f, [k]: v })); };
   const addSkill = (value) => {
     const v = (value || '').trim();
     if (!v || form.skills.some((s) => s.toLowerCase() === v.toLowerCase()) || form.skills.length >= 12) return;
@@ -45,11 +50,16 @@ export default function AboutSection({ profile, onSaved, onError }) {
 
   const save = async () => {
     setSaving(true);
+    setSaveStatus(null);
     try {
       const res = await api.put('/me/profile', form);
       onSaved(res.data, 'Profile saved.');
+      setSaveStatus({ type: 'success', text: 'Saved.' });
     } catch (err) {
-      onError(err.response?.data?.detail || 'Could not save your profile.');
+      const detail = err.response?.data?.detail;
+      const text = typeof detail === 'string' ? detail : 'Could not save your profile.';
+      onError(text);
+      setSaveStatus({ type: 'error', text });
     } finally {
       setSaving(false);
     }
@@ -209,9 +219,19 @@ export default function AboutSection({ profile, onSaved, onError }) {
         </section>
       )}
 
-      <div className="flex justify-end">
+      {/* Phase 32.2.1: pinned to the bottom of the screen while there are unsaved changes; save errors show right here */}
+      <div className={`${dirty || saveStatus?.type === 'error' ? 'sticky bottom-3 z-20 p-3 rounded-2xl bg-slate-900/95 border border-slate-700 shadow-xl backdrop-blur' : ''} flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3`}>
+        {saveStatus?.type === 'error' ? (
+          <p role="alert" className="flex-1 text-sm text-rose-300 inline-flex items-start gap-1.5">
+            <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" /> {saveStatus.text}
+          </p>
+        ) : dirty ? (
+          <p className="flex-1 text-sm text-amber-300">You have unsaved changes.</p>
+        ) : saveStatus?.type === 'success' ? (
+          <p className="text-sm text-emerald-300 inline-flex items-center gap-1.5"><Check className="w-4 h-4" /> {saveStatus.text}</p>
+        ) : null}
         <button type="button" onClick={save} disabled={saving}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
           <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save profile'}
         </button>
       </div>
