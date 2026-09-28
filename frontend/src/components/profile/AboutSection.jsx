@@ -220,7 +220,8 @@ export default function AboutSection({ profile, onSaved, onError }) {
       )}
 
       {/* Phase 32.2.1: pinned to the bottom of the screen while there are unsaved changes; save errors show right here */}
-      <div className={`${dirty || saveStatus?.type === 'error' ? 'sticky bottom-3 z-20 p-3 rounded-2xl bg-slate-900/95 border border-slate-700 shadow-xl backdrop-blur' : ''} flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3`}>
+      <div style={{ bottom: 'calc(var(--tabbar-h, 0px) + 0.75rem)' }}   /* Phase 33: above the phone tab bar */
+        className={`${dirty || saveStatus?.type === 'error' ? 'sticky z-20 p-3 rounded-2xl bg-slate-900/95 border border-slate-700 shadow-xl backdrop-blur' : ''} flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3`}>
         {saveStatus?.type === 'error' ? (
           <p role="alert" className="flex-1 text-sm text-rose-300 inline-flex items-start gap-1.5">
             <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" /> {saveStatus.text}

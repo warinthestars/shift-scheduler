@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
+import WorkerTabBar from './components/WorkerTabBar';   // Phase 33: phone tab bar (workers only)
 import LoginPage from './pages/LoginPage';
 import WorkerDashboard from './pages/WorkerDashboard';
 import VenueManagerDashboard from './pages/VenueManagerDashboard';
@@ -62,6 +63,7 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'platform_admin']}>
                   <Navbar />
                   <WorkerDashboard />
+                  <WorkerTabBar />
                 </ProtectedRoute>
               }
             />
@@ -95,6 +97,7 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
                   <Navbar />
                   <VenuesDirectory />
+                  <WorkerTabBar />
                 </ProtectedRoute>
               }
             />
@@ -104,6 +107,7 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
                   <Navbar />
                   <VenueProfile />
+                  <WorkerTabBar />
                 </ProtectedRoute>
               }
             />
@@ -115,6 +119,7 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
                   <Navbar />
                   <ProfilePage />
+                  <WorkerTabBar />
                 </ProtectedRoute>
               }
             />

@@ -1066,6 +1066,7 @@ class NotificationPreferencesResponse(BaseModel):
     reminders_enabled: bool = True
     new_shift_alerts: str = "daily"          # off | instant | daily
     manager_alerts_email: bool = True
+    push_enabled: bool = True                # Phase 33: phone / browser notifications (on the devices you turned on)
     quiet_start: Optional[int] = None        # hour 0-23
     quiet_end: Optional[int] = None
     timezone: str = "America/New_York"
@@ -1077,12 +1078,47 @@ class NotificationPreferencesResponse(BaseModel):
     discoverable: str = "private"            # Phase 29.1: private | venues | everyone
 
 
+class PushKeys(BaseModel):
+    """Phase 33: from the browser's PushSubscription.toJSON().keys"""
+    p256dh: str = Field(..., max_length=200)
+    auth: str = Field(..., max_length=100)
+
+
+class PushSubscribeBody(BaseModel):
+    endpoint: str = Field(..., max_length=2000)
+    keys: PushKeys
+    device_label: Optional[str] = Field(None, max_length=120)
+
+
+class PushUnsubscribeBody(BaseModel):
+    endpoint: str = Field(..., max_length=2000)
+
+
+class PushDevice(BaseModel):
+    id: UUID
+    device_label: Optional[str] = None
+    created_at: datetime
+    last_success_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+
+
+class PushConfigResponse(BaseModel):
+    public_key: str                          # VAPID application server key (base64url) for pushManager.subscribe
+    devices: List[PushDevice] = []
+
+
+class PushTestResult(BaseModel):
+    reached: int
+    error: Optional[str] = None
+
+
 class NotificationPreferencesUpdate(BaseModel):
     email_enabled: Optional[bool] = None
     sms_enabled: Optional[bool] = None
     reminders_enabled: Optional[bool] = None
     new_shift_alerts: Optional[str] = None
     manager_alerts_email: Optional[bool] = None
+    push_enabled: Optional[bool] = None      # Phase 33
     quiet_start: Optional[int] = None
     quiet_end: Optional[int] = None
     clear_quiet_hours: bool = False

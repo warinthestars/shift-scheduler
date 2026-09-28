@@ -474,7 +474,7 @@ class NotificationDelivery(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     notification_id = Column(UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    channel = Column(String(10), nullable=False)                     # email | sms
+    channel = Column(String(10), nullable=False)                     # email | sms | push (Phase 33)
     status = Column(String(12), nullable=False, default="pending")   # pending | sent | failed | skipped
     digest = Column(Boolean, nullable=False, default=False)
     send_after = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
@@ -493,6 +493,7 @@ class NotificationPreference(Base):
     reminders_enabled = Column(Boolean, nullable=False, default=True)
     new_shift_alerts = Column(String(10), nullable=False, default="daily")   # off | instant | daily
     manager_alerts_email = Column(Boolean, nullable=False, default=True)
+    push_enabled = Column(Boolean, nullable=False, default=True)             # Phase 33: phone / browser notifications
     quiet_start = Column(Integer, nullable=True)                             # hour 0-23
     quiet_end = Column(Integer, nullable=True)
     timezone = Column(String(64), nullable=False, default="America/New_York")
@@ -666,3 +667,27 @@ class WorkerCertification(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     __table_args__ = (UniqueConstraint("worker_id", "cert_type", name="uq_worker_cert"),)
+
+
+class PushSubscription(Base):
+    """Phase 33: one browser / installed app that turned on notifications (Web Push)."""
+    __tablename__ = "push_subscriptions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint = Column(Text, nullable=False, unique=True)
+    p256dh = Column(String(200), nullable=False)
+    auth = Column(String(100), nullable=False)
+    device_label = Column(String(120), nullable=True)                   # "iPhone", "Android · Chrome", ...
+    last_success_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class AppKey(Base):
+    """Phase 33: server-generated keys (the Web Push VAPID key pair when .secrets doesn't set one)."""
+    __tablename__ = "app_keys"
+
+    name = Column(String(50), primary_key=True)
+    value = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)

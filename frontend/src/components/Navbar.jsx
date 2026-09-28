@@ -5,6 +5,7 @@ import api from '../api/client';
 import NotificationBell from './NotificationBell';
 import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound } from 'lucide-react';
 import { Avatar } from './WorkerProfilePanel';
+import { syncPush, disablePush } from '../utils/push';   // Phase 33
 
 export default function Navbar() {
   const { user, logout, isAdmin, isWorker } = useAuth();
@@ -21,11 +22,17 @@ export default function Navbar() {
   const isPlatformAdmin = userRole === 'platform_admin' || isAdmin;
   const isManagerRole = userRole === 'venue_manager';
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setMobileOpen(false);
+    await disablePush();          // Phase 33: this device stops getting this account's notifications
     logout();
     navigate('/login');
   };
+
+  // Phase 33: if this device already allowed notifications, make sure the server still has it
+  useEffect(() => {
+    if (user?.id) syncPush();
+  }, [user?.id]);
 
   // Close the mobile menu whenever the route changes
   useEffect(() => {

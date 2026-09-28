@@ -20,6 +20,7 @@ import DropShiftDialog from '../components/worker/DropShiftDialog';
 import ConfirmDialog from '../components/ConfirmDialog';
 import HandoffsPanel from '../components/worker/HandoffsPanel';
 import ProfileNudge from '../components/worker/ProfileNudge';
+import AppNudge from '../components/AppNudge';   // Phase 33
 import { PENDING_INVITE_KEY } from './JoinPage';
 import {
   dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
@@ -409,6 +410,17 @@ export default function WorkerDashboard() {
     );
   };
 
+  // Phase 33: tell the phone tab bar which tab is open and what needs attention
+  useEffect(() => {
+    if (!activeTab) return;
+    const detail = {
+      tab: activeTab,
+      badges: { schedule: offers.length, calendar: calendar.unread_count || 0, transfers: incomingTransfers.length },
+    };
+    try { sessionStorage.setItem('shiftboard_worker_tab', JSON.stringify(detail)); } catch (e) { /* private mode */ }
+    window.dispatchEvent(new CustomEvent('worker_tab_state', { detail }));
+  }, [activeTab, offers.length, calendar.unread_count, incomingTransfers.length]);
+
   const tabs = [
     { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length },
     { id: 'find', label: 'Find shifts', icon: Search, count: openListingCount },
@@ -416,6 +428,7 @@ export default function WorkerDashboard() {
     { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft, badge: incomingTransfers.length },
   ];
   const isWorker = String(user?.role || '').toLowerCase() === 'worker';
+  const activeTabLabel = (tabs.find((t) => t.id === activeTab) || {}).label;
   const chipBtn = 'px-3 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-600 text-xs text-slate-300 inline-flex items-center gap-1.5';
 
   return (
@@ -457,6 +470,7 @@ export default function WorkerDashboard() {
 
       <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-6">
         {isWorker && <ProfileNudge />}
+        <AppNudge />
         {notification && (
           <div className={`mb-5 p-3.5 rounded-xl border flex items-start justify-between gap-3 ${
             notification.type === 'success'
@@ -503,8 +517,11 @@ export default function WorkerDashboard() {
           </div>
         )}
 
-        {/* Tabs: 2×2 on phones so none are hidden */}
-        <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 border-b border-slate-800 pb-4">
+        {/* Tabs: 2×2 on phones so none are hidden. Phase 33: workers on phones use the bottom tab bar instead. */}
+        {isWorker && activeTabLabel && (
+          <h2 className="md:hidden text-lg font-bold text-white border-b border-slate-800 pb-3">{activeTabLabel}</h2>
+        )}
+        <div className={`${isWorker ? 'hidden md:flex md:flex-wrap' : 'grid grid-cols-2 sm:flex sm:flex-wrap'} gap-2 border-b border-slate-800 pb-4`}>
           {tabs.map((t) => {
             const Icon = t.icon;
             const on = activeTab === t.id;

@@ -20,6 +20,7 @@ import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
 import { WorkerProfileModal } from '../components/WorkerProfilePanel';
 import TonightBoard from '../components/manager/TonightBoard';
 import NeedsYouStrip from '../components/manager/NeedsYouStrip';
+import AppNudge from '../components/AppNudge';   // Phase 33
 
 /**
  * Venue manager dashboard.
@@ -462,6 +463,7 @@ export default function VenueManagerDashboard() {
       </section>
 
       <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <AppNudge manager />
         {notification && (
           <div
             className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${

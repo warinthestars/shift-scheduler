@@ -422,7 +422,7 @@ CREATE TABLE notification_deliveries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     notification_id UUID NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    channel VARCHAR(10) NOT NULL,                 -- email | sms
+    channel VARCHAR(10) NOT NULL,                 -- email | sms | push (Phase 33)
     status VARCHAR(12) NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped
     digest BOOLEAN NOT NULL DEFAULT FALSE,
     send_after TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -440,6 +440,7 @@ CREATE TABLE notification_preferences (
     reminders_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     new_shift_alerts VARCHAR(10) NOT NULL DEFAULT 'daily',   -- off | instant | daily
     manager_alerts_email BOOLEAN NOT NULL DEFAULT TRUE,
+    push_enabled BOOLEAN NOT NULL DEFAULT TRUE,               -- Phase 33: phone / browser notifications
     quiet_start SMALLINT,                                     -- hour 0-23, NULL = no quiet hours
     quiet_end SMALLINT,
     timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
@@ -606,3 +607,25 @@ CREATE TABLE worker_certifications (
     CONSTRAINT uq_worker_cert UNIQUE (worker_id, cert_type)
 );
 CREATE INDEX idx_worker_certs_worker ON worker_certifications(worker_id);
+
+-- ==============================================================================
+-- Phase 33: Web Push (installed app / browser notifications)
+-- ==============================================================================
+CREATE TABLE push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL UNIQUE,                            -- the browser's push service URL for this device
+    p256dh VARCHAR(200) NOT NULL,                             -- the device's public key (base64url)
+    auth VARCHAR(100) NOT NULL,                               -- the device's auth secret (base64url)
+    device_label VARCHAR(120),                                -- e.g. "iPhone", "Android · Chrome"
+    last_success_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+CREATE TABLE app_keys (
+    name VARCHAR(50) PRIMARY KEY,                             -- vapid_private_pem
+    value TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
