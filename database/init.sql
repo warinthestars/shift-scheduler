@@ -614,9 +614,10 @@ CREATE INDEX idx_worker_certs_worker ON worker_certifications(worker_id);
 CREATE TABLE push_subscriptions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    endpoint TEXT NOT NULL UNIQUE,                            -- the browser's push service URL for this device
-    p256dh VARCHAR(200) NOT NULL,                             -- the device's public key (base64url)
-    auth VARCHAR(100) NOT NULL,                               -- the device's auth secret (base64url)
+    endpoint TEXT NOT NULL UNIQUE,                            -- Web Push: the browser's push URL. Firebase: the device token
+    p256dh VARCHAR(200),                                      -- Web Push only: the device's public key (base64url)
+    auth VARCHAR(100),                                        -- Web Push only: the device's auth secret (base64url)
+    provider VARCHAR(10) NOT NULL DEFAULT 'webpush',          -- Phase 33.0.1: webpush | fcm
     device_label VARCHAR(120),                                -- e.g. "iPhone", "Android · Chrome"
     last_success_at TIMESTAMPTZ,
     last_error TEXT,

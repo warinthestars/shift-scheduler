@@ -27,6 +27,7 @@ from src.database import get_db
 from src.models import (
     User, Venue, VenueManager, VenueWhitelist, VenuePosition, VenueLocation, Shift, ShiftEvent, ShiftRequest,
     ShiftTransfer, TimeEntry, VenueActivity, AdminAudit, Notification, NotificationDelivery, NotificationPreference,
+    PushSubscription,
 )
 from src.schemas import (
     AdminOverview, AdminAttention, AdminActivityItem, AdminAuditItem, AdminVenueRow, AdminPersonRef,
@@ -485,6 +486,9 @@ async def system_status(current_user: User = Depends(require_admin), db: AsyncSe
     except Exception:
         heartbeat = None
 
+    from src.services import fcm                    # Phase 33.0.1
+    push_status = fcm.status()
+
     counts = {}
     for label, model in (
         ("users", User), ("venues", Venue), ("events", ShiftEvent), ("shifts", Shift), ("requests", ShiftRequest),
@@ -496,6 +500,9 @@ async def system_status(current_user: User = Depends(require_admin), db: AsyncSe
         app_base_url=settings.APP_BASE_URL or "", app_base_url_ok=_base_url_ok(),
         email_provider=(settings.EMAIL_PROVIDER or "console").lower(), email_from=settings.EMAIL_FROM or "",
         email_ready=email_available(), sms_provider=(settings.SMS_PROVIDER or "off").lower(), sms_ready=sms_available(),
+        push_route="fcm" if push_status["ready"] else "webpush",                          # Phase 33.0.1
+        push_firebase_missing=push_status["missing"], push_firebase_error=push_status["error"],
+        push_devices=int(await db.scalar(select(func.count()).select_from(PushSubscription)) or 0),
         firebase=firebase, self_registration=bool(settings.ALLOW_SELF_REGISTRATION),
         always_admin_count=len(get_always_admin_emails()),
         worker_enabled=bool(settings.NOTIFICATIONS_WORKER_ENABLED),

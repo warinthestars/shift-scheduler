@@ -7,6 +7,7 @@
  * Bump CACHE when offline.html or the icons change.
  */
 const CACHE = 'shiftboard-shell-v1';
+// Phase 33.0.1: messages arrive either straight from ShiftBoard (Web Push) or through Firebase Cloud Messaging.
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {
@@ -34,13 +35,15 @@ self.addEventListener('fetch', (event) => {
 });
 
 self.addEventListener('push', (event) => {
-  let data = {};
+  let raw = {};
   try {
-    data = event.data ? event.data.json() : {};
+    raw = event.data ? event.data.json() : {};
   } catch (e) {
-    data = { title: 'ShiftBoard', body: event.data ? event.data.text() : '' };
+    raw = { title: 'ShiftBoard', body: event.data ? event.data.text() : '' };
   }
-  const urgent = Boolean(data.urgent);
+  // Firebase wraps our fields: { data: { title, body, url, tag, urgent: "true" }, from, fcmMessageId, ... }
+  const data = raw && raw.data && typeof raw.data === 'object' && !raw.title ? raw.data : raw;
+  const urgent = data.urgent === true || data.urgent === 'true';
   event.waitUntil(
     self.registration.showNotification(data.title || 'ShiftBoard', {
       body: data.body || '',

@@ -1,9 +1,35 @@
+import { initializeApp, getApp } from 'firebase/app';
+import { getMessaging, getToken, deleteToken, isSupported as messagingSupported } from 'firebase/messaging';
 import api from '../api/client';
 
 /**
  * Phase 33: the installed app (PWA) and Web Push on THIS device.
+ * Phase 33.0.1: when the server has Firebase messaging set up (GET /notifications/push -> provider 'fcm'),
+ * devices register a Firebase token instead; otherwise ShiftBoard's own Web Push is used. Either way the
+ * messages land in public/sw.js.
  * Nothing here throws at import time; every helper is safe on browsers without push.
  */
+const FCM_APP = 'shiftboard-messaging';
+const FCM_TOKEN_KEY = 'shiftboard_fcm_token';
+
+function fcmApp(config) {
+  try {
+    return getApp(FCM_APP);
+  } catch (e) {
+    return initializeApp(config, FCM_APP);
+  }
+}
+
+function storedToken() {
+  try { return localStorage.getItem(FCM_TOKEN_KEY); } catch (e) { return null; }
+}
+
+function storeToken(token) {
+  try {
+    if (token) localStorage.setItem(FCM_TOKEN_KEY, token);
+    else localStorage.removeItem(FCM_TOKEN_KEY);
+  } catch (e) { /* private mode */ }
+}
 
 export const isStandalone = () =>
   (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
@@ -71,11 +97,35 @@ export async function currentSubscription() {
 async function saveSubscription(sub) {
   const json = sub.toJSON();
   const res = await api.post('/notifications/push/subscribe', {
+    provider: 'webpush',
     endpoint: json.endpoint,
     keys: json.keys,
     device_label: deviceLabel(),
   });
-  return res.data;   // { public_key, devices }
+  return res.data;   // { public_key, devices, provider, ... }
+}
+
+/** Phase 33.0.1: register this device with Firebase. Falls back to Web Push if this browser can't use Firebase messaging. */
+async function subscribeFcm(reg, cfg) {
+  if (!(await messagingSupported().catch(() => false))) {
+    return saveSubscription(await subscribeFresh(reg, cfg.public_key));
+  }
+  // A subscription made with ShiftBoard's own key would block Firebase's: remove it first.
+  const existing = await reg.pushManager.getSubscription();
+  if (existing && !sameKey(existing, cfg.fcm_vapid_key)) {
+    await api.post('/notifications/push/unsubscribe', { endpoint: existing.endpoint }).catch(() => {});
+    await existing.unsubscribe().catch(() => {});
+  }
+  const token = await getToken(getMessaging(fcmApp(cfg.fcm_config)), {
+    vapidKey: cfg.fcm_vapid_key,
+    serviceWorkerRegistration: reg,
+  });
+  if (!token) throw new Error("Firebase didn't return a token for this device.");
+  const old = storedToken();
+  if (old && old !== token) await api.post('/notifications/push/unsubscribe', { endpoint: old }).catch(() => {});
+  const res = await api.post('/notifications/push/subscribe', { provider: 'fcm', token, device_label: deviceLabel() });
+  storeToken(token);
+  return res.data;
 }
 
 async function subscribeFresh(reg, publicKey) {
@@ -104,6 +154,7 @@ export async function enablePush() {
   const reg = await swRegistration();
   if (!reg) throw new Error("Notifications need the secure (https) address of ShiftBoard.");
   const { data } = await api.get('/notifications/push');
+  if (data.provider === 'fcm') return subscribeFcm(reg, data);          // Phase 33.0.1
   const sub = await subscribeFresh(reg, data.public_key);
   return saveSubscription(sub);
 }
@@ -111,6 +162,14 @@ export async function enablePush() {
 /** Turn off this device (server + browser). Never throws. */
 export async function disablePush() {
   try {
+    const token = storedToken();                                          // Phase 33.0.1: Firebase device
+    if (token) {
+      await api.post('/notifications/push/unsubscribe', { endpoint: token }).catch(() => {});
+      try {
+        await deleteToken(getMessaging(getApp(FCM_APP)));
+      } catch (e) { /* app not started on this page load: unsubscribing below is enough */ }
+      storeToken(null);
+    }
     const sub = await currentSubscription();
     if (!sub) return;
     await api.post('/notifications/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
@@ -129,7 +188,16 @@ export async function syncPush() {
     const existing = await reg.pushManager.getSubscription();
     if (!existing) return;                       // they never turned it on here (or turned it off)
     const { data } = await api.get('/notifications/push');
-    await saveSubscription(await subscribeFresh(reg, data.public_key));
+    // Phase 33.0.1: follows the server's route, so devices move to Firebase once it's set up (and back if it's removed)
+    if (data.provider === 'fcm') {
+      await subscribeFcm(reg, data);
+    } else {
+      if (storedToken()) {
+        await api.post('/notifications/push/unsubscribe', { endpoint: storedToken() }).catch(() => {});
+        storeToken(null);
+      }
+      await saveSubscription(await subscribeFresh(reg, data.public_key));
+    }
   } catch (e) {
     /* best effort */
   }

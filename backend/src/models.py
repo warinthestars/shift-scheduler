@@ -675,9 +675,10 @@ class PushSubscription(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    endpoint = Column(Text, nullable=False, unique=True)
-    p256dh = Column(String(200), nullable=False)
-    auth = Column(String(100), nullable=False)
+    endpoint = Column(Text, nullable=False, unique=True)                # Web Push URL, or the Firebase token (Phase 33.0.1)
+    p256dh = Column(String(200), nullable=True)                         # Web Push only
+    auth = Column(String(100), nullable=True)                           # Web Push only
+    provider = Column(String(10), nullable=False, default="webpush")    # Phase 33.0.1: webpush | fcm
     device_label = Column(String(120), nullable=True)                   # "iPhone", "Android · Chrome", ...
     last_success_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)

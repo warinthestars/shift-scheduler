@@ -1085,17 +1085,20 @@ class PushKeys(BaseModel):
 
 
 class PushSubscribeBody(BaseModel):
-    endpoint: str = Field(..., max_length=2000)
-    keys: PushKeys
+    provider: str = "webpush"                          # Phase 33.0.1: webpush | fcm
+    endpoint: Optional[str] = Field(None, max_length=2000)   # webpush
+    keys: Optional[PushKeys] = None                          # webpush
+    token: Optional[str] = Field(None, max_length=4096)      # fcm: from firebase getToken()
     device_label: Optional[str] = Field(None, max_length=120)
 
 
 class PushUnsubscribeBody(BaseModel):
-    endpoint: str = Field(..., max_length=2000)
+    endpoint: str = Field(..., max_length=4096)              # the Web Push URL, or the Firebase token
 
 
 class PushDevice(BaseModel):
     id: UUID
+    provider: str = "webpush"                          # Phase 33.0.1
     device_label: Optional[str] = None
     created_at: datetime
     last_success_at: Optional[datetime] = None
@@ -1105,6 +1108,9 @@ class PushDevice(BaseModel):
 class PushConfigResponse(BaseModel):
     public_key: str                          # VAPID application server key (base64url) for pushManager.subscribe
     devices: List[PushDevice] = []
+    provider: str = "webpush"                # Phase 33.0.1: the route new devices use (fcm when Firebase messaging is set up)
+    fcm_vapid_key: Optional[str] = None      # Phase 33.0.1: Firebase "Web Push certificate" key, for getToken()
+    fcm_config: Optional[dict] = None        # Phase 33.0.1: the public Firebase web config, for initializeApp()
 
 
 class PushTestResult(BaseModel):
@@ -1610,6 +1616,10 @@ class AdminSystem(BaseModel):
     email_provider: str = "console"
     email_from: str = ""
     email_ready: bool = False
+    push_route: str = "webpush"              # Phase 33.0.1: fcm | webpush (what new devices use)
+    push_firebase_missing: List[str] = []    # Phase 33.0.1: what Firebase messaging still needs
+    push_firebase_error: Optional[str] = None
+    push_devices: int = 0
     sms_provider: str = "off"
     sms_ready: bool = False
     firebase: str = "off"                    # real | mock | off

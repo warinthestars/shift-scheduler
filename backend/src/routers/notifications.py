@@ -22,6 +22,7 @@ from src.auth import get_current_user, normalize_role
 from src.services.notify import DEFAULT_PREFS, NEW_SHIFT_MODES, notify
 from src.services.messaging import email_available, sms_available, normalize_phone
 from src.services import webpush                                       # Phase 33
+from src.services import fcm                                           # Phase 33.0.1
 
 router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
 
@@ -200,15 +201,29 @@ async def _push_config(db: AsyncSession, user: User) -> PushConfigResponse:
     subs = (await db.execute(
         select(PushSubscription).where(PushSubscription.user_id == user.id).order_by(PushSubscription.created_at.asc())
     )).scalars().all()
+    client = fcm.client_config()                                             # Phase 33.0.1
     return PushConfigResponse(
         public_key=public_b64,
-        devices=[PushDevice(id=s.id, device_label=s.device_label, created_at=s.created_at,
+        devices=[PushDevice(id=s.id, provider=s.provider or "webpush", device_label=s.device_label, created_at=s.created_at,
                             last_success_at=s.last_success_at, last_error=s.last_error) for s in subs],
+        provider="fcm" if client else "webpush",
+        fcm_vapid_key=client["vapid_key"] if client else None,
+        fcm_config=client["config"] if client else None,
     )
 
 
-def _check_subscription(body: PushSubscribeBody) -> None:
-    if not body.endpoint.startswith("https://"):
+def _check_subscription(body: PushSubscribeBody) -> dict:
+    """Validates the body and returns the row values (endpoint, p256dh, auth, provider). Raises 400."""
+    if body.provider == "fcm":                                                # Phase 33.0.1
+        token = (body.token or "").strip()
+        if not fcm.ready():
+            raise HTTPException(status_code=400, detail="Firebase messaging isn't set up on this server.")
+        if len(token) < 20 or any(c.isspace() for c in token):
+            raise HTTPException(status_code=400, detail="That device token isn't valid.")
+        return dict(endpoint=token, p256dh=None, auth=None, provider="fcm")
+    if body.provider != "webpush":
+        raise HTTPException(status_code=400, detail="Unknown push provider.")
+    if not body.endpoint or not body.endpoint.startswith("https://") or body.keys is None:
         raise HTTPException(status_code=400, detail="That push address isn't valid.")
     try:
         key = webpush.b64u_decode(body.keys.p256dh)
@@ -217,6 +232,7 @@ def _check_subscription(body: PushSubscribeBody) -> None:
         raise HTTPException(status_code=400, detail="That device's keys aren't valid.")
     if len(key) != 65 or key[0] != 4 or len(secret) != 16:
         raise HTTPException(status_code=400, detail="That device's keys aren't valid.")
+    return dict(endpoint=body.endpoint, p256dh=body.keys.p256dh, auth=body.keys.auth, provider="webpush")
 
 
 @router.get("/push", response_model=PushConfigResponse)
@@ -235,16 +251,16 @@ async def push_subscribe(
     db: AsyncSession = Depends(get_db),
 ):
     """Turn on notifications for this device. The same device signing in as someone else moves to them."""
-    _check_subscription(body)
+    row = _check_subscription(body)
+    label = (body.device_label or "").strip()[:120] or None
     try:
         await db.execute(
             pg_insert(PushSubscription)
-            .values(user_id=current_user.id, endpoint=body.endpoint, p256dh=body.keys.p256dh, auth=body.keys.auth,
-                    device_label=(body.device_label or "").strip()[:120] or None, created_at=datetime.now(timezone.utc))
+            .values(user_id=current_user.id, device_label=label, created_at=datetime.now(timezone.utc), **row)
             .on_conflict_do_update(
                 index_elements=["endpoint"],
-                set_=dict(user_id=current_user.id, p256dh=body.keys.p256dh, auth=body.keys.auth,
-                          device_label=(body.device_label or "").strip()[:120] or None, last_error=None),
+                set_=dict(user_id=current_user.id, p256dh=row["p256dh"], auth=row["auth"], provider=row["provider"],
+                          device_label=label, last_error=None),
             )
         )
         await db.commit()

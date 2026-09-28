@@ -91,6 +91,16 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
                 ? 'Console mode: texts are only written to the backend log.'
                 : sys.sms_ready ? `Sending with ${sys.sms_provider}` : `Not sending (provider "${sys.sms_provider}"). People only get emails and in-app notifications.`}
             </Row>
+            {/* Phase 33.0.1: which route phone / browser notifications take */}
+            <Row state={sys.push_route === 'fcm' ? 'ok' : 'warn'} label="Phone notifications">
+              {sys.push_route === 'fcm'
+                ? `Sending through Firebase Cloud Messaging · ${sys.push_devices} device${sys.push_devices === 1 ? '' : 's'} turned on.`
+                : `Sending with ShiftBoard's own Web Push (works without Firebase) · ${sys.push_devices} device${sys.push_devices === 1 ? '' : 's'} turned on.`}
+              {sys.push_route !== 'fcm' && (sys.push_firebase_missing || []).length > 0 && (
+                <span className="block text-slate-500">To use Firebase, add: {sys.push_firebase_missing.join('; ')}.</span>
+              )}
+              {sys.push_firebase_error && <span className="block text-amber-300">{sys.push_firebase_error}</span>}
+            </Row>
             <Row state={sys.firebase === 'real' ? 'ok' : 'warn'} label="Google / Firebase sign-in">
               {sys.firebase === 'real' ? 'On' : sys.firebase === 'mock' ? 'Mock mode (testing only)' : 'Off: people sign in with a ShiftBoard password only'}
             </Row>

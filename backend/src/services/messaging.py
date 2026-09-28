@@ -30,6 +30,12 @@ def sms_available() -> bool:
     return (settings.SMS_PROVIDER or "off").lower() in ("twilio", "console")
 
 
+def team_name(name: str) -> str:
+    """Phase 33.0.1: "The Hippodrome" -> "Hippodrome", so "the {team_name} team" never reads "the The ..."."""
+    name = (name or "").strip()
+    return name[4:] if name.lower().startswith("the ") and len(name) > 4 else name
+
+
 def absolute_link(link: Optional[str]) -> str:
     base = (settings.APP_BASE_URL or "").rstrip("/")
     if not link:

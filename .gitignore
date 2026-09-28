@@ -10,6 +10,9 @@
 !.secrets/.secrets.env.template
 *.pem
 *.key
+# Phase 33.0.1: Firebase service-account keys, wherever they get saved
+*service_account*.json
+*firebase-adminsdk*.json
 
 # Dependencies & Package Managers
 node_modules/

@@ -131,7 +131,7 @@ export default function PushDeviceCard({ pushEnabled, onPushEnabled }) {
             <div key={d.id} className="flex items-center gap-2 text-xs text-slate-300">
               <Smartphone className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
               <span className="flex-1 min-w-0 truncate">
-                {d.device_label || 'Device'} <span className="text-slate-500">· added {fmtDay(d.created_at)}</span>
+                {d.device_label || 'Device'} <span className="text-slate-500">· added {fmtDay(d.created_at)}{d.provider === 'fcm' ? ' · via Firebase' : ''}</span>
                 {d.last_error && <span className="text-amber-300"> · last try failed</span>}
               </span>
               <button type="button" onClick={() => remove(d.id)} disabled={busy} title="Remove this device"

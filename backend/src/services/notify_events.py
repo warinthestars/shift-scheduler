@@ -24,7 +24,8 @@ from src.database import AsyncSessionLocal
 from src.models import (
     Shift, ShiftEvent, ShiftRequest, ShiftTransfer, User, Venue, VenueManager, VenueLocation, ShiftOffer,
 )
-from src.services.notify import notify_in
+from src.services.notify import notify_in, deliver_soon
+from src.services.messaging import team_name                    # Phase 33.0.1
 from src.services.team import _team_filter
 
 logger = logging.getLogger("shiftboard.notify_events")
@@ -103,6 +104,7 @@ async def _run(label: str, fn, *args) -> None:
         async with AsyncSessionLocal() as db:
             await fn(db, *args)
             await db.commit()
+        deliver_soon()       # Phase 33.0.1: push / email / text go out now, not at the next minute tick
     except Exception:
         logger.exception(f"notification hook '{label}' failed")
 
@@ -510,7 +512,7 @@ async def _team_added(db: AsyncSession, venue_id, worker_id) -> None:
         return
     await notify_in(
         db, [worker_id], "team_added",
-        f"You're on the {venue.name} team",
+        f"You're on the {team_name(venue.name)} team",           # Phase 33.0.1: no "the The Hippodrome"
         f"A manager at {venue.name} added you to their team. You'll see their shifts first and get alerts when they post new ones.",
         "/worker", venue_id=venue_id, dedupe_key=f"team-added:{venue_id}:{worker_id}:{datetime.now(timezone.utc).date()}",
     )
