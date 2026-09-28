@@ -11,7 +11,7 @@ import ReliabilityBadge from './ReliabilityBadge';
 import PayLabel from './PayLabel';
 import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';
 
-const APPROVAL_LABEL = { venue_default: 'Venue default', auto: 'Instant booking', manual: 'Needs approval' };
+const APPROVAL_LABEL = { venue_default: 'Venue setting', auto: 'Book instantly', manual: 'Needs approval' };
 const SOURCE_LABEL = { manager_assign: 'Assigned by manager', offer: 'Accepted an offer' };   // Phase 29
 const OFFER_CHIP = {
   pending: { label: 'Waiting', cls: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30' },
@@ -128,7 +128,7 @@ export default function EventRosterModal({
                   {pos.hide_rate && <span className="inline-flex items-center gap-1 text-[10px] text-slate-400"><EyeOff className="w-3 h-3" /> hidden from workers</span>}
                   <TipBadge shift={pos} />
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
-                    {APPROVAL_LABEL[pos.approval_mode] || 'Venue default'}
+                    {APPROVAL_LABEL[pos.approval_mode] || 'Venue setting'}
                   </span>
                   <span className={`text-xs font-semibold ${isFull ? 'text-emerald-400' : 'text-slate-300'}`}>{pos.assigned.length} / {pos.capacity} filled</span>
                 </div>

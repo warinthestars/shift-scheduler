@@ -15,6 +15,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import TimesheetModal from '../components/TimesheetModal';
 import TeamModal from '../components/TeamModal';
 import ReviewModal from '../components/ReviewModal';
+import DownloadHoursModal from '../components/manager/DownloadHoursModal';   // Phase 33.1
 import ActivityFeed from '../components/ActivityFeed';
 import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
 import { WorkerProfileModal } from '../components/WorkerProfilePanel';
@@ -49,7 +50,7 @@ export default function VenueManagerDashboard() {
   const [venueDetails, setVenueDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
-  const [exportingCSV, setExportingCSV] = useState(false);
+  const [showDownload, setShowDownload] = useState(false);   // Phase 33.1: Download hours (pick a date range)
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [notification, setNotification] = useState(null);
 
@@ -119,7 +120,7 @@ export default function VenueManagerDashboard() {
       console.error('Failed to load venue manager data:', err);
       setNotification({
         type: 'error',
-        message: 'Could not load venue shifts, approval queue, or transfers from backend.',
+        message: "Couldn't load your shifts and requests. Check your connection and refresh.",
       });
     } finally {
       setLoading(false);
@@ -197,7 +198,7 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to approve request.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't approve the request. Try again." });
     } finally {
       setActionLoading(null);
     }
@@ -212,7 +213,7 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to deny request.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't deny the request. Try again." });
     } finally {
       setActionLoading(null);
     }
@@ -228,7 +229,7 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to approve the hand-off.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't approve the hand-off. Try again." });
     } finally {
       setActionLoading(null);
     }
@@ -243,35 +244,13 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to deny the hand-off.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't deny the hand-off. Try again." });
     } finally {
       setActionLoading(null);
     }
   };
 
-  // Phase 19: Hour Tracking & Payroll CSV Export
-  const exportPayroll = async () => {
-    if (!currentVenueId) return;
-    try {
-      setExportingCSV(true);
-      const response = await api.get(`/venues/${currentVenueId}/payroll/export`, { responseType: 'blob' });
-      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', 'payroll.csv');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      setNotification({ type: 'success', message: 'Payroll CSV downloaded.' });
-    } catch (err) {
-      console.error('Error exporting payroll CSV:', err);
-      setNotification({ type: 'error', message: 'Failed to download payroll CSV.' });
-    } finally {
-      setExportingCSV(false);
-    }
-  };
+
 
   const handleManagerVenueChange = (e) => {
     const newId = e.target.value;
@@ -391,7 +370,7 @@ export default function VenueManagerDashboard() {
           <Building2 className="w-10 h-10 text-amber-400 mx-auto mb-3" />
           <h1 className="text-lg font-bold text-white mb-1">No venue assigned yet</h1>
           <p className="text-sm text-slate-400">
-            Your account is a Venue Manager but isn't linked to a venue. Ask a platform admin to assign you one in the Admin Panel.
+            You're a manager, but you haven't been added to a venue yet. Ask a ShiftBoard admin to add you.
           </p>
         </div>
       </div>
@@ -415,7 +394,7 @@ export default function VenueManagerDashboard() {
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-xl sm:text-2xl font-bold text-white truncate">{venueDetails?.name || 'Venue'}</h1>
                 <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  {isPlatformAdmin ? 'Platform admin' : 'Venue manager'}
+                  {isPlatformAdmin ? 'Admin' : 'Manager'}
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5 truncate">{venueDetails?.address || ''}</p>
@@ -439,7 +418,7 @@ export default function VenueManagerDashboard() {
               onClick={() => setEventForm({ mode: 'create' })}
               className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
             >
-              <Plus className="w-4 h-4" /> Post a Shift
+              <Plus className="w-4 h-4" /> Post a shift
             </button>
             <button type="button" onClick={openTemplates} disabled={!venueDetails} className={headerBtn}>
               <LayoutTemplate className="w-4 h-4 text-indigo-300" /> Templates
@@ -450,8 +429,8 @@ export default function VenueManagerDashboard() {
             <button type="button" onClick={() => { setSettingsTab('details'); setShowVenueSettings(true); }} disabled={!venueDetails} className={headerBtn}>
               <Settings className="w-4 h-4 text-amber-400" /> Settings
             </button>
-            <button type="button" onClick={exportPayroll} disabled={exportingCSV || !currentVenueId} className={headerBtn}>
-              <Download className="w-4 h-4 text-emerald-400" /> {exportingCSV ? 'Downloading…' : 'Payroll CSV'}
+            <button type="button" onClick={() => setShowDownload(true)} disabled={!currentVenueId} className={headerBtn}>
+              <Download className="w-4 h-4 text-emerald-400" /> Download hours
             </button>
             {currentVenueId && (
               <Link to={`/venues/${currentVenueId}`} className={headerBtn}>
@@ -621,6 +600,16 @@ export default function VenueManagerDashboard() {
           shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.role_type})`}
           currentUserRole={user?.role}
           onClose={() => setActiveDiscussionShift(null)}
+        />
+      )}
+
+      {showDownload && currentVenueId && (
+        <DownloadHoursModal
+          venueId={currentVenueId}
+          venueName={venueDetails?.name}
+          onClose={() => setShowDownload(false)}
+          onDone={(message) => setNotification({ type: 'success', message })}
+          onError={(message) => setNotification({ type: 'error', message })}
         />
       )}
 

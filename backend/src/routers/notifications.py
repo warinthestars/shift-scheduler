@@ -143,7 +143,7 @@ async def update_preferences(
         try:
             ZoneInfo(data["timezone"])
         except Exception:
-            raise HTTPException(status_code=400, detail=f"Unknown timezone '{data['timezone']}'.")
+            raise HTTPException(status_code=400, detail="Pick a time zone from the list.")
     phone = data.pop("phone", None)
     clear_quiet = data.pop("clear_quiet_hours", False)
     discoverable = data.pop("discoverable", None)                      # Phase 29.1
@@ -217,21 +217,21 @@ def _check_subscription(body: PushSubscribeBody) -> dict:
     if body.provider == "fcm":                                                # Phase 33.0.1
         token = (body.token or "").strip()
         if not fcm.ready():
-            raise HTTPException(status_code=400, detail="Firebase messaging isn't set up on this server.")
+            raise HTTPException(status_code=400, detail="Phone notifications aren't available right now.")
         if len(token) < 20 or any(c.isspace() for c in token):
-            raise HTTPException(status_code=400, detail="That device token isn't valid.")
+            raise HTTPException(status_code=400, detail="Couldn't set up this device. Turn notifications off and on again.")
         return dict(endpoint=token, p256dh=None, auth=None, provider="fcm")
     if body.provider != "webpush":
-        raise HTTPException(status_code=400, detail="Unknown push provider.")
+        raise HTTPException(status_code=400, detail="Couldn't set up this device. Turn notifications off and on again.")
     if not body.endpoint or not body.endpoint.startswith("https://") or body.keys is None:
-        raise HTTPException(status_code=400, detail="That push address isn't valid.")
+        raise HTTPException(status_code=400, detail="Couldn't set up this device. Turn notifications off and on again.")
     try:
         key = webpush.b64u_decode(body.keys.p256dh)
         secret = webpush.b64u_decode(body.keys.auth)
     except Exception:
-        raise HTTPException(status_code=400, detail="That device's keys aren't valid.")
+        raise HTTPException(status_code=400, detail="Couldn't set up this device. Turn notifications off and on again.")
     if len(key) != 65 or key[0] != 4 or len(secret) != 16:
-        raise HTTPException(status_code=400, detail="That device's keys aren't valid.")
+        raise HTTPException(status_code=400, detail="Couldn't set up this device. Turn notifications off and on again.")
     return dict(endpoint=body.endpoint, p256dh=body.keys.p256dh, auth=body.keys.auth, provider="webpush")
 
 
@@ -323,4 +323,13 @@ async def push_test(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not send a test: {e}")
-    return PushTestResult(reached=reached, error=None if reached else err)
+    return PushTestResult(reached=reached, error=None if reached else _friendly_push_error(err))
+
+
+def _friendly_push_error(err: Optional[str]) -> str:
+    """Phase 33.1: what the person sees. The technical reason stays on the device row for admins."""
+    if not err or err == "No devices turned on":
+        return "No devices have notifications turned on."
+    if "isn't set up" in err:
+        return "Phone notifications aren't available right now."
+    return "This device didn't accept the test. Turn notifications off and on again here."

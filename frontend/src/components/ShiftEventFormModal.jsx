@@ -10,8 +10,8 @@ import { zonedLocalToUtcIso, utcToZonedLocalInput } from '../utils/venueTime';
 const CUSTOM = '__custom__';
 
 const APPROVAL_OPTIONS = [
-  { value: 'venue_default', label: 'Venue default' },
-  { value: 'auto', label: 'Instant booking' },
+  { value: 'venue_default', label: 'Use venue setting' },
+  { value: 'auto', label: 'Book instantly' },
   { value: 'manual', label: 'Needs my approval' },
 ];
 const POLICY_TEXT = {
@@ -578,7 +578,7 @@ export default function ShiftEventFormModal({
               <div>
                 <label className={labelCls}>Clock-in location check</label>
                 <select value={geofenceMode} onChange={(e) => setGeofenceMode(e.target.value)} className={inputCls}>
-                  <option value="venue_default">Venue default ({venueGeoOn ? 'on' : 'off'})</option>
+                  <option value="venue_default">Use venue setting ({venueGeoOn ? 'on' : 'off'})</option>
                   <option value="on">On for this event</option>
                   <option value="off">Off for this event</option>
                 </select>
@@ -663,7 +663,7 @@ export default function ShiftEventFormModal({
               <p className="text-[11px] text-slate-500 flex items-start gap-1">
                 <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                 <span>
-                  Venue default means {POLICY_TEXT[venue?.approval_policy] || POLICY_TEXT.team_auto}. You can also set each position on the right.
+                  “Use venue setting” means {POLICY_TEXT[venue?.approval_policy] || POLICY_TEXT.team_auto}. You can also set each position on the right.
                 </span>
               </p>
             </div>
@@ -778,7 +778,7 @@ export default function ShiftEventFormModal({
                   {pos && (
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                       <span>
-                        Venue default: {payText(pos.default_rate, pos.default_rate_max)}
+                        Usual pay: {payText(pos.default_rate, pos.default_rate_max)}
                         {tipsText(pos) ? ` · ${tipsText(pos)}` : ''}
                         {pos.hide_rate ? ' · pay hidden' : ''}
                       </span>

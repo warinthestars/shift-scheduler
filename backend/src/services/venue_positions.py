@@ -62,10 +62,10 @@ def clean_venue_payload(data: dict) -> dict:
         try:
             ZoneInfo(data["timezone"])
         except Exception:
-            raise HTTPException(status_code=400, detail=f"Unknown timezone '{data['timezone']}'.")
+            raise HTTPException(status_code=400, detail="Pick a time zone from the list.")
 
     if "approval_policy" in data and data["approval_policy"] not in VALID_APPROVAL_POLICIES:
-        raise HTTPException(status_code=400, detail="Approval policy must be manual, team_auto, or everyone_auto.")
+        raise HTTPException(status_code=400, detail="Choose how shift requests are approved.")
 
     if "lat" in data and not (-90 <= float(data["lat"]) <= 90):
         raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90.")
@@ -75,7 +75,7 @@ def clean_venue_payload(data: dict) -> dict:
         raise HTTPException(status_code=400, detail="Clock-in radius must be between 25 and 5000 meters.")
     # Phase 27: clock-in settings
     if "geofence_buffer_meters" in data and not (0 <= int(data["geofence_buffer_meters"]) <= 2000):
-        raise HTTPException(status_code=400, detail="Geofence buffer must be between 0 and 2000 meters.")
+        raise HTTPException(status_code=400, detail="Extra distance allowed must be between 0 and 2000 meters.")
     if "clock_in_early_minutes" in data and not (0 <= int(data["clock_in_early_minutes"]) <= 240):
         raise HTTPException(status_code=400, detail="Early clock-in must be between 0 and 240 minutes.")
     if "auto_clock_out_hours" in data and not (1 <= int(data["auto_clock_out_hours"]) <= 12):

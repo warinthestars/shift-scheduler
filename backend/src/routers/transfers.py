@@ -35,13 +35,13 @@ async def propose_shift_transfer(
     if transfer_in.to_worker_id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot transfer a shift to yourself."
+            detail="You can't hand a shift to yourself."
         )
 
     # 1. Verify target worker exists
     to_worker = await db.scalar(select(User).where(User.id == transfer_in.to_worker_id))
     if not to_worker:
-        raise HTTPException(status_code=404, detail="Target worker not found.")
+        raise HTTPException(status_code=404, detail="We couldn't find that teammate.")
 
     # 2. Verify shift exists
     shift = await db.scalar(
@@ -83,7 +83,7 @@ async def propose_shift_transfer(
     if existing_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A transfer request for this shift is already in progress."
+            detail="You've already sent a hand-off for this shift. Withdraw it first to pick someone else."
         )
 
     # 5. Check if target worker is already booked for this slot
@@ -149,12 +149,12 @@ async def respond_to_shift_transfer(
     )
     transfer = res.scalar_one_or_none()
     if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer offer not found.")
+        raise HTTPException(status_code=404, detail="This hand-off is no longer available.")
 
     if transfer.to_worker_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the target worker can respond to this transfer offer."
+            detail="This hand-off was sent to someone else."
         )
 
     action = body.action.lower().strip()
@@ -162,7 +162,7 @@ async def respond_to_shift_transfer(
         if transfer.status != "pending_worker_acceptance":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot accept transfer in '{transfer.status}' status."
+                detail="This hand-off is already settled."
             )
         shift = transfer.shift
         await check_double_booking(
@@ -176,7 +176,7 @@ async def respond_to_shift_transfer(
     elif action in ("decline", "reject"):
         transfer.status = "declined"
     else:
-        raise HTTPException(status_code=400, detail="Action must be 'accept' or 'decline'.")
+        raise HTTPException(status_code=400, detail="Something went wrong. Refresh the page and try again.")
 
     await db.commit()
     await db.refresh(transfer)
@@ -215,7 +215,7 @@ async def reject_shift_transfer(
     )
     transfer = res.scalar_one_or_none()
     if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found.")
+        raise HTTPException(status_code=404, detail="This hand-off is no longer available.")
 
     user_role = normalize_role(current_user.role)
     is_manager = False
@@ -243,7 +243,7 @@ async def reject_shift_transfer(
     else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to reject this transfer."
+            detail="You can't change this hand-off."
         )
 
     await db.commit()
@@ -273,7 +273,7 @@ async def manager_review_shift_transfer(
     )
     transfer = res.scalar_one_or_none()
     if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found.")
+        raise HTTPException(status_code=404, detail="This hand-off is no longer available.")
 
     # Uses verify_venue_access dependency logic
     await verify_venue_access(transfer.shift.venue_id, current_user, db)
@@ -336,7 +336,7 @@ async def manager_review_shift_transfer(
     elif action in ("deny", "reject"):
         transfer.status = "denied"
     else:
-        raise HTTPException(status_code=400, detail="Action must be 'approve' or 'deny'.")
+        raise HTTPException(status_code=400, detail="Something went wrong. Refresh the page and try again.")
 
     await db.commit()
     await db.refresh(transfer)
@@ -419,7 +419,7 @@ async def get_venue_pending_transfers(
         if not mgr:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized for this venue."
+                detail="You don't manage this venue."
             )
 
     res = await db.execute(

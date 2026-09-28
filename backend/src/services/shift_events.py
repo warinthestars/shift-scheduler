@@ -76,7 +76,7 @@ def _validate_position(p: EventPositionInput) -> None:
         raise HTTPException(status_code=400, detail=f"{name}: the top of the pay range can't be lower than the bottom.")
     mode = (p.approval_mode or "venue_default").lower()
     if mode not in VALID_APPROVAL_MODES:
-        raise HTTPException(status_code=400, detail=f"{name}: approval must be venue_default, auto, or manual.")
+        raise HTTPException(status_code=400, detail=f"{name}: choose how requests are approved.")
 
 
 def _apply_position(shift: Shift, p: EventPositionInput, event: ShiftEvent, track_changes: bool = False) -> None:

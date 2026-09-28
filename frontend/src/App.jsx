@@ -12,6 +12,7 @@ import VenuesDirectory from './pages/VenuesDirectory';
 import VenueProfile from './pages/VenueProfile';
 import JoinPage from './pages/JoinPage';
 import ProfilePage from './pages/ProfilePage';
+import EarningsPage from './pages/EarningsPage';   // Phase 33.1
 
 function HomeRedirect() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -107,6 +108,18 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
                   <Navbar />
                   <VenueProfile />
+                  <WorkerTabBar />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Phase 33.1: a worker's own hours & pay */}
+            <Route
+              path="/earnings"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'platform_admin']}>
+                  <Navbar />
+                  <EarningsPage />
                   <WorkerTabBar />
                 </ProtectedRoute>
               }

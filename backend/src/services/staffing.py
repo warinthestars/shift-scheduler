@@ -129,7 +129,7 @@ async def _book_locked(
                             else f"{who} {HISTORY_MESSAGES[st]}, so they can't be booked on it again."),
                 )
             if st not in REASSIGNABLE_STATUSES and st not in PENDING_STATUSES:
-                raise HTTPException(status_code=400, detail=f"Already on this position (status: {st}).")
+                raise HTTPException(status_code=400, detail="They're already on this position.")
 
     # Phase 29.4: booking back someone who dropped this event needs the manager's reason
     # (approving their own "ask to come back" request is fine: they already gave one)

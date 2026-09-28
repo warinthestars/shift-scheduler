@@ -132,7 +132,7 @@ export default function LocationFields({ value, onChange, venueRadius = 150, com
             <input value={value.lng} onChange={set('lng')} className={inputCls} />
           </div>
           <div>
-            <label className={labelCls}>Radius (m)</label>
+            <label className={labelCls}>Clock-in area (meters)</label>
             <input
               type="number"
               min="25"

@@ -53,11 +53,11 @@ function friendlyError(err, fallback) {
     case 'auth/invalid-email':
       return 'Enter a valid email address.';
     case 'auth/operation-not-allowed':
-      return 'This sign-in method is turned off in Firebase.';
+      return "This sign-in option isn't available right now. Try another one.";
     case 'auth/account-exists-with-different-credential':
       return 'You already signed up with a different method for this email. Use that method instead.';
     case 'auth/unauthorized-domain':
-      return 'This domain is not authorized in Firebase. Add it under Authentication → Settings → Authorized domains.';
+      return "Sign-in with this option isn't set up for this web address yet. (Admins: add it in Firebase → Authentication → Settings → Authorized domains.)";
     case 'auth/popup-blocked':
       return 'Your browser blocked the sign-in popup. Allow popups for this site and try again.';
     case 'auth/too-many-requests':
@@ -272,7 +272,7 @@ export default function LoginPage() {
       const userSession = await loginWithGoogleMock();
       navigateToRoleRoute(userSession);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Google Mock Auth failed.');
+      setError(err.response?.data?.detail || "Google sign-in didn't work. Try again.");
     } finally {
       setSubmitting(false);
     }
@@ -299,7 +299,7 @@ export default function LoginPage() {
         <h2 className="text-3xl font-extrabold tracking-tight text-white">
           Shift<span className="text-emerald-400">Board</span>
         </h2>
-        <p className="mt-2 text-sm text-slate-400">Hospitality Call-Board & Shift Scheduling Platform</p>
+        <p className="mt-2 text-sm text-slate-400">Pick up shifts. Fill your staff.</p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
@@ -311,13 +311,13 @@ export default function LoginPage() {
         <div className="bg-slate-900 py-8 px-6 shadow-2xl rounded-2xl border border-slate-800 sm:px-10">
           {mode === 'signin' && fbStatus.show_demo_logins && (
             <div className="mb-6 p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 text-xs">
-              <div className="font-semibold text-slate-300 mb-2">⚡ Quick Demo Credentials:</div>
+              <div className="font-semibold text-slate-300 mb-2">⚡ Demo accounts:</div>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => fillCredentials('demo_admin@shiftboard.com', 'SuperSecretDemo123!')}
                   className="px-2 py-1.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/50 text-indigo-300 font-medium transition text-left flex items-center space-x-1"
-                  title="Super Admin (platform_admin)"
+                  title="Demo admin"
                 >
                   <Shield className="w-3.5 h-3.5 flex-shrink-0" />
                   <span className="truncate">Admin</span>
@@ -326,7 +326,7 @@ export default function LoginPage() {
                   type="button"
                   onClick={() => fillCredentials('demo_manager@shiftboard.com', 'DemoManager123!')}
                   className="px-2 py-1.5 rounded-lg bg-teal-950/80 hover:bg-teal-900 border border-teal-700/50 text-teal-300 font-medium transition text-left flex items-center space-x-1"
-                  title="Venue Manager (venue_manager)"
+                  title="Demo manager"
                 >
                   <Building2 className="w-3.5 h-3.5 flex-shrink-0" />
                   <span className="truncate">Manager</span>
@@ -335,7 +335,7 @@ export default function LoginPage() {
                   type="button"
                   onClick={() => fillCredentials('demo_worker@shiftboard.com', 'DemoWorker123!')}
                   className="px-2 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/50 text-emerald-300 font-medium transition text-left flex items-center space-x-1"
-                  title="Demo Worker (worker)"
+                  title="Demo worker"
                 >
                   <UserCheck className="w-3.5 h-3.5 flex-shrink-0" />
                   <span className="truncate">Worker</span>
@@ -349,7 +349,7 @@ export default function LoginPage() {
           {mode === 'register' && (
             <div className="mb-4 p-3 bg-slate-800/60 border border-slate-700/60 rounded-xl text-slate-300 text-xs flex items-start space-x-2">
               <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-slate-400" />
-              <span>New accounts start as Workers. Venue manager and admin accounts are set up by an administrator.</span>
+              <span>New accounts are for workers. Manager accounts are set up for you by ShiftBoard or your venue.</span>
             </div>
           )}
 

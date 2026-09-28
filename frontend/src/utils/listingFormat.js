@@ -11,8 +11,8 @@ export const ACTIVE_STATUSES = [...PENDING_STATUSES, ...BOOKED_STATUSES, 'comple
 export const STATUS_LABELS = {
   pending: 'Waiting for approval',
   pending_manager_approval: 'Waiting for approval',
-  approved: 'Confirmed',
-  confirmed: 'Confirmed',
+  approved: 'Booked',                         // Phase 33.1: "Booked" everywhere (was "Confirmed")
+  confirmed: 'Booked',
   checked_in: 'Clocked in',
   completed: 'Completed',
   rejected: 'Not selected',
@@ -23,6 +23,9 @@ export const STATUS_LABELS = {
   no_show: 'Marked no-show',
   withdrawn: 'Withdrawn',
 };
+
+/** Phase 33.1: a status in plain words. Never shows a raw code: anything unknown reads "Updated". */
+export const statusLabel = (status) => STATUS_LABELS[String(status || '').toLowerCase()] || 'Updated';
 
 const money = (n) => {
   const v = Number(n);
@@ -198,7 +201,7 @@ export function whereOf(item) {
 /** "Distance / location" labels used on time sheets and chips. */
 export const GEO_LABELS = {
   on_site: 'On site',
-  outside_geofence: 'Outside geofence',
+  outside_geofence: 'Outside the area',
   not_checked: 'No location check',
   manager: 'Manager entry',
   auto: 'Auto-closed',

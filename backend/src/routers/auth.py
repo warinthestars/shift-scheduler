@@ -83,7 +83,7 @@ async def register(request: UserCreate, db: AsyncSession = Depends(get_db)):
     - Only available when real Firebase is NOT configured; otherwise sign-up goes through Firebase.
     """
     if not settings.ALLOW_SELF_REGISTRATION:
-        raise HTTPException(status_code=403, detail="Self-registration is disabled. Ask an administrator to create your account.")
+        raise HTTPException(status_code=403, detail="New sign-ups are closed right now. Ask your venue for an invite link.")
     if _get_load_config()() is not None and not settings.USE_MOCK_FIREBASE:
         raise HTTPException(status_code=409, detail="Use the sign-up options on the login page.")
 
@@ -93,7 +93,7 @@ async def register(request: UserCreate, db: AsyncSession = Depends(get_db)):
 
     existing = await db.scalar(select(User).where(func.lower(User.email) == email))
     if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A user with this email already exists")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="There's already an account with this email. Sign in instead.")
 
     try:
         user = User(
@@ -115,13 +115,13 @@ async def register(request: UserCreate, db: AsyncSession = Depends(get_db)):
         await db.refresh(user)
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create account: {str(e)}")
+        raise HTTPException(status_code=500, detail="Couldn't create your account. Please try again.")
 
     try:
         token = create_access_token(data={"sub": str(user.id), "role": "worker", "venue_id": None})
     except Exception as e:
         print(f"JWT Generation Error: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server configuration error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sign-in is temporarily unavailable. Please try again soon.")
 
     return TokenResponse(access_token=token, token_type="bearer", user=_firebase_user_response(user, None))
 
@@ -153,7 +153,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
         )
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
 
     user_role_str = normalize_role(user.role)
     venue_id_str = str(user.managed_venues[0].venue_id) if user.managed_venues and len(user.managed_venues) > 0 else None
@@ -169,7 +169,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
         print(f"JWT Generation Error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server configuration error."
+            detail="Sign-in is temporarily unavailable. Please try again soon."
         )
 
     user_resp = UserResponse.model_validate(user)
@@ -216,7 +216,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
     """
     token = (request.firebase_token or "").strip()
     if not token:
-        raise HTTPException(status_code=400, detail="Missing Firebase token.")
+        raise HTTPException(status_code=400, detail="Sign-in didn't finish. Please try again.")
 
     if settings.USE_MOCK_FIREBASE and token.startswith("mock-firebase-"):
         user = await get_or_create_mock_firebase_user(
@@ -230,7 +230,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
         if not web_cfg:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Firebase sign-in is not configured on this server."
+                detail="This sign-in option isn't available right now."
             )
 
         try:
@@ -238,7 +238,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Firebase token verification failed: {str(e)}"
+                detail="Sign-in didn't work. Please try again."
             )
 
         firebase_uid = claims["sub"]
@@ -275,7 +275,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
                     if not settings.ALLOW_SELF_REGISTRATION and not always_admin:
                         raise HTTPException(
                             status_code=403,
-                            detail="Self-registration is disabled. Ask an administrator to create your account."
+                            detail="New sign-ups are closed right now. Ask your venue for an invite link."
                         )
                     if not email_verified:
                         raise HTTPException(
@@ -323,10 +323,10 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
             raise
         except Exception as e:
             await db.rollback()
-            raise HTTPException(status_code=500, detail=f"Failed to provision user: {str(e)}")
+            raise HTTPException(status_code=500, detail="Couldn't finish setting up your account. Please try again.")
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
 
     venue_id = await db.scalar(
         select(VenueManager.venue_id).where(VenueManager.user_id == user.id).limit(1)
@@ -343,7 +343,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
         print(f"JWT Generation Error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server configuration error."
+            detail="Sign-in is temporarily unavailable. Please try again soon."
         )
 
     return TokenResponse(

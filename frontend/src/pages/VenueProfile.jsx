@@ -12,14 +12,17 @@ import { fmtDate, fmtTimeRange } from '../utils/venueTime';
 import EventListingModal from '../components/EventListingModal';
 
 const MY_STATUS = {
-  pending: { label: 'Requested', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
-  pending_manager_approval: { label: 'Requested', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
-  approved: { label: "You're booked", cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
-  confirmed: { label: "You're booked", cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  pending: { label: 'Waiting for approval', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  pending_manager_approval: { label: 'Waiting for approval', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  approved: { label: 'Booked', cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  confirmed: { label: 'Booked', cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
   checked_in: { label: 'Clocked in', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/30' },
   completed: { label: 'Worked', cls: 'bg-slate-700/40 text-slate-300 border-slate-600/40' },
   rejected: { label: 'Not selected', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
-  dropped: { label: 'Released', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  dropped: { label: 'You dropped this', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  no_show: { label: 'Marked no-show', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/30' },        // Phase 33.1
+  removed: { label: 'Removed by manager', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  cancelled: { label: 'Cancelled by venue', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
   transferred: { label: 'Handed off', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
   withdrawn: { label: 'Withdrawn', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
 };

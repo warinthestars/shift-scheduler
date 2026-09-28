@@ -21,6 +21,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import HandoffsPanel from '../components/worker/HandoffsPanel';
 import ProfileNudge from '../components/worker/ProfileNudge';
 import AppNudge from '../components/AppNudge';   // Phase 33
+import EarningsCard from '../components/worker/EarningsCard';   // Phase 33.1
 import { PENDING_INVITE_KEY } from './JoinPage';
 import {
   dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
@@ -105,6 +106,7 @@ export default function WorkerDashboard() {
   const [transferShiftId, setTransferShiftId] = useState(null);
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [shiftToDrop, setShiftToDrop] = useState(null);
+  const [earningsKey, setEarningsKey] = useState(0);   // Phase 33.1: reload the hours card after clock-in / out
   const [clockOutAsk, setClockOutAsk] = useState(null);   // Phase 32.3: { shiftId, item, title } waiting for "Clock out?" confirm
   const [offers, setOffers] = useState([]);
   const [offerBusy, setOfferBusy] = useState(null);
@@ -202,6 +204,7 @@ export default function WorkerDashboard() {
       setActiveClockIns((prev) => new Set([...prev, shiftId]));
       flash(res.data?.geo_status === 'outside_geofence' ? 'info' : 'success', res.data?.message || 'Clocked in.');
       fetchWorkerData(false);
+      setEarningsKey((k) => k + 1);
     } catch (err) {
       flash('error', err.response?.data?.detail || err.message || 'Could not clock in.');
     } finally {
@@ -221,6 +224,7 @@ export default function WorkerDashboard() {
       });
       flash(res.data?.status === 'undone' ? 'info' : 'success', res.data?.message || 'Clocked out.');
       fetchWorkerData(false);
+      setEarningsKey((k) => k + 1);
     } catch (err) {
       flash('error', err.response?.data?.detail || 'Could not clock out.');
     } finally {
@@ -555,6 +559,7 @@ export default function WorkerDashboard() {
         {/* My shifts */}
         {activeTab === 'schedule' && (
           <div className="mt-2 space-y-6">
+            <EarningsCard refreshKey={earningsKey} />
             <WorkerOffers offers={offers} busyId={offerBusy} onAccept={(o) => handleOffer(o, 'accept')} onDecline={(o) => handleOffer(o, 'decline')} />
             <section className="space-y-3">
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-4">Coming up</h2>

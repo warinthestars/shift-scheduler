@@ -150,7 +150,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
               />
               {!prefs.email_available && (
                 <p className="text-[11px] text-amber-300 flex items-start gap-1">
-                  <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" /> Email sending isn't set up on this server yet, so emails are only logged.
+                  <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" /> Email isn't available yet. You'll still see everything in the bell.
                 </p>
               )}
             </div>
@@ -169,7 +169,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
                 body="Cancellations, removals, last-minute changes, 2-hour reminders and missed clock-ins. Nothing else."
               />
               {!prefs.sms_available && (
-                <p className="text-[11px] text-slate-500">Texts aren't set up on this server yet.</p>
+                <p className="text-[11px] text-slate-500">Texts aren't available yet.</p>
               )}
             </div>
           </div>

@@ -11,7 +11,7 @@ import PayLabel from './PayLabel';
 import TipBadge from './TipBadge';
 import { fmtLongDate, fmtTimeRange, fmtDate } from '../utils/venueTime';
 import {
-  hoursText, estPayText, mapsUrl, downloadIcs, STATUS_LABELS, PENDING_STATUSES, whereOf,
+  hoursText, estPayText, mapsUrl, downloadIcs, statusLabel, PENDING_STATUSES, whereOf,
 } from '../utils/listingFormat';
 
 // Statuses on a position that the server will refuse to re-open.
@@ -69,7 +69,7 @@ function InfoBlock({ icon: Icon, label, children }) {
  *   initial         optional listing object from the card list (shown instantly while loading)
  *   onClose()       close the modal
  *   onChanged(res)  called after a successful request / switch / withdraw (parent refreshes lists)
- *   onGoToSchedule() optional; shows a "Go to My Schedule" button when the worker is booked
+ *   onGoToSchedule() optional; shows a "Go to My shifts" button when the worker is booked
  */
 export default function EventListingModal({ eventId, initial = null, onClose, onChanged, onGoToSchedule }) {
   const [listing, setListing] = useState(initial);
@@ -254,7 +254,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
     if (onGoToSchedule) {
       primary = (
         <button type="button" onClick={onGoToSchedule} className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold">
-          Go to My Schedule
+          Go to My shifts
         </button>
       );
     }
@@ -381,7 +381,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
             <CheckCircle2 className="w-4 h-4" /> You're booked as {mine.role_type}
           </div>
           <p className="text-xs text-emerald-300/80 mt-1">
-            To change position, drop or hand off this shift from My Schedule first.
+            To change position, drop or hand off this shift from My shifts first.
             {bookedPosition && bookedPosition.hourly_rate !== null && (
               <> Pay: <PayLabel rate={bookedPosition.hourly_rate} rateMax={bookedPosition.hourly_rate_max} className="font-semibold" /></>
             )}
@@ -527,7 +527,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                       )}
                       {ps && (
                         <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
-                          {ps === 'dropped' ? 'You dropped this' : `You: ${STATUS_LABELS[ps] || ps}`}
+                          {ps === 'dropped' ? 'You dropped this' : `You: ${statusLabel(ps)}`}
                           {p.my_status_reason ? ` — ${p.my_status_reason}` : ''}
                         </p>
                       )}

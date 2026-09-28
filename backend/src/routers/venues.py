@@ -2,7 +2,7 @@ import csv
 import io
 from uuid import UUID
 from typing import List, Optional, Dict
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
@@ -461,7 +461,7 @@ async def add_worker_to_whitelist(
     w_res = await db.execute(select(User).where(User.id == wl_in.worker_id))
     worker = w_res.scalar_one_or_none()
     if not worker:
-        raise HTTPException(status_code=404, detail="Worker user not found")
+        raise HTTPException(status_code=404, detail="Person not found.")
 
     existing = await db.scalar(
         select(VenueWhitelist).where(
@@ -543,9 +543,36 @@ async def delete_venue(
                              f"Deleted venue {name}" + (f" and {te_count} time entries" if te_count else ""),
                              target_type="venue", target_id=venue_id)
 
+# Phase 33.1: CSV exports use the venue's local time (not UTC) and can be limited to a date range.
+def _local_str(dt, tz, fmt: str = "%Y-%m-%d %I:%M %p") -> str:
+    if dt is None:
+        return ""
+    dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    return dt.astimezone(tz).strftime(fmt)
+
+
+def _tz_label(tz) -> str:
+    return datetime.now(timezone.utc).astimezone(tz).strftime("%Z") or "venue time"
+
+
+def _slug(name) -> str:
+    import re
+    return (re.sub(r"[^a-z0-9]+", "-", (name or "venue").lower()).strip("-") or "venue")[:40]
+
+
+def _csv_range(start, end, tz):
+    if start is not None and end is not None and end < start:
+        raise HTTPException(status_code=400, detail="Pick an end date on or after the start date.")
+    lo = datetime.combine(start, datetime.min.time(), tzinfo=tz).astimezone(timezone.utc) if start else None
+    hi = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=tz).astimezone(timezone.utc) if end else None
+    return lo, hi
+
+
 @router.get("/{venue_id}/export-hours")
 async def export_venue_hours_csv(
     venue_id: UUID,
+    start: Optional[date] = Query(None, description="Phase 33.1: first day (venue time), optional"),
+    end: Optional[date] = Query(None, description="Phase 33.1: last day (venue time), optional"),
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
@@ -555,7 +582,9 @@ async def export_venue_hours_csv(
     Worker Name, Shift Date, Role, Clock In, Clock Out, Total Hours.
     Return a FastAPI StreamingResponse with media_type="text/csv" and a Content-Disposition header.
     """
-    await verify_venue_manager_access(venue_id, current_user, db)
+    venue = await verify_venue_manager_access(venue_id, current_user, db)
+    vtz = tz_of(venue.timezone)                                             # Phase 33.1: venue-local times
+    lo, hi = _csv_range(start, end, vtz)
 
     query = (
         select(TimeEntry, User, Shift)
@@ -564,19 +593,23 @@ async def export_venue_hours_csv(
         .where(Shift.venue_id == venue_id)
         .order_by(TimeEntry.clock_in_time.desc())
     )
+    if lo is not None:
+        query = query.where(TimeEntry.clock_in_time >= lo)
+    if hi is not None:
+        query = query.where(TimeEntry.clock_in_time < hi)
     result = await db.execute(query)
     records = result.all()
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Worker Name", "Shift Date", "Role", "Clock In", "Clock Out", "Total Hours"])
+    writer.writerow(["Name", "Shift date", "Position", f"Clock in ({_tz_label(vtz)})", f"Clock out ({_tz_label(vtz)})", "Hours"])
 
     for entry, worker, shift in records:
         worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
-        shift_date = shift.start_time.strftime("%Y-%m-%d") if shift.start_time else ""
+        shift_date = _local_str(shift.start_time, vtz, "%Y-%m-%d")
         role = shift.role_type or ""
-        clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
-        clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "In Progress"
+        clock_in = _local_str(entry.clock_in_time, vtz)
+        clock_out = _local_str(entry.clock_out_time, vtz) if entry.clock_out_time else "Still clocked in"
 
         if entry.clock_in_time and entry.clock_out_time:
             diff_seconds = (entry.clock_out_time - entry.clock_in_time).total_seconds()
@@ -597,6 +630,8 @@ async def export_venue_hours_csv(
 @router.get("/{venue_id}/payroll/export")
 async def export_venue_payroll_csv(
     venue_id: UUID,
+    start: Optional[date] = Query(None, description="Phase 33.1: first day (venue time), optional"),
+    end: Optional[date] = Query(None, description="Phase 33.1: last day (venue time), optional"),
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
@@ -605,8 +640,10 @@ async def export_venue_payroll_csv(
     Calculates hours worked for workers at this venue.
     Phase 27: adds work location, clock-in/out location check, late minutes and auto-closed flags.
     """
-    await verify_venue_manager_access(venue_id, current_user, db)
+    venue = await verify_venue_manager_access(venue_id, current_user, db)
     await auto_close_open_entries(db, venue_id=venue_id)
+    vtz = tz_of(venue.timezone)                                             # Phase 33.1: venue-local times
+    lo, hi = _csv_range(start, end, vtz)
 
     query = (
         select(TimeEntry, User, Shift, ShiftRequest)
@@ -619,14 +656,19 @@ async def export_venue_payroll_csv(
         .where(Shift.venue_id == venue_id)
         .order_by(TimeEntry.clock_in_time.desc())
     )
+    if lo is not None:
+        query = query.where(TimeEntry.clock_in_time >= lo)
+    if hi is not None:
+        query = query.where(TimeEntry.clock_in_time < hi)
     records = (await db.execute(query)).all()
 
     entry_ids = [r[0].id for r in records]
     edited_ids = set()
     if entry_ids:
         edited_ids = set((await db.execute(
-            select(distinct(TimeEntryEdit.time_entry_id))
+            select(TimeEntryEdit.time_entry_id)
             .where(TimeEntryEdit.time_entry_id.in_(entry_ids), TimeEntryEdit.action.in_(("edit", "add")))
+            .distinct()
         )).scalars().all())
 
     # Phase 27: where each event was held
@@ -638,8 +680,8 @@ async def export_venue_payroll_csv(
         )).all())
     locations = await load_locations(db, ev_loc.values())
     geo_label = {
-        "on_site": "On site", "outside_geofence": "Outside geofence", "not_checked": "Not checked",
-        "manager": "Manager entry", "auto": "Auto-closed",
+        "on_site": "On site", "outside_geofence": "Outside the area", "not_checked": "Not checked",
+        "manager": "Entered by a manager", "auto": "Clocked out automatically",
     }
 
     def geo_text(status_value, distance):
@@ -651,16 +693,17 @@ async def export_venue_payroll_csv(
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Worker Name", "Email", "Shift Title", "Role", "Date", "Work Location", "Clock In", "Clock Out", "Total Hours",
-        "Hourly Rate", "Gross Pay", "Tips Eligible", "Tip Pool", "Edited",
-        "Clock-In Location Check", "Clock-Out Location Check", "Late (min)", "Auto-Closed",
+        "Name", "Email", "Shift", "Position", "Date", "Work location",
+        f"Clock in ({_tz_label(vtz)})", f"Clock out ({_tz_label(vtz)})", "Hours",
+        "Hourly rate", "Pay before tips", "Gets tips", "Tip pool", "Time changed by a manager",
+        "Clock-in location", "Clock-out location", "Minutes late", "Clocked out automatically",
     ])
 
     for entry, worker, shift, req in records:
         worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
-        shift_date = shift.start_time.strftime("%Y-%m-%d") if shift.start_time else ""
-        clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
-        clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "Did not clock out"
+        shift_date = _local_str(shift.start_time, vtz, "%Y-%m-%d")
+        clock_in = _local_str(entry.clock_in_time, vtz)
+        clock_out = _local_str(entry.clock_out_time, vtz) if entry.clock_out_time else "Did not clock out"
         if req is not None and req.pay_rate is not None:
             rate = float(req.pay_rate)
         else:
@@ -688,7 +731,7 @@ async def export_venue_payroll_csv(
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=payroll.csv"}
+        headers={"Content-Disposition": f'attachment; filename="hours-and-pay-{_slug(venue.name)}.csv"'}
     )
 
 @router.get("/{venue_id}/workers", response_model=List[UserBrief])

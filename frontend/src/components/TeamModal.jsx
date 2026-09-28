@@ -680,7 +680,7 @@ function TeamLinkCard({ venueId, venueName, onMessage }) {
         {/localhost|127\.0\.0\.1/.test(link.url) && !/localhost|127\.0\.0\.1/.test(window.location.hostname) && (
           <p className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/40 rounded-lg p-2 flex gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            This link points at localhost, so it won't open on anyone's phone. Set APP_BASE_URL in the server's secrets file to your site address.
+            This link won't open on other people's phones yet. Ask your ShiftBoard admin to set the site's public address.
           </p>
         )}
         <div className="flex gap-2">
@@ -728,7 +728,7 @@ function ResultsTable({ result }) {
     <div className={`${cardCls} space-y-2`}>
       <p className="text-sm text-white">
         <strong>{result.invited}</strong> invited, <strong>{result.skipped}</strong> skipped.
-        {result.emailed > 0 && ` ${result.emailed} emailed${result.email_available ? '' : ' (email isn’t set up on this server, so they were only logged; copy the links instead)'}.`}
+        {result.emailed > 0 && ` ${result.emailed} emailed${result.email_available ? '' : ' (email isn’t available yet, so copy the links instead)'}.`}
         {result.texted > 0 && ` ${result.texted} texted.`}
       </p>
       <div className="max-h-64 overflow-y-auto divide-y divide-slate-800 text-xs">
@@ -846,7 +846,7 @@ function InviteTab({ venueId, venueName, positionOptions, onMessage }) {
       </form>
 
       <div className={`${cardCls} space-y-3`}>
-        <div className="text-sm font-bold text-white flex items-center gap-2"><Upload className="w-4 h-4 text-emerald-400" /> Import a list (CSV)</div>
+        <div className="text-sm font-bold text-white flex items-center gap-2"><Upload className="w-4 h-4 text-emerald-400" /> Import a spreadsheet (.csv)</div>
         <p className="text-xs text-slate-400">
           First row = column names: <code className="text-slate-200">name</code> (or <code className="text-slate-200">first_name</code>, <code className="text-slate-200">last_name</code>),{' '}
           <code className="text-slate-200">email</code>, <code className="text-slate-200">phone</code>, <code className="text-slate-200">positions</code> (separate several with ;).
@@ -972,7 +972,7 @@ function ManagersTab({ venueId, onMessage }) {
       <div className={`${cardCls} space-y-2`}>
         <div className="text-sm font-bold text-white flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-400" /> Managers of this venue</div>
         {managers.length === 0 && (
-          <p className="text-xs text-slate-500">No managers yet. Only platform admins can run this venue until you add one below.</p>
+          <p className="text-xs text-slate-500">No managers yet. Only ShiftBoard admins can run this venue until you add one below.</p>
         )}
         <div className="divide-y divide-slate-800">
           {managers.map((m) => (
@@ -1014,7 +1014,7 @@ function ManagersTab({ venueId, onMessage }) {
           </div>
           <p className="text-[11px] text-slate-500">
             If they already have a manager account, they're added to this venue. Otherwise a manager account is created with a temporary password.
-            Worker accounts can't be made managers here (ask a platform admin).
+            Worker accounts can't be made managers here (ask a ShiftBoard admin).
           </p>
           <button type="submit" className={btnPrimary} disabled={busy}>
             <UserCog className="w-4 h-4" /> {busy ? 'Saving…' : 'Add co-manager'}

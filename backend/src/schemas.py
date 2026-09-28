@@ -1946,6 +1946,61 @@ class MyProfileUpdate(BaseModel):
     emergency_contact_phone: Optional[str] = Field(None, max_length=30)
 
 
+
+# ------------------------------------------------------------------------------
+# Phase 33.1: a worker's own hours & pay
+# ------------------------------------------------------------------------------
+class EarningsShift(BaseModel):
+    entry_id: UUID
+    shift_id: UUID
+    request_id: Optional[UUID] = None
+    event_title: str
+    venue_id: UUID
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    role_type: str
+    clock_in_time: datetime
+    clock_out_time: Optional[datetime] = None
+    in_progress: bool = False                # still clocked in (counts 0 h until clock-out)
+    hours: float = 0
+    rate: float = 0
+    rate_custom: bool = False                # the manager set this person's rate for the shift
+    pay: float = 0                           # hours x rate, before tips and taxes
+    tips_eligible: bool = False
+    auto_closed: bool = False                # clocked out automatically
+    edited: bool = False                     # a manager changed the times
+
+
+class EarningsVenue(BaseModel):
+    venue_id: UUID
+    name: str
+    hours: float = 0
+    pay: float = 0
+    shifts: int = 0
+
+
+class EarningsUpcoming(BaseModel):
+    shifts: int = 0                          # booked, not started, inside the period
+    hours: float = 0
+    est_pay: float = 0
+
+
+class EarningsResponse(BaseModel):
+    period: str                              # week | last_week | month | last_month | custom
+    label: str                               # "This week"
+    start_date: date
+    end_date: date
+    timezone: str
+    total_hours: float = 0
+    total_pay: float = 0
+    shifts_worked: int = 0
+    in_progress: int = 0
+    any_tips: bool = False
+    venues: List[EarningsVenue] = []
+    shifts: List[EarningsShift] = []         # newest first
+    upcoming: EarningsUpcoming = EarningsUpcoming()
+
+
 WorkerProfile.model_rebuild()
 EventListing.model_rebuild()   # Phase 32.3: series is a list of EventListing
 MyProfile.model_rebuild()

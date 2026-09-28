@@ -214,7 +214,7 @@ async def request_position(
             if st in BLOCKED_MESSAGES:
                 raise HTTPException(status_code=400, detail=BLOCKED_MESSAGES[st])
             if st not in REREQUESTABLE_STATUSES:
-                raise HTTPException(status_code=400, detail=f"You already have this position (status: {st}).")
+                raise HTTPException(status_code=400, detail="You're already on this position.")
 
         # --- Capacity (checked under the lock) -------------------------------------------
         if shift_status != "OPEN" or (shift.spots_filled or 0) >= (shift.capacity or 1):
@@ -310,7 +310,7 @@ async def withdraw_request(db: AsyncSession, worker: User, request_id: UUID) -> 
         if (req.status or "").lower() not in PENDING_STATUSES:
             raise HTTPException(
                 status_code=400,
-                detail="Only requests that are still waiting for approval can be withdrawn. Booked shifts can be dropped or handed off from My Schedule.",
+                detail="Only requests that are still waiting for approval can be withdrawn. Booked shifts can be dropped or handed off from My shifts.",
             )
         req.status = "withdrawn"
         req.status_reason = None

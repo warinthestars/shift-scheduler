@@ -83,7 +83,7 @@ async def build_worker_calendar(
     range_start = as_utc(start) if start else now - DEFAULT_PAST
     range_end = as_utc(end) if end else now + DEFAULT_FUTURE
     if range_end <= range_start:
-        raise HTTPException(status_code=400, detail="end must be after start.")
+        raise HTTPException(status_code=400, detail="Pick an end date after the start date.")
     if range_end - range_start > MAX_SPAN:
         raise HTTPException(status_code=400, detail="Pick a range of 400 days or less.")
 

@@ -135,7 +135,7 @@ async def _for_request(db: AsyncSession, kind: str, request_id, actor_id, extra:
     name = person(worker)
     text = {
         "request_created": f"{name} requested {what}",
-        "instant_booked": f"{name} booked {what} (instant)",
+        "instant_booked": f"{name} booked {what} (no approval needed)",
         "request_approved": f"Approved {name} for {what}",
         "request_denied": f"Declined {name} for {what}",
         "request_withdrawn": f"{name} withdrew their request for {what}",

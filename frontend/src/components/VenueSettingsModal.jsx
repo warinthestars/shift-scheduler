@@ -407,7 +407,7 @@ export default function VenueSettingsModal({
                   <input value={form.lng} onChange={set('lng')} className={inputCls} />
                 </div>
                 <div>
-                  <label className={labelCls}>Radius (m)</label>
+                  <label className={labelCls}>Clock-in area (meters)</label>
                   <input type="number" min="25" max="5000" value={form.geofence_radius_meters} onChange={set('geofence_radius_meters')} className={inputCls} />
                 </div>
               </div>
@@ -431,10 +431,10 @@ export default function VenueSettingsModal({
               </label>
               {form.geofence_enabled && (
                 <div>
-                  <label className={labelCls}>Buffer outside the radius (m)</label>
+                  <label className={labelCls}>Extra distance allowed (meters)</label>
                   <input type="number" min="0" max="2000" value={form.geofence_buffer_meters} onChange={set('geofence_buffer_meters')} className={`${inputCls} w-32`} />
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Inside the radius: clocked in. Within the buffer: clocked in but flagged “Outside geofence” for you.
+                    Inside the area: clocked in. A little outside it (within the extra distance): clocked in, but flagged “Outside the area” for you.
                     Farther out: clock-in is blocked.
                   </p>
                 </div>

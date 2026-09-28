@@ -138,7 +138,7 @@ export default function PostedShiftsBoard({
         <div className="flex items-start gap-2">
           <CalendarIcon className="w-5 h-5 text-emerald-400 mt-0.5 flex-shrink-0" />
           <div className="min-w-0">
-            <h2 className="text-base font-bold text-white">Posted Shifts ({events.length})</h2>
+            <h2 className="text-base font-bold text-white">Posted shifts ({events.length})</h2>
             <p className="text-xs text-slate-400">
               Every event with its positions, staff and requests.
               {timeZone && <span className="text-slate-500"> Times in venue time ({timeZone}).</span>}

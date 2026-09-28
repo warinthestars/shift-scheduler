@@ -3,7 +3,7 @@ import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, St
 import PayLabel from './PayLabel';
 import { fmtTimeRange } from '../utils/venueTime';
 import {
-  hoursText, listingPayText, estPayText, STATUS_LABELS, PENDING_STATUSES, BOOKED_STATUSES, whereOf,
+  hoursText, listingPayText, estPayText, statusLabel, PENDING_STATUSES, BOOKED_STATUSES, whereOf,
 } from '../utils/listingFormat';
 
 const MAX_ROWS = 4;
@@ -30,7 +30,7 @@ export function MyRequestPill({ status, role }) {
     : waiting
     ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
     : 'bg-slate-800 text-slate-400 border-slate-700';
-  const text = booked ? `Booked · ${role}` : waiting ? `Requested · ${role}` : STATUS_LABELS[s] || s;
+  const text = booked ? `Booked · ${role}` : waiting ? `Waiting · ${role}` : statusLabel(s);
   return (
     <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border whitespace-nowrap ${cls}`}>
       {text}

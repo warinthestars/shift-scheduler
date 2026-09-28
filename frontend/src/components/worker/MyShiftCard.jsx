@@ -6,17 +6,17 @@ import {
 import PayLabel from '../PayLabel';
 import TipBadge from '../TipBadge';
 import { fmtTime, fmtTimeRange, fmtShortDate } from '../../utils/venueTime';
-import { STATUS_LABELS, PENDING_STATUSES } from '../../utils/listingFormat';
+import { statusLabel, PENDING_STATUSES } from '../../utils/listingFormat';
 
 const SOURCE_LABELS = {
   manager_assign: 'Assigned by your manager',
   manager_manual: 'Approved by your manager',
   offer: 'You accepted an offer',
   transfer: 'Handed to you by a teammate',
-  venue_whitelist: 'Booked instantly (team)',
-  venue_everyone_auto: 'Booked instantly',
-  shift_auto_confirm: 'Booked instantly',
-  rating_threshold: 'Booked instantly (your rating)',
+  venue_whitelist: "Booked right away (you're on their team)",
+  venue_everyone_auto: 'Booked right away',
+  shift_auto_confirm: 'Booked right away',
+  rating_threshold: 'Booked right away (thanks to your rating)',
 };
 
 function dateParts(value, tz) {
@@ -105,14 +105,14 @@ export default function MyShiftCard({
   const chip = isCheckedIn
     ? ['Clocked in', 'bg-sky-500/15 text-sky-300 border-sky-500/40']
     : isBooked
-      ? ['Confirmed', 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30']
+      ? ['Booked', 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30']
       : isPending
-        ? ['Waiting for the manager', 'bg-amber-500/15 text-amber-300 border-amber-500/30']
+        ? ['Waiting for approval', 'bg-amber-500/15 text-amber-300 border-amber-500/30']
         : isCompleted
           ? ['Worked', 'bg-slate-800 text-slate-300 border-slate-700']
           : isDropped
             ? ['You dropped this', 'bg-rose-500/10 text-rose-300 border-rose-500/30']
-            : [STATUS_LABELS[st] || st, 'bg-slate-800 text-slate-400 border-slate-700'];
+            : [statusLabel(st), 'bg-slate-800 text-slate-400 border-slate-700'];
 
   // The one main action
   let primary = null;

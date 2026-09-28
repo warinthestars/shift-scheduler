@@ -146,7 +146,7 @@ export default function JoinPage() {
         <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/40 text-emerald-100 text-sm flex items-start gap-2">
           <Check className="w-5 h-5 flex-shrink-0" />
           {joined?.already_member ? `You're already on the ${joined.venue_name} team.` : `You're on the ${joined?.venue_name} team.`}
-          {' '}You'll see their shifts in Find Shifts and get alerts when they post new ones.
+          {' '}You'll see their shifts in Find shifts and get alerts when they post new ones.
         </div>
         <button type="button" onClick={() => navigate('/worker', { replace: true })}
           className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm">

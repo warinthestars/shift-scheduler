@@ -151,7 +151,7 @@ async def _request_decided(db: AsyncSession, request_id, approved: bool) -> None
     if approved:
         await notify_in(
             db, [req.worker_id], "request_approved",
-            f"You're confirmed: {shift.role_type} · {name}",
+            f"You're booked: {shift.role_type} · {name}",
             f"{when_text(shift.start_time, venue)} at {place_text(venue, location)}. "
             "Open the shift for arrival info and notes.",
             worker_shift_link(req.id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id,
@@ -340,7 +340,7 @@ async def _transfer_changed(db: AsyncSession, transfer_id) -> None:
         to_req = await db.scalar(select(ShiftRequest).where(
             ShiftRequest.shift_id == shift.id, ShiftRequest.worker_id == t.to_worker_id))
         await notify_in(db, [t.to_worker_id], "request_approved",
-                        f"You're confirmed: {shift.role_type} · {event.title if event else shift.title}",
+                        f"You're booked: {shift.role_type} · {event.title if event else shift.title}",
                         f"{when_text(shift.start_time, venue)} at {place_text(venue, location)} "
                         f"(handed off from {person(frm)}). Open the shift for arrival info and notes.",
                         worker_shift_link(to_req.id) if to_req else "/worker?tab=schedule",

@@ -120,7 +120,7 @@ async function subscribeFcm(reg, cfg) {
     vapidKey: cfg.fcm_vapid_key,
     serviceWorkerRegistration: reg,
   });
-  if (!token) throw new Error("Firebase didn't return a token for this device.");
+  if (!token) throw new Error("Couldn't turn on notifications on this device. Try again.");
   const old = storedToken();
   if (old && old !== token) await api.post('/notifications/push/unsubscribe', { endpoint: old }).catch(() => {});
   const res = await api.post('/notifications/push/subscribe', { provider: 'fcm', token, device_label: deviceLabel() });
@@ -152,7 +152,7 @@ export async function enablePush() {
       : 'Notifications were not turned on.');
   }
   const reg = await swRegistration();
-  if (!reg) throw new Error("Notifications need the secure (https) address of ShiftBoard.");
+  if (!reg) throw new Error('Open ShiftBoard from its usual web address (https://…) to turn on notifications.');
   const { data } = await api.get('/notifications/push');
   if (data.provider === 'fcm') return subscribeFcm(reg, data);          // Phase 33.0.1
   const sub = await subscribeFresh(reg, data.public_key);
