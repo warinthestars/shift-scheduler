@@ -154,7 +154,7 @@ export default function EventListingCard({ listing, onOpen }) {
                 <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-slate-200 font-semibold" hiddenText="—" />
                 {est && <span className="hidden sm:inline text-slate-500">{est}</span>}
                 <span className={`font-semibold ${full ? 'text-slate-500' : 'text-emerald-300'}`}>
-                  {full ? 'Full' : `${p.spots_left} open`}
+                  {full ? (p.my_waitlist ? `#${p.my_waitlist.place} in line` : p.waitlist_count ? `Full · ${p.waitlist_count} waiting` : 'Full') : `${p.spots_left} open`}
                 </span>
               </div>
             </div>
@@ -194,7 +194,8 @@ export default function EventListingCard({ listing, onOpen }) {
           {listing.any_instant && <span className="text-emerald-400 font-semibold"> · Instant book</span>}
         </span>
         <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
-          {mine ? 'View details' : listing.dropped_here ? 'Ask to come back' : 'View & request'}
+          {mine ? 'View details' : listing.dropped_here ? 'Ask to come back'
+            : listing.full ? (listing.positions.some((p) => p.my_waitlist) ? "You're on the waitlist" : 'Join waitlist') : 'View & request'}
           <ChevronRight className="w-4 h-4" />
         </span>
       </div>

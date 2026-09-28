@@ -34,6 +34,7 @@ function emptyForm(venue) {
     auto_clock_out_hours: String(venue?.auto_clock_out_hours ?? 2),               // Phase 27
     approval_policy: venue?.approval_policy || 'team_auto',
     show_rates_publicly: venue?.show_rates_publicly ?? true,
+    allow_public_cover: venue?.allow_public_cover ?? true,                        // Phase 34
     auto_approve_rating_threshold:
       venue?.auto_approve_rating_threshold != null ? String(venue.auto_approve_rating_threshold) : '',
     arrival_instructions: venue?.arrival_instructions || '',
@@ -272,6 +273,7 @@ export default function VenueSettingsModal({
       auto_clock_out_hours: parseInt(form.auto_clock_out_hours, 10) || 2,
       approval_policy: form.approval_policy,
       show_rates_publicly: !!form.show_rates_publicly,
+      allow_public_cover: !!form.allow_public_cover,                              // Phase 34
       auto_approve_rating_threshold: form.auto_approve_rating_threshold === '' ? null : parseFloat(form.auto_approve_rating_threshold),
       arrival_instructions: form.arrival_instructions,
       dress_code: form.dress_code,
@@ -500,6 +502,22 @@ export default function VenueSettingsModal({
                   <span>★ or higher (rated workers only). Blank = off.</span>
                 </div>
               </details>
+            </div>
+
+            {/* Phase 34: where workers can ask for cover */}
+            <div className={cardCls}>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!form.allow_public_cover}
+                  onChange={(e) => setForm({ ...form, allow_public_cover: e.target.checked })}
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-white">Workers can post cover on the public shift board</span>
+                  <span className="block text-xs text-slate-400">
+                    When someone can't make a shift they can always ask your team. With this on they can also list it
+                    for anyone on Find shifts. People outside your team still follow the approval rule above.
+                  </span>
+                </span>
+              </label>
             </div>
 
             <div className={cardCls}>

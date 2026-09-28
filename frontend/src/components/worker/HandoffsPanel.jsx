@@ -12,6 +12,14 @@ const OUT_STATUS = {
   denied: ['Manager said no · you still have the shift', 'text-slate-400'],
   cancelled_by_sender: ['You withdrew it', 'text-slate-500'],
 };
+// Phase 34: hand-offs that came from a cover request (someone took your post)
+const COVER_STATUS = {
+  pending_manager_approval: ['Took your cover request · waiting for the manager', 'text-amber-300'],
+  approved: ['Covered · they have the shift', 'text-emerald-300'],
+  denied: ['Manager said no · you still have the shift', 'text-slate-400'],
+  cancelled_by_sender: ['You kept the shift', 'text-slate-500'],
+  expired: ['The shift started before the manager decided', 'text-slate-500'],
+};
 const WAITING = ['pending_worker_acceptance', 'pending_manager_approval'];
 const RECENT_DAYS = 14;
 
@@ -89,7 +97,7 @@ export default function HandoffsPanel({ incoming = [], outgoing = [], busyId, on
             To hand off a shift, open it in My shifts and choose “Hand off to a teammate” from its ⋯ menu.
           </p>
         ) : sent.map((t) => {
-          const [label, tone] = OUT_STATUS[t.status] || [t.status, 'text-slate-400'];
+          const [label, tone] = (t.cover_request_id && COVER_STATUS[t.status]) || OUT_STATUS[t.status] || [t.status, 'text-slate-400'];
           const waiting = WAITING.includes(t.status);
           return (
             <div key={t.id} className={`p-4 bg-slate-900 border rounded-2xl flex flex-col md:flex-row md:items-center gap-3 ${waiting ? 'border-slate-700' : 'border-slate-800 opacity-80'}`}>

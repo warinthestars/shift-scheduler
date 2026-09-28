@@ -22,6 +22,7 @@ from src.services.locations import load_locations, to_listing_location, geofence
 from src.services.team import blocked_venue_ids
 from src.services.fit import load_fit, load_requirements, required_for, tz_of, cert_label   # Phase 31 + 32
 from src.services.departments import load_dept_context   # Phase 32.2
+from src.services import waitlist as waitlist_svc          # Phase 34
 from src.services.booking import (
     as_utc, ACTIVE_STATUSES, ASSIGNED_STATUSES, BOOKED_STATUSES, PENDING_STATUSES,
 )
@@ -59,6 +60,7 @@ async def build_listings(
     """
     List mode (event_id None): upcoming, not-cancelled events in the next `days` days that have
     at least one open spot OR where the viewer has an active request.
+    Phase 34: full events are listed too (full=True) so people can join a waitlist.
     Single mode (event_id given): that event, whatever its state (used by the details modal).
     Phase 32.3: in single mode, `series` holds the series' other upcoming dates (list-mode rules);
     series_id / exclude_event_id narrow list mode to one series.
@@ -150,6 +152,8 @@ async def build_listings(
     my_fit = (await load_fit(db, [user.id]))[user.id]                     # Phase 31 + 32
     requirements = await load_requirements(db, venue_ids)
     depts = await load_dept_context(db, [user.id], venue_ids)            # Phase 32.2
+    wl = await waitlist_svc.listing_info(db, [s.id for s in shifts], user.id)   # Phase 34
+    removed_here = {s.id for s in shifts if s.id in mine and (mine[s.id].status or "").lower() in ("removed", "no_show")}
 
     out: List[EventListing] = []
     for ev in events:
@@ -181,7 +185,7 @@ async def build_listings(
             rate = _f(s.hourly_rate) if visible else None
             rate_max = _f(s.hourly_rate_max) if visible else None
             cap = s.capacity if s.capacity is not None else 1
-            left = max(0, cap - (s.spots_filled or 0))
+            left = max(0, cap - (s.spots_filled or 0) - wl.held.get(s.id, 0))   # Phase 34: offered spots are held
             is_open = (s.status or "").upper() == "OPEN" and left > 0
             decision, _src = decide_approval(s, venue, user, venue.id in whitelisted)
             dmatch = depts.match(user.id, s)                                      # Phase 32.2
@@ -208,12 +212,15 @@ async def build_listings(
                 missing_certs=my_fit.missing(required_for(requirements, s), s.start_time, s.end_time, vtz),
                 department=depts.dept_of(s.venue_id, s.role_type),
                 department_match=dmatch,
+                waitlist_count=wl.count(s.id),                                        # Phase 34
+                my_waitlist=wl.mine(s.id),
             ))
 
         open_positions = [p for p in positions if p.status == "OPEN"]
         requestable = [p for p in open_positions if not p.missing_certs]      # Phase 32
-        if event_id is None and not open_positions and my_request is None:
-            continue   # list mode: nothing to request and nothing of mine here
+        full = bool(positions) and not open_positions                          # Phase 34
+        if event_id is None and not positions:
+            continue   # list mode: nothing here at all
 
         conflict = None
         if my_request is None or my_request.status not in ASSIGNED_STATUSES:
@@ -227,6 +234,15 @@ async def build_listings(
         priced = [p for p in positions if p.hourly_rate is not None]
         started = start <= now
         cancelled = ev.cancelled_at is not None
+        # Phase 34: who can join a full position's waitlist (one place per event)
+        in_line = any(p.my_waitlist is not None for p in positions)
+        for p in positions:
+            p.can_waitlist = (
+                p.status == "FILLED" and not cancelled and not started and not in_line
+                and my_request is None and conflict is None and dropped_here is None
+                and not p.missing_certs and p.shift_id not in removed_here
+                and (ev.status or "published") == "published"
+            )
         can_request = (
             not cancelled
             and not started
@@ -286,6 +302,7 @@ async def build_listings(
             time_off=my_fit.off(ev.start_time, ev.end_time, vtz),
             department_match=_event_match(open_positions or positions),                 # Phase 32.2
             series_id=ev.series_id,                                                     # Phase 32.3
+            full=full,                                                                  # Phase 34
         ))
 
     # Phase 32.3: list view: each card says how many other dates of its series are listed

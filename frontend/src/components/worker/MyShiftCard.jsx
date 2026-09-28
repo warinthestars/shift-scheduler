@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Timer, Info, Navigation, CalendarPlus, MessageSquare, ArrowRightLeft, LogOut, MoreHorizontal, AlertTriangle,
-  Clock, Undo2, Check, RotateCcw,
+  Clock, Undo2, Check, RotateCcw, LifeBuoy, X,
 } from 'lucide-react';
 import PayLabel from '../PayLabel';
 import TipBadge from '../TipBadge';
@@ -17,6 +17,7 @@ const SOURCE_LABELS = {
   venue_everyone_auto: 'Booked right away',
   shift_auto_confirm: 'Booked right away',
   rating_threshold: 'Booked right away (thanks to your rating)',
+  cover: 'You took this to cover for a teammate',      // Phase 34
 };
 
 function dateParts(value, tz) {
@@ -76,10 +77,11 @@ const btn = 'px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center g
  * everything else lives in the ⋯ menu.
  * Props: req, calItem (calendar item for booked shifts), clockedIn, busy ('clock' | 'withdraw' | null),
  *        onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw, onAddCalendar, onDirections, onAskBack
+ * Phase 34: cover (my live cover request for this booking, from GET /api/cover/mine, or null), onAskCover, onCancelCover
  */
 export default function MyShiftCard({
   req, calItem, clockedIn = false, busy = null, onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw,
-  onAddCalendar, onDirections, onAskBack,
+  onAddCalendar, onDirections, onAskBack, cover = null, onAskCover, onCancelCover,
 }) {
   const shift = req.shift || {};
   const tz = shift.venue?.timezone;
@@ -100,6 +102,7 @@ export default function MyShiftCard({
   const needsAck = !!calItem?.needs_ack;
   const shiftCancelled = String(shift.status || '').toUpperCase() === 'CANCELLED';
   const canAskBack = isDropped && startMs > now && !shiftCancelled && onAskBack;
+  const canCover = isBooked && !isCheckedIn && startMs > now;                         // Phase 34
   const { month, day, weekday } = dateParts(shift.start_time, tz);
 
   const chip = isCheckedIn
@@ -176,14 +179,24 @@ export default function MyShiftCard({
     (isBooked || isCheckedIn) && onDirections && { label: 'Directions', icon: Navigation, onClick: onDirections },
     isBooked && !ended && { label: 'Add to my calendar', icon: CalendarPlus, onClick: onAddCalendar },
     (isBooked || isCheckedIn || isCompleted) && { label: 'Shift chat', icon: MessageSquare, onClick: onBoard },
-    isBooked && !isCheckedIn && !ended && { label: 'Hand off to a teammate', icon: ArrowRightLeft, onClick: onHandOff },
+    // Phase 34: ask the team (and maybe the public board) to take it; you stay booked until someone does
+    canCover && !cover && onAskCover && {
+      label: 'Ask for cover', icon: LifeBuoy, onClick: onAskCover,
+      hint: 'Your team can take it. You stay booked until someone does.',
+    },
+    canCover && cover?.status === 'open' && onCancelCover && { label: 'Cancel cover request', icon: X, onClick: onCancelCover },
+    isBooked && !isCheckedIn && !ended && {
+      label: 'Hand off to a teammate', icon: ArrowRightLeft, onClick: onHandOff, disabled: !!cover,
+      hint: cover ? 'You asked for cover. Cancel that first.' : null,
+    },
     isBooked && !isCheckedIn && !ended && {
       label: 'Drop shift', icon: LogOut, onClick: onDrop, danger: true, disabled: !canDrop,
-      hint: canDrop ? null : 'Not within 24 hours of the start. Hand it off or message your manager.',
+      hint: canDrop ? null : 'Not within 24 hours of the start. Ask for cover, hand it off, or message your manager.',
     },
   ];
 
   const reasonLine = req.status_reason && ['cancelled', 'removed', 'no_show', 'withdrawn', 'dropped', 'rejected'].includes(st);
+  const coveredLine = req.status_reason && (st === 'transferred' || req.approval_source === 'cover');   // Phase 34: "Covered by Ben" / "Covering for Ava"
 
   return (
     <div className={`bg-slate-900 border rounded-2xl p-4 shadow-lg flex gap-4 ${
@@ -199,6 +212,15 @@ export default function MyShiftCard({
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${chip[1]}`}>{chip[0]}</span>
             {req.previous_drop_at && (isBooked || isPending) && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-slate-800 text-slate-300 border-slate-600">After a drop</span>
+            )}
+            {cover && isBooked && (
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border inline-flex items-center gap-1 ${cover.status === 'pending_approval'
+                ? 'bg-indigo-500/15 text-indigo-200 border-indigo-500/40' : 'bg-amber-500/10 text-amber-200 border-amber-500/40'}`}>
+                <LifeBuoy className="w-3 h-3" />
+                {cover.status === 'pending_approval'
+                  ? `${cover.taker_first_name || 'Someone'} wants to cover · waiting for the manager`
+                  : `Asking for cover · ${cover.audience === 'public' ? 'team + public board' : 'team only'}`}
+              </span>
             )}
             {(isBooked || isCheckedIn) && SOURCE_LABELS[req.approval_source] && (
               <span className="text-[10px] text-slate-500">{SOURCE_LABELS[req.approval_source]}</span>
@@ -218,6 +240,8 @@ export default function MyShiftCard({
           </p>
           {isPending && req.notes && <p className="text-[11px] text-slate-400">Your note: <span className="text-slate-300">{req.notes}</span></p>}
           {reasonLine && <p className="text-[11px] text-rose-300">Reason: {req.status_reason}</p>}
+          {coveredLine && <p className="text-[11px] text-slate-400">{req.status_reason}</p>}
+          {cover?.note && isBooked && <p className="text-[11px] text-slate-400">Your cover note: <span className="text-slate-300">{cover.note}</span></p>}
         </div>
         <div className="flex items-center gap-2 md:justify-end flex-wrap">
           {primary}

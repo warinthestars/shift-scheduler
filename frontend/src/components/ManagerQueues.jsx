@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight, RotateCcw, Briefcase } from 'lucide-react';
+import { Users, ArrowRightLeft, Check, X, Eye, MessageSquareQuote, ArrowRight, RotateCcw, Briefcase, LifeBuoy } from 'lucide-react';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
@@ -122,6 +122,12 @@ export function TransfersCard({ transfers, timeZone, actionLoading, onReview, on
                 <button type="button" onClick={() => onReview(t)} className="text-left w-full">
                   <div className="flex flex-wrap items-center gap-1.5 text-sm text-white font-semibold">
                     {name(t.from_worker)} <ArrowRight className="w-3.5 h-3.5 text-amber-400" /> {name(t.to_worker)}
+                    {t.cover_request_id && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-200 border border-amber-500/40 inline-flex items-center gap-1"
+                        title={`${t.from_worker?.first_name || 'They'} asked for cover and ${t.to_worker?.first_name || 'this person'} took it`}>
+                        <LifeBuoy className="w-3 h-3" /> Cover
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-slate-300 mt-0.5">
                     <span className="font-semibold text-emerald-300">{s?.role_type}</span> · {s?.title}

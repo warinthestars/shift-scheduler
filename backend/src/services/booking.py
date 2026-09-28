@@ -219,6 +219,10 @@ async def request_position(
         # --- Capacity (checked under the lock) -------------------------------------------
         if shift_status != "OPEN" or (shift.spots_filled or 0) >= (shift.capacity or 1):
             raise HTTPException(status_code=400, detail="This position just filled up.")
+        # Phase 34: a spot offered to someone on the waitlist is held for them until the offer runs out
+        from src.services.waitlist import held_by_offers
+        if (shift.spots_filled or 0) + await held_by_offers(db, shift.id, exclude_worker_id=worker.id) >= (shift.capacity or 1):
+            raise HTTPException(status_code=400, detail="This position just filled up.")
 
         await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
 

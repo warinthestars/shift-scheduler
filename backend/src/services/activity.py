@@ -32,6 +32,9 @@ CATEGORY = {
     "request_denied": "bookings",
     "request_withdrawn": "bookings",
     "shift_dropped": "bookings",
+    "cover_requested": "bookings",       # Phase 34
+    "cover_taken": "bookings",
+    "cover_pending": "bookings",
     "person_removed": "bookings",
     "transfer_approved": "bookings",
     "transfer_denied": "bookings",
@@ -140,6 +143,9 @@ async def _for_request(db: AsyncSession, kind: str, request_id, actor_id, extra:
         "request_denied": f"Declined {name} for {what}",
         "request_withdrawn": f"{name} withdrew their request for {what}",
         "shift_dropped": f"{name} dropped {what}",
+        "cover_requested": f"{name} asked for cover on {what}",              # Phase 34
+        "cover_taken": f"{name} is covering {what}",
+        "cover_pending": f"Cover for {name} on {what} is waiting for approval",
         "person_removed": f"Removed {name} from {what}",
         "assigned": f"Assigned {name} to {what}",
         "offer_accepted": f"{name} accepted the offer for {what}",

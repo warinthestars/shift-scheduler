@@ -21,6 +21,7 @@ VALID_APPROVAL_POLICIES = ("manual", "team_auto", "everyone_auto")
 NOT_NULL_VENUE_FIELDS = (
     "name", "address", "lat", "lng", "geofence_radius_meters", "timezone", "approval_policy",
     "geofence_enabled", "geofence_buffer_meters", "clock_in_early_minutes", "auto_clock_out_hours",   # Phase 27
+    "allow_public_cover",                                                                            # Phase 34
 )
 TEXT_VENUE_FIELDS = (
     "name", "address", "phone", "arrival_instructions", "dress_code",

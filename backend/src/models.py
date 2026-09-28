@@ -128,6 +128,7 @@ class Venue(Base):
     geofence_buffer_meters = Column(Integer, nullable=False, default=150)      # Phase 27: flagged, not blocked
     clock_in_early_minutes = Column(Integer, nullable=False, default=30)       # Phase 27
     auto_clock_out_hours = Column(Integer, nullable=False, default=2)          # Phase 27
+    allow_public_cover = Column(Boolean, nullable=False, default=True)         # Phase 34
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -573,6 +574,7 @@ class ShiftTransfer(Base):
     to_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String(50), nullable=False, default="pending_worker_acceptance", index=True)
     notes = Column(Text, nullable=True)
+    cover_request_id = Column(UUID(as_uuid=True), nullable=True)                # Phase 34: came from a cover post
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -692,3 +694,45 @@ class AppKey(Base):
     name = Column(String(50), primary_key=True)
     value = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class CoverRequest(Base):
+    """Phase 34: a booked worker asks their venue team (and optionally the public board) to take their shift.
+    They stay booked until someone takes it."""
+    __tablename__ = "cover_requests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="CASCADE"), nullable=False)
+    from_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    audience = Column(String(10), nullable=False, default="team")              # team | public
+    note = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="open", index=True)    # open | pending_approval | covered | cancelled | expired
+    taken_by_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    transfer_id = Column(UUID(as_uuid=True), ForeignKey("shift_transfers.id", ondelete="SET NULL"), nullable=True)
+    warned_12h_at = Column(DateTime(timezone=True), nullable=True)
+    warned_3h_at = Column(DateTime(timezone=True), nullable=True)
+    closed_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WaitlistEntry(Base):
+    """Phase 34: a place in line for a full position. When a spot opens the first person is booked
+    (auto_book) or offered it for a short time."""
+    __tablename__ = "waitlist_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="CASCADE"), nullable=True)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    auto_book = Column(Boolean, nullable=False, default=True)
+    status = Column(String(20), nullable=False, default="waiting")   # waiting | offered | booked | requested | passed | expired | left | closed
+    offered_at = Column(DateTime(timezone=True), nullable=True)
+    offer_expires_at = Column(DateTime(timezone=True), nullable=True)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="SET NULL"), nullable=True)
+    closed_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

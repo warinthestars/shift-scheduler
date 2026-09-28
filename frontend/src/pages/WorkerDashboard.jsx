@@ -22,6 +22,9 @@ import HandoffsPanel from '../components/worker/HandoffsPanel';
 import ProfileNudge from '../components/worker/ProfileNudge';
 import AppNudge from '../components/AppNudge';   // Phase 33
 import EarningsCard from '../components/worker/EarningsCard';   // Phase 33.1
+import CoverDialog from '../components/worker/CoverDialog';     // Phase 34
+import CoverBoard from '../components/worker/CoverBoard';       // Phase 34
+import WaitlistPanel from '../components/worker/WaitlistPanel'; // Phase 34
 import { PENDING_INVITE_KEY } from './JoinPage';
 import {
   dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
@@ -54,6 +57,11 @@ function groupByDay(list) {
     else groups.push({ label, items: [l] });
   });
   return groups;
+}
+
+// Phase 34: a full event is listed so people can join its waitlist; it goes in its own section
+function isFullOnly(l) {
+  return l.full && !l.my_request;
 }
 
 function ListingDayGroups({ groups, onOpen }) {
@@ -110,6 +118,15 @@ export default function WorkerDashboard() {
   const [clockOutAsk, setClockOutAsk] = useState(null);   // Phase 32.3: { shiftId, item, title } waiting for "Clock out?" confirm
   const [offers, setOffers] = useState([]);
   const [offerBusy, setOfferBusy] = useState(null);
+  // Phase 34: cover requests + waitlists
+  const [coverOpen, setCoverOpen] = useState([]);          // shifts that need cover that I could see
+  const [myCovers, setMyCovers] = useState([]);            // my live cover requests
+  const [waitlists, setWaitlists] = useState([]);          // my places in line / offers
+  const [coverFor, setCoverFor] = useState(null);          // req being posted for cover (dialog)
+  const [coverCancel, setCoverCancel] = useState(null);    // { cover, title } waiting for "Cancel cover request?"
+  const [coverTake, setCoverTake] = useState(null);        // cover listing waiting for "Take this shift?"
+  const [coverBusy, setCoverBusy] = useState(null);
+  const [waitBusy, setWaitBusy] = useState(null);
   const navigate = useNavigate();
 
   const flash = (type, message) => setNotification({ type, message });
@@ -117,7 +134,7 @@ export default function WorkerDashboard() {
   const fetchWorkerData = async (showSpinner = true) => {
     try {
       if (showSpinner) setLoading(true);
-      const [listingsRes, myRes, transfersRes, outRes, activeClocksRes, calendarRes, offersRes] = await Promise.all([
+      const [listingsRes, myRes, transfersRes, outRes, activeClocksRes, calendarRes, offersRes, coverRes, myCoverRes, waitRes] = await Promise.all([
         api.get('/listings'),
         api.get('/users/me/shifts'),
         api.get('/transfers/my-incoming'),
@@ -125,9 +142,15 @@ export default function WorkerDashboard() {
         api.get('/shifts/time-entries/active').catch(() => ({ data: [] })),
         api.get('/me/calendar').catch(() => ({ data: { items: [], unread_count: 0 } })),
         api.get('/me/offers').catch(() => ({ data: [] })),
+        api.get('/cover/open').catch(() => ({ data: [] })),        // Phase 34
+        api.get('/cover/mine').catch(() => ({ data: [] })),
+        api.get('/waitlist/mine').catch(() => ({ data: [] })),
       ]);
       setListings(listingsRes.data || []);
       setOffers(offersRes.data || []);
+      setCoverOpen(coverRes.data || []);
+      setMyCovers(myCoverRes.data || []);
+      setWaitlists(waitRes.data || []);
       setCalendar({ items: calendarRes.data?.items || [], unread_count: calendarRes.data?.unread_count || 0 });
       setMyShifts(myRes.data || []);
       setIncomingTransfers(transfersRes.data || []);
@@ -140,7 +163,8 @@ export default function WorkerDashboard() {
           const st = String(r.status || '').toLowerCase();
           return UPCOMING_STATUSES.includes(st) && new Date(r.shift?.end_time).getTime() >= Date.now();
         });
-        return upcoming || (offersRes.data || []).length ? 'schedule' : 'find';
+        const waitOffer = (waitRes.data || []).some((w) => w.status === 'offered');
+        return upcoming || waitOffer || (offersRes.data || []).length ? 'schedule' : 'find';
       });
     } catch (err) {
       flash('error', "Couldn't load your shifts. Check your connection and refresh.");
@@ -175,6 +199,39 @@ export default function WorkerDashboard() {
       flash('error', err.response?.data?.detail || 'Could not update the offer.');
     } finally {
       setOfferBusy(null);
+      fetchWorkerData(false);
+    }
+  };
+
+  // Phase 34: cover + waitlist actions
+  const takeCover = async (c) => {
+    setCoverBusy(c.cover_id);
+    try {
+      const res = await api.post(`/cover/${c.cover_id}/take`);
+      flash('success', res.data.message);
+    } catch (err) {
+      throw err;   // ConfirmDialog shows it
+    } finally {
+      setCoverBusy(null);
+      fetchWorkerData(false);
+    }
+  };
+
+  const cancelCover = async (cover) => {
+    await api.post(`/cover/${cover.cover_id}/cancel`);
+    flash('info', "Cover request cancelled. You're keeping this shift.");
+    fetchWorkerData(false);
+  };
+
+  const waitAction = async (e, action) => {
+    setWaitBusy(e.entry_id);
+    try {
+      const res = await api.post(`/waitlist/${e.entry_id}/${action}`);
+      flash(action === 'take' ? 'success' : 'info', res.data.message);
+    } catch (err) {
+      flash('error', err.response?.data?.detail || 'Could not update the waitlist.');
+    } finally {
+      setWaitBusy(null);
       fetchWorkerData(false);
     }
   };
@@ -305,9 +362,9 @@ export default function WorkerDashboard() {
   }, [pendingDeepLink, calendarByRequest]);
 
   // Find Shifts
-  const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;
+  const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;   // Phase 34: full events don't count
   const roleOptions = useMemo(
-    () => Array.from(new Set(listings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN').map((p) => p.role_type)))).sort(),
+    () => Array.from(new Set(listings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN' || p.can_waitlist).map((p) => p.role_type)))).sort(),
     [listings]
   );
   const venueOptions = useMemo(() => {
@@ -329,7 +386,7 @@ export default function WorkerDashboard() {
       if (whenFilter === 'today' && !isOnDay(l.start_time, tz, 0)) return false;
       if (whenFilter === 'tomorrow' && !isOnDay(l.start_time, tz, 1)) return false;
       if (whenFilter === 'week' && new Date(l.start_time).getTime() > weekEnd) return false;
-      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.my_status))) return false;
+      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.my_status || p.can_waitlist || p.my_waitlist))) return false;
       if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
       if (instantOnly && !l.any_instant) return false;
       if (hideRequested && l.my_request) return false;
@@ -339,8 +396,13 @@ export default function WorkerDashboard() {
     });
   }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested, fitsOnly, mineOnly]);
   // Phase 32.2: shifts in my departments first; everything else under "Other departments"
-  const listingGroups = useMemo(() => groupByDay(filteredListings.filter((l) => !isOtherDept(l))), [filteredListings]);
-  const otherGroups = useMemo(() => groupByDay(filteredListings.filter(isOtherDept)), [filteredListings]);
+  const listingGroups = useMemo(() => groupByDay(filteredListings.filter((l) => !isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
+  const otherGroups = useMemo(() => groupByDay(filteredListings.filter((l) => isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
+  const fullListings = useMemo(() => filteredListings.filter(isFullOnly), [filteredListings]);                 // Phase 34
+  const fullGroups = useMemo(() => groupByDay(fullListings), [fullListings]);
+  const myWaitCount = fullListings.filter((l) => l.positions.some((p) => p.my_waitlist)).length;
+  const coverByRequest = useMemo(() => new Map(myCovers.map((c) => [c.request_id, c])), [myCovers]);
+  const waitOffers = waitlists.filter((w) => w.status === 'offered').length;
   const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested || fitsOnly || mineOnly;
   const clearFilters = () => {
     setSearch('');
@@ -371,7 +433,7 @@ export default function WorkerDashboard() {
   const historyRequests = myShifts
     .filter((r) => !isUpcomingReq(r) && !canAskBack(r))
     .sort((a, b) => new Date(b.shift?.start_time) - new Date(a.shift?.start_time));
-  const needsAnswer = offers.length + incomingTransfers.length;
+  const needsAnswer = offers.length + incomingTransfers.length + waitOffers;
 
   const addShiftToCalendar = (req) => {
     const shift = req.shift;
@@ -410,6 +472,9 @@ export default function WorkerDashboard() {
         onAddCalendar={() => addShiftToCalendar(req)}
         onDirections={place ? () => window.open(mapsUrl(place), '_blank', 'noopener') : null}
         onAskBack={req.shift?.event_id ? () => setOpenListing({ eventId: req.shift.event_id, initial: null }) : null}
+        cover={coverByRequest.get(req.id) || null}
+        onAskCover={() => setCoverFor(req)}
+        onCancelCover={() => setCoverCancel({ cover: coverByRequest.get(req.id), title: req.shift?.title || 'this shift' })}
       />
     );
   };
@@ -419,15 +484,15 @@ export default function WorkerDashboard() {
     if (!activeTab) return;
     const detail = {
       tab: activeTab,
-      badges: { schedule: offers.length, calendar: calendar.unread_count || 0, transfers: incomingTransfers.length },
+      badges: { schedule: offers.length + waitOffers, calendar: calendar.unread_count || 0, transfers: incomingTransfers.length },
     };
     try { sessionStorage.setItem('shiftboard_worker_tab', JSON.stringify(detail)); } catch (e) { /* private mode */ }
     window.dispatchEvent(new CustomEvent('worker_tab_state', { detail }));
-  }, [activeTab, offers.length, calendar.unread_count, incomingTransfers.length]);
+  }, [activeTab, offers.length, waitOffers, calendar.unread_count, incomingTransfers.length]);
 
   const tabs = [
-    { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length },
-    { id: 'find', label: 'Find shifts', icon: Search, count: openListingCount },
+    { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length, badge: waitOffers },
+    { id: 'find', label: 'Find shifts', icon: Search, count: openListingCount, badge: coverOpen.filter((c) => c.can_take).length },
     { id: 'calendar', label: 'Calendar', icon: CalendarDays, badge: calendar.unread_count },
     { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft, badge: incomingTransfers.length },
   ];
@@ -460,7 +525,7 @@ export default function WorkerDashboard() {
               <b className="text-white">{upcomingRequests.length}</b> coming up
             </button>
             {needsAnswer > 0 && (
-              <button type="button" onClick={() => setActiveTab(offers.length ? 'schedule' : 'transfers')}
+              <button type="button" onClick={() => setActiveTab(offers.length || waitOffers ? 'schedule' : 'transfers')}
                 className={`${chipBtn} border-amber-500/50 text-amber-200`}>
                 <b className="text-amber-100">{needsAnswer}</b> waiting for your answer
               </button>
@@ -545,11 +610,11 @@ export default function WorkerDashboard() {
         </div>
 
         {/* Offers get answered on My shifts; elsewhere a slim reminder */}
-        {offers.length > 0 && activeTab !== 'schedule' && (
+        {offers.length + waitOffers > 0 && activeTab !== 'schedule' && (
           <button type="button" onClick={() => setActiveTab('schedule')}
             className="mt-4 w-full p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/5 text-left text-sm text-indigo-100 flex items-center gap-2 hover:bg-indigo-500/10">
             <Send className="w-4 h-4 text-indigo-300" />
-            <span className="flex-1">{plural(offers.length, 'shift')} offered to you. Answer on My shifts.</span>
+            <span className="flex-1">{plural(offers.length + waitOffers, 'shift')} offered to you. Answer on My shifts.</span>
             <ChevronRight className="w-4 h-4" />
           </button>
         )}
@@ -561,6 +626,9 @@ export default function WorkerDashboard() {
           <div className="mt-2 space-y-6">
             <EarningsCard refreshKey={earningsKey} />
             <WorkerOffers offers={offers} busyId={offerBusy} onAccept={(o) => handleOffer(o, 'accept')} onDecline={(o) => handleOffer(o, 'decline')} />
+            <WaitlistPanel entries={waitlists} busyId={waitBusy}
+              onTake={(e) => waitAction(e, 'take')} onPass={(e) => waitAction(e, 'pass')} onLeave={(e) => waitAction(e, 'leave')}
+              onExpired={() => fetchWorkerData(false)} />
             <section className="space-y-3">
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-4">Coming up</h2>
               {loading ? (
@@ -602,7 +670,8 @@ export default function WorkerDashboard() {
         {/* Find shifts */}
         {activeTab === 'find' && (
           <div className="mt-6">
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-3 sm:p-4 space-y-3">
+            <CoverBoard items={coverOpen} busyId={coverBusy} onTake={(c) => setCoverTake(c)} />
+            <div className="mt-6 bg-slate-900/60 border border-slate-800 rounded-2xl p-3 sm:p-4 space-y-3">
               <div className="flex flex-col lg:flex-row gap-3">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -670,6 +739,11 @@ export default function WorkerDashboard() {
               </div>
             ) : (
               <div className="mt-6 space-y-8">
+                {listingGroups.length === 0 && otherGroups.length === 0 && fullGroups.length > 0 && (
+                  <p className="text-xs text-slate-400 bg-slate-900/40 border border-slate-800 rounded-2xl p-4 text-center">
+                    Everything listed is full right now. Join a waitlist below and we'll let you know if a spot opens.
+                  </p>
+                )}
                 {listingGroups.length === 0 && otherGroups.length > 0 && (
                   <p className="text-xs text-slate-400 bg-slate-900/40 border border-slate-800 rounded-2xl p-4 text-center">
                     Nothing open in your departments right now.{' '}
@@ -689,6 +763,21 @@ export default function WorkerDashboard() {
                     <ListingDayGroups groups={otherGroups} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
                   </div>
                 )}
+                {/* Phase 34: full events, so people can get in line */}
+                {fullGroups.length > 0 && (
+                  <details className="group border-t border-slate-800 pt-6" open={myWaitCount > 0}>
+                    <summary className="cursor-pointer select-none list-none">
+                      <span className="text-sm font-bold text-slate-200">Full: join a waitlist ({fullListings.length})</span>
+                      {myWaitCount > 0 && <span className="ml-2 text-[11px] text-emerald-300">You're in line for {plural(myWaitCount, 'event')}</span>}
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        No spots left. Join the line and we'll book you (or offer you the spot) if one opens.
+                      </span>
+                    </summary>
+                    <div className="mt-6 space-y-6">
+                      <ListingDayGroups groups={fullGroups} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
+                    </div>
+                  </details>
+                )}
               </div>
             )}
           </div>
@@ -702,7 +791,7 @@ export default function WorkerDashboard() {
             ) : (
               <WorkerCalendar
                 items={calendar.items}
-                openListings={listings}
+                openListings={listings.filter((l) => !isFullOnly(l))}
                 onSelectItem={(item) => setDetailRequestId(item.request_id)}
                 onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
               />
@@ -779,6 +868,33 @@ export default function WorkerDashboard() {
           danger
           onConfirm={() => handleClockOut(clockOutAsk.shiftId, clockOutAsk.item)}
           onClose={() => setClockOutAsk(null)}
+        />
+      )}
+
+      {/* Phase 34: cover */}
+      {coverFor && (
+        <CoverDialog req={coverFor} onClose={() => setCoverFor(null)}
+          onPosted={(message) => { flash('success', message); fetchWorkerData(false); }} />
+      )}
+      {coverCancel && (
+        <ConfirmDialog
+          title="Cancel your cover request?"
+          message={`Nobody will be able to take ${coverCancel.title} from you anymore. You're still booked on it.`}
+          confirmLabel="Cancel cover request"
+          onConfirm={() => cancelCover(coverCancel.cover)}
+          onClose={() => setCoverCancel(null)}
+        />
+      )}
+      {coverTake && (
+        <ConfirmDialog
+          title={coverTake.booking === 'instant' ? 'Take this shift?' : 'Ask to take this shift?'}
+          message={`${coverTake.role_type} · ${coverTake.title} at ${coverTake.venue_name}, covering for ${coverTake.from_first_name}. ${
+            coverTake.booking === 'instant'
+              ? "It's yours right away and goes in My shifts."
+              : `The manager has to approve it. Until then it's still ${coverTake.from_first_name}'s.`}${coverTake.take_note ? ` ${coverTake.take_note}` : ''}`}
+          confirmLabel={coverTake.booking === 'instant' ? 'Take it' : 'Send to the manager'}
+          onConfirm={() => takeCover(coverTake)}
+          onClose={() => setCoverTake(null)}
         />
       )}
 

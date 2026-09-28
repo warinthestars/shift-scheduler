@@ -176,6 +176,7 @@ class VenueBase(BaseModel):
     geofence_buffer_meters: int = 150       # Phase 27
     clock_in_early_minutes: int = 30        # Phase 27
     auto_clock_out_hours: int = 2           # Phase 27
+    allow_public_cover: bool = True         # Phase 34
 
 class VenueCreate(BaseModel):
     name: str
@@ -221,6 +222,7 @@ class VenueUpdateSettings(BaseModel):
     geofence_buffer_meters: Optional[int] = None      # Phase 27
     clock_in_early_minutes: Optional[int] = None      # Phase 27
     auto_clock_out_hours: Optional[int] = None        # Phase 27
+    allow_public_cover: Optional[bool] = None         # Phase 34
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -422,6 +424,7 @@ class ShiftTransferResponse(BaseModel):
     to_worker_id: UUID
     status: str
     notes: Optional[str] = None              # Phase 29.1: the note with the hand-off (was never sent)
+    cover_request_id: Optional[UUID] = None  # Phase 34: this hand-off came from a cover post
     created_at: datetime
     updated_at: datetime
     shift: Optional[ShiftResponse] = None
@@ -491,6 +494,7 @@ class RosterPerson(BaseModel):
     time_off: Optional[str] = None               # Phase 32.1: 'blocked' when a time-off block overlaps this shift
     time_off_reason: Optional[str] = None        # Phase 32.1: the block's reason (managers see it)
     outside_department: bool = False             # Phase 32.2: their request is outside their departments
+    cover: Optional[str] = None                  # Phase 34: open | pending_approval (they asked for cover)
 
 
 class EventPosition(BaseModel):
@@ -511,6 +515,7 @@ class EventPosition(BaseModel):
     requested: List[RosterPerson] = []
     offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
     dropped: List[RosterPerson] = []         # Phase 29.4: people who dropped this position (can be booked back)
+    waitlist: List[str] = []                 # Phase 34: names in line order ("Ana R.")
 
 
 class VenueEventResponse(BaseModel):
@@ -904,6 +909,15 @@ class ListingVenue(BaseModel):
     default_shift_notes: Optional[str] = None
 
 
+class ListingWaitlist(BaseModel):
+    """Phase 34: the viewer's place on a full position's waitlist."""
+    entry_id: UUID
+    status: str                                # waiting | offered
+    place: int = 1                             # 1 = next in line
+    auto_book: bool = True                     # True = book me (or send my request) as soon as a spot opens
+    offer_expires_at: Optional[datetime] = None
+
+
 class ListingPosition(BaseModel):
     shift_id: UUID
     role_type: str
@@ -927,6 +941,9 @@ class ListingPosition(BaseModel):
     department: str = "general"                # Phase 32.2: foh | bar | kitchen | tech | security | ops | general
     department_match: str = "not_set"          # Phase 32.2: match | outside | not_set (for THIS viewer)
     missing_certs: List[str] = []              # Phase 32: what the VIEWER is missing (non-empty = can't request)
+    waitlist_count: int = 0                    # Phase 34: people waiting for this position (live entries)
+    my_waitlist: Optional[ListingWaitlist] = None   # Phase 34: the viewer's place in line
+    can_waitlist: bool = False                 # Phase 34: full, and the viewer could join the waitlist
 
 
 class ListingMyRequest(BaseModel):
@@ -971,6 +988,7 @@ class EventListing(BaseModel):
     series_id: Optional[UUID] = None                  # Phase 32.3: set when this event was copied to other dates
     series: List["EventListing"] = []                 # Phase 32.3: single-event view only: the series' other upcoming dates
     series_more: int = 0                              # Phase 32.3: list view: how many other dates of this series are listed too
+    full: bool = False                                # Phase 34: no open spots (shown so people can join a waitlist)
 
 
 class PositionRequestBody(BaseModel):
@@ -1999,6 +2017,94 @@ class EarningsResponse(BaseModel):
     venues: List[EarningsVenue] = []
     shifts: List[EarningsShift] = []         # newest first
     upcoming: EarningsUpcoming = EarningsUpcoming()
+
+
+
+# ------------------------------------------------------------------------------------------------
+# Phase 34: cover requests + waitlists
+# ------------------------------------------------------------------------------------------------
+class CoverPostBody(BaseModel):
+    request_id: UUID
+    audience: str = "team"                   # team | public
+    note: Optional[str] = Field(None, max_length=300)
+
+
+class CoverListing(BaseModel):
+    cover_id: UUID
+    shift_id: UUID
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    venue_id: UUID
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    start_time: datetime
+    end_time: datetime
+    hours: float = 0
+    hourly_rate: Optional[float] = None      # None = hidden
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    from_first_name: str
+    note: Optional[str] = None
+    audience: str = "team"                   # what actually applies (public falls back to team if the venue turned it off)
+    on_team: bool = False
+    can_take: bool = False
+    problem: Optional[str] = None            # why the viewer can't take it
+    booking: str = "approval"                # instant | approval (for THIS viewer)
+    take_note: Optional[str] = None          # e.g. "Your waiting request for Server at this event will be withdrawn."
+    department_match: str = "not_set"
+    created_at: datetime
+
+
+class CoverMine(BaseModel):
+    cover_id: UUID
+    request_id: UUID
+    shift_id: UUID
+    status: str                              # open | pending_approval
+    audience: str
+    note: Optional[str] = None
+    taker_first_name: Optional[str] = None
+    created_at: datetime
+
+
+class CoverPostResult(BaseModel):
+    cover_id: UUID
+    message: str
+
+
+class CoverTakeResult(BaseModel):
+    status: str                              # covered | pending_approval
+    message: str
+    request_id: Optional[UUID] = None        # the taker's booking when covered
+
+
+class WaitlistJoinBody(BaseModel):
+    shift_id: UUID
+    auto_book: bool = True
+
+
+class WaitlistMine(BaseModel):
+    entry_id: UUID
+    shift_id: UUID
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    start_time: datetime
+    end_time: datetime
+    status: str                              # waiting | offered
+    place: int = 1
+    auto_book: bool = True
+    offer_expires_at: Optional[datetime] = None
+
+
+class WaitlistActionResult(BaseModel):
+    status: str                              # waiting | booked | requested | passed | left
+    message: str
+    entry_id: Optional[UUID] = None
+    request_id: Optional[UUID] = None
 
 
 WorkerProfile.model_rebuild()

@@ -8,6 +8,8 @@ Every minute:
   4. managers: people who haven't read an UPDATE to a shift starting within 24h (once per update)
   5. managers: a position still has open spots 3 hours before it starts (once per position; Phase 30)
   5b. workers: a certificate expires in 30 days, in 7 days, or today (once each; Phase 32)
+  5c. cover requests: close stale ones, warn 12 h / 3 h before start if nobody took it (Phase 34)
+  5d. waitlists: give opened spots to the next person in line, expire old offers (Phase 34)
   6. send due email / SMS from the outbox
 
 Only one process runs a tick at a time (Redis lock). If Redis is unreachable the tick still runs;
@@ -234,18 +236,39 @@ async def scan_expiring_certs(db: AsyncSession, now: datetime) -> int:
     return sent
 
 
+async def scan_cover(db: AsyncSession, now: datetime) -> int:
+    """Phase 34: close stale cover posts, then warn the worker + managers 12 h / 3 h before the start."""
+    from src.services import cover, notify_cover
+    warnings = await cover.sweep(db, now)
+    return await notify_cover.warnings_in(db, warnings)
+
+
+async def run_waitlists(now: datetime) -> None:
+    """Phase 34: waitlist engine (commits as it goes), then its notifications."""
+    from src.services import waitlist, notify_cover
+    async with AsyncSessionLocal() as db:
+        events = await waitlist.process(db, now)
+    async with AsyncSessionLocal() as db:
+        await notify_cover.waitlist_events_in(db, events)
+        await db.commit()
+
+
 async def run_tick() -> None:
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
         await auto_close_open_entries(db)
     for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
-                      ("unfilled", scan_unfilled), ("certs", scan_expiring_certs)):
+                      ("unfilled", scan_unfilled), ("certs", scan_expiring_certs), ("cover", scan_cover)):
         try:
             async with AsyncSessionLocal() as db:
                 await fn(db, now)
                 await db.commit()
         except Exception:
             logger.exception(f"notification scan '{label}' failed")
+    try:
+        await run_waitlists(now)                                                   # Phase 34
+    except Exception:
+        logger.exception("waitlist processing failed")
     try:
         async with AsyncSessionLocal() as db:
             await deliver_pending(db)

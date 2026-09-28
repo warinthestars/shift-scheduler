@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Calendar, Clock, MapPin, Phone, Shirt, Info, StickyNote, Navigation, CalendarPlus,
-  Zap, ShieldCheck, AlertTriangle, CheckCircle2, ExternalLink, Briefcase, Lock, Repeat,
+  Zap, ShieldCheck, AlertTriangle, CheckCircle2, ExternalLink, Briefcase, Lock, Repeat, ListOrdered,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
@@ -80,6 +80,8 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null); // { type: 'success' | 'info' | 'error', message }
   const [seriesPicks, setSeriesPicks] = useState(() => new Set());   // Phase 32.3: event_ids of other dates to request too
+  const [wlAuto, setWlAuto] = useState(true);                          // Phase 34: join the waitlist as "book me automatically"
+  const [wlBusy, setWlBusy] = useState(null);
 
   const applyListing = (next, resetSelection = false) => {
     setListing(next);
@@ -167,6 +169,24 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
       reload(false);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Phase 34: waitlist for a full position (one place per event)
+  const waitlist = async (p, action) => {
+    setWlBusy(p.shift_id);
+    setResult(null);
+    try {
+      const res = action === 'join'
+        ? await api.post('/waitlist', { shift_id: p.shift_id, auto_book: wlAuto })
+        : await api.post(`/waitlist/${p.my_waitlist.entry_id}/${action}`);
+      setResult({ type: action === 'take' && res.data.status === 'booked' ? 'success' : 'info', message: res.data.message });
+      if (onChanged) onChanged(res.data);
+    } catch (err) {
+      setResult({ type: 'error', message: err.response?.data?.detail || 'Could not update the waitlist.' });
+    } finally {
+      setWlBusy(null);
+      reload(false);
     }
   };
 
@@ -270,6 +290,9 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
     }
     if (listing.conflict) {
       blockedReason = `This overlaps a shift you're booked on (${listing.conflict}).`;
+    } else if (!selected && listing.full) {
+      // Phase 34: nothing to request; the waitlist buttons are on each position
+      primary = <span className="text-xs text-slate-400">Every position is full. Join a waitlist above.</span>;
     } else if (!selected) {
       primary = (
         <button type="button" disabled className="px-5 py-2 rounded-xl bg-slate-800 text-slate-500 text-xs font-bold cursor-not-allowed">
@@ -482,9 +505,11 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
               const disabled = !isMine && (full || locked || needsCerts || isBooked || listing.cancelled || listing.started);
               const active = selectedId === p.shift_id;
               const est = estPayText(p);
+              const wl = p.my_waitlist;                                                           // Phase 34
+              const wlRow = full && !listing.cancelled && !listing.started && (wl || p.can_waitlist || p.waitlist_count > 0);
               return (
+                <div key={p.shift_id}>
                 <button
-                  key={p.shift_id}
                   type="button"
                   role="radio"
                   aria-checked={active}
@@ -536,11 +561,49 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                       <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-sm font-black text-emerald-400" hiddenText="Pay shared when booked" />
                       {est && <div className="text-[10px] text-slate-500">{est} for the shift</div>}
                       <div className={`text-[11px] font-semibold mt-0.5 ${full ? 'text-slate-500' : 'text-emerald-300'}`}>
-                        {full ? 'Full' : `${p.spots_left} of ${p.capacity} open`}
+                        {full ? `Full${p.waitlist_count ? ` · ${p.waitlist_count} waiting` : ''}` : `${p.spots_left} of ${p.capacity} open`}
                       </div>
                     </div>
                   </div>
                 </button>
+                {wlRow && (
+                  <div className="mt-1 ml-3 pl-3 border-l-2 border-slate-800 py-1.5 text-[11px] text-slate-300 space-y-1.5">
+                    {wl && wl.status === 'offered' ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-emerald-300 font-semibold">A spot opened and it's being held for you.</span>
+                        <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'pass')}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold disabled:opacity-50">Pass</button>
+                        <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'take')}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold disabled:opacity-50">Take it</button>
+                      </div>
+                    ) : wl ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <ListOrdered className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>
+                          <b className="text-white">{wl.place === 1 ? "You're next in line" : `You're #${wl.place} in line`}</b>
+                          {wl.auto_book ? ". We'll ask for the spot for you as soon as one opens." : ". We'll offer you the spot first when one opens."}
+                        </span>
+                        <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'leave')}
+                          className="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 font-semibold disabled:opacity-50">Leave waitlist</button>
+                      </div>
+                    ) : p.can_waitlist ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" className="w-3.5 h-3.5 accent-emerald-500" checked={wlAuto} onChange={(e) => setWlAuto(e.target.checked)} />
+                          Book me automatically if a spot opens
+                        </label>
+                        <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'join')}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 font-bold disabled:opacity-50">
+                          {wlBusy === p.shift_id ? 'Joining…' : 'Join waitlist'}
+                        </button>
+                        {!wlAuto && <span className="block w-full text-slate-500">You'll get a notification and a short time to take it.</span>}
+                      </div>
+                    ) : (
+                      <span className="text-slate-500">{p.waitlist_count} {p.waitlist_count === 1 ? 'person is' : 'people are'} on the waitlist.</span>
+                    )}
+                  </div>
+                )}
+                </div>
               );
             })}
           </div>

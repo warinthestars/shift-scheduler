@@ -66,6 +66,12 @@ KINDS = {
     "time_off_conflict": ("manager", True),  # Phase 32.1: a worker blocked off time they're booked for
     "cert_review": ("booking", False),       # Phase 32: a manager verified / didn't accept a certificate
     "cert_expiring": ("reminder", False),    # Phase 32: a certificate expires in 30 / 7 days, or today
+    "cover_needed": ("booking", True),       # Phase 34: a teammate needs someone to cover their shift
+    "cover_update": ("booking", False),      # Phase 34: your cover request was taken / approved / not approved
+    "cover_warning": ("booking", True),      # Phase 34: nobody has taken your shift 12 h / 3 h before it starts
+    "cover_manager": ("manager", True),      # Phase 34: managers: cover asked / covered / still uncovered
+    "waitlist_offer": ("booking", True),     # Phase 34: a spot opened and you're next (short time to take it)
+    "waitlist_update": ("booking", False),   # Phase 34: booked / request sent / offer ran out / waitlist closed
     "test": ("test", True),
 }
 NEW_SHIFT_MODES = ("off", "instant", "daily")

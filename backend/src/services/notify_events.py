@@ -310,6 +310,10 @@ async def _transfer_changed(db: AsyncSession, transfer_id) -> None:
     shift, venue, event, location = await _shift_bundle(db, t.shift_id)
     if shift is None:
         return
+    if t.cover_request_id:                        # Phase 34: came from a cover post (its own wording)
+        from src.services import notify_cover
+        await notify_cover.transfer_decided_in(db, t)
+        return
     frm = await db.scalar(select(User).where(User.id == t.from_worker_id))
     to = await db.scalar(select(User).where(User.id == t.to_worker_id))
     what = f"{shift.role_type} · {event.title if event else shift.title}, {when_text(shift.start_time, venue)}"

@@ -67,6 +67,7 @@ CREATE TABLE venues (
     geofence_buffer_meters INT NOT NULL DEFAULT 150,
     clock_in_early_minutes INT NOT NULL DEFAULT 30,
     auto_clock_out_hours INT NOT NULL DEFAULT 2,
+    allow_public_cover BOOLEAN NOT NULL DEFAULT TRUE,        -- Phase 34: workers may also post cover on the public board
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -372,6 +373,7 @@ CREATE TABLE shift_transfers (
     to_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(50) NOT NULL DEFAULT 'pending_worker_acceptance',
     notes TEXT,
+    cover_request_id UUID,                                    -- Phase 34: set when this hand-off came from a cover post
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -630,3 +632,49 @@ CREATE TABLE app_keys (
     value TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ==============================================================================
+-- Phase 34: Cover requests and waitlists
+-- ==============================================================================
+CREATE TABLE cover_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    request_id UUID NOT NULL REFERENCES shift_requests(id) ON DELETE CASCADE,   -- the booking that needs cover
+    from_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    audience VARCHAR(10) NOT NULL DEFAULT 'team',             -- team | public (team + the public board)
+    note TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'open',               -- open | pending_approval | covered | cancelled | expired
+    taken_by_worker_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    transfer_id UUID REFERENCES shift_transfers(id) ON DELETE SET NULL,
+    warned_12h_at TIMESTAMPTZ,
+    warned_3h_at TIMESTAMPTZ,
+    closed_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_cover_requests_shift ON cover_requests(shift_id);
+CREATE INDEX idx_cover_requests_status ON cover_requests(status);
+CREATE INDEX idx_cover_requests_venue ON cover_requests(venue_id);
+-- one live cover post per booking
+CREATE UNIQUE INDEX uq_cover_requests_live ON cover_requests(request_id) WHERE status IN ('open', 'pending_approval');
+
+CREATE TABLE waitlist_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    event_id UUID REFERENCES shift_events(id) ON DELETE CASCADE,
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    auto_book BOOLEAN NOT NULL DEFAULT TRUE,                  -- book (or request) automatically when a spot opens
+    status VARCHAR(20) NOT NULL DEFAULT 'waiting',            -- waiting | offered | booked | requested | passed | expired | left | closed
+    offered_at TIMESTAMPTZ,
+    offer_expires_at TIMESTAMPTZ,
+    request_id UUID REFERENCES shift_requests(id) ON DELETE SET NULL,
+    closed_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_waitlist_shift ON waitlist_entries(shift_id, created_at);
+CREATE INDEX idx_waitlist_worker ON waitlist_entries(worker_id);
+-- one live place per person per position
+CREATE UNIQUE INDEX uq_waitlist_live ON waitlist_entries(shift_id, worker_id) WHERE status IN ('waiting', 'offered');

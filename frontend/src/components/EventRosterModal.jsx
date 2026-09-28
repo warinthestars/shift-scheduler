@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle, MapPin, Send, Clock, RotateCcw, LogOut } from 'lucide-react';
+import { Users, Check, X, MessageSquare, Phone, Mail, UserPlus, Pencil, EyeOff, FileText, UserMinus, Ban, Lock, BookOpenCheck, AlertTriangle, MapPin, Send, Clock, RotateCcw, LogOut, LifeBuoy, ListOrdered } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import RatingBadge from './RatingBadge';
@@ -12,7 +12,7 @@ import PayLabel from './PayLabel';
 import { fmtDate, fmtTimeRange, fmtDateTime } from '../utils/venueTime';
 
 const APPROVAL_LABEL = { venue_default: 'Venue setting', auto: 'Book instantly', manual: 'Needs approval' };
-const SOURCE_LABEL = { manager_assign: 'Assigned by manager', offer: 'Accepted an offer' };   // Phase 29
+const SOURCE_LABEL = { manager_assign: 'Assigned by manager', offer: 'Accepted an offer', cover: 'Covering for a teammate' };   // Phase 29 / 34
 const OFFER_CHIP = {
   pending: { label: 'Waiting', cls: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30' },
   accepted: { label: 'Accepted', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' },
@@ -195,6 +195,11 @@ export default function EventRosterModal({
                                   <Lock className="w-3 h-3" /> {issue.includes('not verified') ? issue : `Missing: ${issue}`}
                                 </div>
                               ))}
+                              {p.cover && (
+                                <div className="text-[10px] inline-flex items-center gap-1 text-amber-300 mr-2">
+                                  <LifeBuoy className="w-3 h-3" /> {p.cover === 'pending_approval' ? 'Someone took their cover request · approve it in Hand-offs' : 'Asked for cover · still booked'}
+                                </div>
+                              )}
                               {p.time_off && (
                                 <div className="text-[10px] inline-flex items-center gap-1 text-rose-300">
                                   <AlertTriangle className="w-3 h-3" /> Has time off during this shift{p.time_off_reason ? ` · “${p.time_off_reason}”` : ''}
@@ -285,6 +290,16 @@ export default function EventRosterModal({
                     </div>
                   )}
                 </div>
+
+                {/* Phase 34: people waiting for a spot, in order */}
+                {pos.waitlist && pos.waitlist.length > 0 && (
+                  <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5">
+                    <ListOrdered className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="font-semibold text-slate-300">Waitlist ({pos.waitlist.length}):</span>
+                    <span>{pos.waitlist.join(', ')}</span>
+                    <span className="text-slate-500">· the next person gets a spot automatically if one opens</span>
+                  </div>
+                )}
 
                 {pos.dropped && pos.dropped.length > 0 && (
                   <div>

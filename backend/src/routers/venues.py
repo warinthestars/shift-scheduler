@@ -1036,6 +1036,24 @@ async def get_venue_events(
                     seen_at=seen_at, booked_at=booked_at,
                 )
 
+    # Phase 34: who asked for cover, and who is waiting in line for a full position
+    from src.models import CoverRequest, WaitlistEntry
+    cover_by_request = dict((await db.execute(
+        select(CoverRequest.request_id, CoverRequest.status).where(
+            CoverRequest.shift_id.in_(shift_ids), CoverRequest.status.in_(("open", "pending_approval")))
+    )).all())
+    for ps in assigned_by_shift.values():
+        for person in ps:
+            person.cover = cover_by_request.get(person.request_id)
+    waitlist_by_shift = defaultdict(list)
+    for e, wu in (await db.execute(
+        select(WaitlistEntry, User).join(User, User.id == WaitlistEntry.worker_id)
+        .where(WaitlistEntry.shift_id.in_(shift_ids), WaitlistEntry.status.in_(("waiting", "offered")))
+        .order_by(WaitlistEntry.created_at.asc(), WaitlistEntry.id.asc())
+    )).all():
+        waitlist_by_shift[e.shift_id].append(
+            f"{wu.first_name or ''} {(wu.last_name or '')[:1]}{'.' if wu.last_name else ''}".strip() or "Someone")
+
     events = {}
     order = []
     for s in shifts:
@@ -1078,6 +1096,7 @@ async def get_venue_events(
             requested=requested_by_shift[s.id],
             offers=offers_by_shift[s.id],
             dropped=dropped_by_shift[s.id],            # Phase 29.4
+            waitlist=waitlist_by_shift[s.id],          # Phase 34
         ))
 
     result = []

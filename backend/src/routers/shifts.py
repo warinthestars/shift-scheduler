@@ -425,7 +425,7 @@ async def drop_shift(
     if time_to_start < 86400:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="It starts in less than 24 hours, so it can't be dropped. Hand it off to a teammate or message your manager."
+            detail="It starts in less than 24 hours, so it can't be dropped. Ask for cover, hand it off to a teammate, or message your manager."
         )
 
     # 4. Database Transaction
@@ -439,6 +439,9 @@ async def drop_shift(
         shift.spots_filled = max(0, (shift.spots_filled or 1) - 1)
         if shift.status == "FILLED":
             shift.status = "OPEN"
+        # Phase 34: their cover request (and a cover take waiting for the manager) closes with the booking
+        from src.services.cover import close_for_request
+        await close_for_request(db, shift_req.id, "You dropped this shift")
 
         # Step 3: Commit transaction
         await db.commit()
@@ -451,6 +454,8 @@ async def drop_shift(
 
     # Phase 29.1: managers hear about drops right away (after commit; never raises)
     await notify_events.shift_dropped(shift_req.id)
+    from src.services import waitlist
+    await waitlist.kick(shift.id)          # Phase 34: the freed spot goes to the waitlist right away (never raises)
     await activity.for_request("shift_dropped", shift_req.id, current_user.id,
                                f"“{shift_req.status_reason}”" if shift_req.status_reason else "")   # Phase 29.4: with their reason
 
