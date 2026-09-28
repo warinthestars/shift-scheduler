@@ -144,6 +144,7 @@ async def build_profile(db: AsyncSession, venue: Venue, user: User) -> VenueProf
         description=venue.description,
         logo_url=venue.logo_url,
         phone=venue.phone,
+        website_url=venue.website_url,                                      # Phase 34.6
         timezone=venue.timezone or "America/New_York",
         lat=float(venue.lat),
         lng=float(venue.lng),

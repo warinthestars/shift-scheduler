@@ -167,6 +167,7 @@ class VenueBase(BaseModel):
     logo_url: Optional[str] = None
     timezone: str = "America/New_York"
     phone: Optional[str] = None
+    website_url: Optional[str] = None       # Phase 34.6
     arrival_instructions: Optional[str] = None
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
@@ -189,6 +190,7 @@ class VenueCreate(BaseModel):
     logo_url: Optional[str] = None
     timezone: Optional[str] = "America/New_York"
     phone: Optional[str] = None
+    website_url: Optional[str] = Field(None, max_length=500)          # Phase 34.6
     arrival_instructions: Optional[str] = None
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
@@ -213,6 +215,7 @@ class VenueUpdateSettings(BaseModel):
     logo_url: Optional[str] = None
     timezone: Optional[str] = None
     phone: Optional[str] = None
+    website_url: Optional[str] = Field(None, max_length=500)          # Phase 34.6: "" clears it
     arrival_instructions: Optional[str] = None
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
@@ -617,6 +620,7 @@ class VenueProfileResponse(BaseModel):
     description: Optional[str] = None
     logo_url: Optional[str] = None
     phone: Optional[str] = None
+    website_url: Optional[str] = None        # Phase 34.6
     timezone: str = "America/New_York"
     lat: float
     lng: float

@@ -5,4 +5,4 @@ Keep this equal to "version" in frontend/package.json. Both are bumped together 
 (see CHANGELOG.md). The admin System tab shows both and warns when they differ, which usually means one
 container is still running an old build.
 """
-APP_VERSION = "0.34.0"
+APP_VERSION = "0.34.6"

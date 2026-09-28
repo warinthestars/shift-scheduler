@@ -24,6 +24,7 @@ function emptyForm(venue) {
     name: venue?.name || '',
     address: venue?.address || '',
     phone: venue?.phone || '',
+    website_url: venue?.website_url || '',                                        // Phase 34.6
     timezone: venue?.timezone || 'America/New_York',
     lat: venue?.lat != null ? String(venue.lat) : '',
     lng: venue?.lng != null ? String(venue.lng) : '',
@@ -265,6 +266,7 @@ export default function VenueSettingsModal({
       name: form.name.trim(),
       address: form.address.trim(),
       phone: form.phone.trim(),
+      website_url: form.website_url.trim(),                                       // Phase 34.6: "" clears it
       timezone: form.timezone,
       geofence_radius_meters: parseInt(form.geofence_radius_meters, 10) || 150,
       geofence_enabled: !!form.geofence_enabled,
@@ -374,6 +376,13 @@ export default function VenueSettingsModal({
               <div>
                 <label className={labelCls}>Street address *</label>
                 <input value={form.address} onChange={set('address')} className={inputCls} placeholder="142 Grand St, New York, NY" />
+              </div>
+              {/* Phase 34.6: the venue's own website, linked from the public venue page */}
+              <div>
+                <label className={labelCls} htmlFor="venue-website">Website</label>
+                <input id="venue-website" type="text" inputMode="url" autoComplete="url" value={form.website_url}
+                  onChange={set('website_url')} className={inputCls} placeholder="www.yourvenue.com" maxLength={500} />
+                <p className="text-[11px] text-slate-500 mt-1">Shown on your public venue page. Leave it blank to hide it.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>

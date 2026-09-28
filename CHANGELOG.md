@@ -4,6 +4,14 @@ All notable changes to ShiftBoard. The format follows [Keep a Changelog](https:/
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.34.6] - 2026-09-28 - Phase 34.6: Venue website
+
+### Added
+- Venues have a **Website** (`venues.website_url`, up to 500 characters). Managers set it in Venue settings → Details, under the street address.
+- The public venue page shows it next to the address and phone, as a link that opens in a new tab.
+- The server tidies what's typed (`hippodrome.com` → `https://hippodrome.com`) and only keeps real `http(s)` web addresses. Anything else is refused with a plain message: `javascript:`, `mailto:`, local or IP-only addresses, or addresses with a user name / password. An empty field clears it.
+- `website_url` is included in the venue API responses (`VenueResponse`, `VenueProfileResponse`) and accepted when creating or updating a venue.
+
 ## [0.34.0] - Phase 34 Feature Freeze
 
 The first versioned release. It captures the platform as of Phase 34, plus the Phase 34.5 stabilization sprint.

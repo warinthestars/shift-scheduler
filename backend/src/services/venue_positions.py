@@ -1,4 +1,6 @@
 """Phase 25: Default positions and venue field validation."""
+import re
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -26,7 +28,36 @@ NOT_NULL_VENUE_FIELDS = (
 TEXT_VENUE_FIELDS = (
     "name", "address", "phone", "arrival_instructions", "dress_code",
     "default_shift_notes", "description", "logo_url", "timezone", "approval_policy",
+    "website_url",                                                                                   # Phase 34.6
 )
+WEBSITE_ERROR = "Enter the venue's web address, like www.yourvenue.com."
+_HOST = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.IGNORECASE)
+
+
+def clean_website(value):
+    """Phase 34.6: 'hippodrome.com' -> 'https://hippodrome.com'. Only http(s) links to a real-looking
+    domain are kept (no javascript:, mailto:, IP-only or local addresses). None / '' -> None."""
+    if value is None:
+        return None
+    url = str(value).strip()
+    if not url:
+        return None
+    if any(ch.isspace() for ch in url):
+        raise HTTPException(status_code=400, detail=WEBSITE_ERROR)
+    if "://" not in url:
+        if ":" in url.split("/")[0].split("?")[0] and not re.match(r"^[^:/]+:\d+", url):
+            raise HTTPException(status_code=400, detail=WEBSITE_ERROR)      # e.g. javascript:alert(1), mailto:x
+        url = "https://" + url
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").rstrip(".")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=WEBSITE_ERROR)
+    if parts.scheme.lower() not in ("http", "https") or not _HOST.match(host) or parts.username or parts.password:
+        raise HTTPException(status_code=400, detail=WEBSITE_ERROR)
+    if len(url) > 500:
+        raise HTTPException(status_code=400, detail="That web address is too long (up to 500 characters).")
+    return url
 
 
 async def ensure_default_positions(db: AsyncSession, venue_id) -> None:
@@ -64,6 +95,9 @@ def clean_venue_payload(data: dict) -> dict:
             ZoneInfo(data["timezone"])
         except Exception:
             raise HTTPException(status_code=400, detail="Pick a time zone from the list.")
+
+    if "website_url" in data:                                                # Phase 34.6
+        data["website_url"] = clean_website(data["website_url"])
 
     if "approval_policy" in data and data["approval_policy"] not in VALID_APPROVAL_POLICIES:
         raise HTTPException(status_code=400, detail="Choose how shift requests are approved.")

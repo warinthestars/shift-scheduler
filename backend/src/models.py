@@ -119,6 +119,7 @@ class Venue(Base):
     logo_url = Column(Text, nullable=True)
     timezone = Column(String(64), nullable=False, default="America/New_York")
     phone = Column(String(30), nullable=True)
+    website_url = Column(String(500), nullable=True)                           # Phase 34.6: public profile link
     arrival_instructions = Column(Text, nullable=True)
     dress_code = Column(Text, nullable=True)
     default_shift_notes = Column(Text, nullable=True)

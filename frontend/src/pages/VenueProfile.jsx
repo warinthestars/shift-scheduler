@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, MapPin, Phone, ExternalLink, Info, Users, Calendar, Clock, Building2, Check, AlertCircle,
+  ArrowLeft, MapPin, Phone, ExternalLink, Info, Users, Calendar, Clock, Building2, Check, AlertCircle, Globe,
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +10,14 @@ import PayLabel from '../components/PayLabel';
 import { VenueAvatar } from './VenuesDirectory';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
 import EventListingModal from '../components/EventListingModal';
+
+// Phase 34.6: the venue's website. Only http(s) links are ever rendered (the server checks this too).
+function websiteHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
+}
+function websiteLabel(url) {
+  return url.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+}
 
 const MY_STATUS = {
   pending: { label: 'Waiting for approval', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
@@ -109,6 +117,14 @@ export default function VenueProfile() {
                 {profile.phone && (
                   <a href={`tel:${profile.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400">
                     <Phone className="w-4 h-4" /> {profile.phone}
+                  </a>
+                )}
+                {websiteHref(profile.website_url) && (
+                  <a href={websiteHref(profile.website_url)} target="_blank" rel="noopener noreferrer nofollow"
+                    className="inline-flex items-center gap-1 hover:text-emerald-400 min-w-0" title="Opens the venue's website">
+                    <Globe className="w-4 h-4 flex-shrink-0" />
+                    <span className="truncate max-w-[16rem]">{websiteLabel(profile.website_url)}</span>
+                    <ExternalLink className="w-3 h-3 flex-shrink-0" />
                   </a>
                 )}
               </div>

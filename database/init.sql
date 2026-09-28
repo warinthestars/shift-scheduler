@@ -65,6 +65,7 @@ CREATE TABLE venues (
     logo_url TEXT,
     timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
     phone VARCHAR(30),
+    website_url VARCHAR(500),                                -- Phase 34.6: the venue's own website (public profile)
     arrival_instructions TEXT,
     dress_code TEXT,
     default_shift_notes TEXT,
