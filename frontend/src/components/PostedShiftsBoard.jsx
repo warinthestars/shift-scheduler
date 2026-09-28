@@ -70,7 +70,7 @@ export default function PostedShiftsBoard({
         }
       })
       .catch((err) => {
-        if (active) setError(err.response?.data?.detail || 'Could not load posted shifts.');
+        if (active) setError(err.response?.data?.detail || 'Could not load posted events.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -138,9 +138,9 @@ export default function PostedShiftsBoard({
         <div className="flex items-start gap-2">
           <CalendarIcon className="w-5 h-5 text-emerald-400 mt-0.5 flex-shrink-0" />
           <div className="min-w-0">
-            <h2 className="text-base font-bold text-white">Posted shifts ({events.length})</h2>
+            <h2 className="text-base font-bold text-white">Posted events ({events.length})</h2>
             <p className="text-xs text-slate-400">
-              Every event with its positions, staff and requests.
+              Every event with its shifts, staff and requests.
               {timeZone && <span className="text-slate-500"> Times in venue time ({timeZone}).</span>}
             </p>
           </div>
@@ -171,7 +171,7 @@ export default function PostedShiftsBoard({
       )}
 
       {loading && events.length === 0 ? (
-        <div className="text-center py-12 text-xs text-slate-400">Loading posted shifts…</div>
+        <div className="text-center py-12 text-xs text-slate-400">Loading posted events…</div>
       ) : viewMode === 'calendar' ? (
         <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-h-[620px]">
           <Calendar
@@ -203,9 +203,9 @@ export default function PostedShiftsBoard({
         <div className="text-center py-12 bg-slate-950/50 rounded-xl border border-slate-800">
           <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
           <p className="text-xs text-slate-400">
-            {scope === 'upcoming' ? 'No upcoming shifts posted for this venue.'
-              : scope === 'drafts' ? 'No drafts. Use “Save as draft” when posting a shift to prepare it before workers can see it.'
-              : 'No shifts found.'}
+            {scope === 'upcoming' ? 'No upcoming events posted for this venue.'
+              : scope === 'drafts' ? 'No drafts. Use “Save as draft” when posting an event to prepare it before workers can see it.'
+              : 'No events found.'}
           </p>
         </div>
       ) : (

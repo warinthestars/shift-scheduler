@@ -78,7 +78,7 @@ async def _book_locked(
         if event is not None and event.cancelled_at is not None:
             raise HTTPException(status_code=400, detail="This event was cancelled.")
     if (shift.status or "").upper() == "CANCELLED":
-        raise HTTPException(status_code=400, detail="This position was cancelled.")
+        raise HTTPException(status_code=400, detail="This shift was cancelled.")
     if (shift.status or "").upper() == "DRAFT":                                        # Phase 29.3
         raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before booking people.")
     if as_utc(shift.end_time) <= now:
@@ -89,7 +89,7 @@ async def _book_locked(
             detail="This venue isn't booking you right now." if you else f"{who} is blocked at this venue. Unblock them on the Team page first.",
         )
     if (shift.spots_filled or 0) >= (shift.capacity or 1) or (shift.status or "").upper() != "OPEN":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This position is already full.")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This shift is already full.")
 
     # One active request per worker per event
     same_event_q = (
@@ -105,7 +105,7 @@ async def _book_locked(
             if st in PENDING_STATUSES:
                 target = req                       # their own waiting request: approve it
                 continue
-            raise HTTPException(status_code=400, detail="You're already booked on this position." if you else f"{who} is already booked on this position.")
+            raise HTTPException(status_code=400, detail="You're already booked on this shift." if you else f"{who} is already booked on this shift.")
         if st in PENDING_STATUSES:
             req.status = "withdrawn"
             req.status_reason = f"Booked as {shift.role_type} instead"
@@ -129,7 +129,7 @@ async def _book_locked(
                             else f"{who} {HISTORY_MESSAGES[st]}, so they can't be booked on it again."),
                 )
             if st not in REASSIGNABLE_STATUSES and st not in PENDING_STATUSES:
-                raise HTTPException(status_code=400, detail="They're already on this position.")
+                raise HTTPException(status_code=400, detail="They're already on this shift.")
 
     # Phase 29.4: booking back someone who dropped this event needs the manager's reason
     # (approving their own "ask to come back" request is fine: they already gave one)
@@ -245,9 +245,9 @@ async def create_offers(
     try:
         shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
         if shift is None:
-            raise HTTPException(status_code=404, detail="Position not found.")
+            raise HTTPException(status_code=404, detail="Shift not found.")
         if (shift.status or "").upper() == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
+            raise HTTPException(status_code=400, detail="This shift was cancelled.")
         if (shift.status or "").upper() == "DRAFT":                                    # Phase 29.3
             raise HTTPException(status_code=400, detail="This event is still a draft. Publish it before sending offers.")
         if shift.event_id:
@@ -257,7 +257,7 @@ async def create_offers(
         if as_utc(shift.start_time) <= now:
             raise HTTPException(status_code=400, detail="This shift has already started. Use Assign instead.")
         if (shift.spots_filled or 0) >= (shift.capacity or 1):
-            raise HTTPException(status_code=400, detail="This position is already full.")
+            raise HTTPException(status_code=400, detail="This shift is already full.")
 
         cands = {c.worker_id: c for c in await list_candidates(db, shift, worker_ids=ids)}
         users = {u.id: u for u in (await db.execute(select(User).where(User.id.in_(ids)))).scalars().all()}
@@ -273,7 +273,7 @@ async def create_offers(
                 skipped.append(OfferSkip(worker_id=wid, name=name, reason="Not found, inactive or blocked."))
                 continue
             if c.offered:
-                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Already has an offer for this position."))
+                skipped.append(OfferSkip(worker_id=wid, name=name, reason="Already has an offer for this shift."))
                 continue
             if c.dropped_at is not None and not c.requested_this:                     # Phase 29.4
                 skipped.append(OfferSkip(worker_id=wid, name=name, reason="Dropped this event earlier. Use Assign with a reason."))
@@ -528,7 +528,7 @@ async def list_candidates(
             if sid == shift.id and st in PENDING_STATUSES:
                 requested_this = True
             elif sid == shift.id:
-                reason = "Already booked on this position."
+                reason = "Already booked on this shift."
             elif st in PENDING_STATUSES:
                 pass                       # booking them here withdraws that request
             else:

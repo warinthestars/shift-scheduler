@@ -88,7 +88,7 @@ export function ApprovalQueueCard({ requests, reliabilityMap = {}, timeZone, act
                     <X className="w-3 h-3" /> Deny
                   </button>
                   <button type="button" onClick={() => onApprove(req.id)} disabled={busy || full}
-                    title={full ? 'Position is full' : 'Approve'}
+                    title={full ? 'Shift is full' : 'Approve'}
                     className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                     <Check className="w-3 h-3" /> Approve
                   </button>

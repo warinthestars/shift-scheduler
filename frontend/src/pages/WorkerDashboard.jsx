@@ -563,7 +563,7 @@ export default function WorkerDashboard() {
             <Info className="w-4 h-4 text-indigo-300 flex-shrink-0 mt-0.5" />
             <span>
               <b>Worker preview.</b> You're seeing this page exactly as a worker would: hidden pay and staff-only notes stay
-              hidden unless you're booked on that position. Your manager screens still show full pay.
+              hidden unless you're booked on that shift. Your manager screens still show full pay.
             </span>
           </div>
         )}

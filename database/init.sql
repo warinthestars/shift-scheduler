@@ -1,11 +1,18 @@
 -- ==============================================================================
 -- ShiftBoard Database Initialization Schema
 -- PostgreSQL 16
--- 
--- NOTE: If updating ENUM definitions or database constraints, wipe the existing
--- Docker database volume to apply changes:
---   docker compose down -v
---   docker compose up --build
+--
+-- RULES (Phase 34.5):
+--   * NO native PostgreSQL ENUMs. Never write CREATE TYPE ... AS ENUM. Every status / role
+--     column is a plain VARCHAR (the core user_role, request_status, shift_status and
+--     transfer_status columns are VARCHAR(50)); allowed values are checked in the app
+--     (Pydantic + Python Enum classes). The asyncpg driver can't cast to native ENUMs.
+--   * Every model in backend/src/models.py has its CREATE TABLE here, with the same
+--     columns, types, nullability, foreign keys and indexes. Change both together.
+--   * This file only runs on an EMPTY database. To apply a change, either wipe it:
+--       docker compose down -v
+--       docker compose up -d --build
+--     or run the phase's "keep your data" SQL (ALTER TABLE ... / CREATE ... IF NOT EXISTS).
 -- ==============================================================================
 
 -- Enable UUID Extension
@@ -219,6 +226,7 @@ CREATE TABLE shifts (
 );
 
 CREATE INDEX idx_shifts_venue ON shifts(venue_id);
+CREATE INDEX idx_shifts_status ON shifts(status);                                  -- Phase 34.5 (matches the model)
 CREATE INDEX idx_shifts_start_time ON shifts(start_time);
 CREATE INDEX idx_shifts_role_type ON shifts(role_type);
 CREATE INDEX idx_shifts_event ON shifts(event_id);
@@ -434,6 +442,7 @@ CREATE TABLE notification_deliveries (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_notification_deliveries_due ON notification_deliveries(status, send_after);
+CREATE INDEX idx_notification_deliveries_notification ON notification_deliveries(notification_id);   -- Phase 34.5 (FK lookups / cascades)
 
 CREATE TABLE notification_preferences (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

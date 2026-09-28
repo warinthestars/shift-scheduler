@@ -42,7 +42,7 @@ def _norm_time(value: str, label: str) -> str:
 
 def _position_dicts(positions: List[EventTemplatePosition]) -> List[dict]:
     if not positions:
-        raise HTTPException(status_code=400, detail="Add at least one position.")
+        raise HTTPException(status_code=400, detail="Add at least one shift.")
     out = []
     for p in positions:
         _validate_position(EventPositionInput(**p.model_dump()))
@@ -192,7 +192,7 @@ async def template_from_event(db: AsyncSession, event: ShiftEvent, venue: Venue,
         .order_by(Shift.created_at.asc())
     )).scalars().all()
     if not shifts:
-        raise HTTPException(status_code=400, detail="Nothing to save: every position is cancelled.")
+        raise HTTPException(status_code=400, detail="Nothing to save: every shift is cancelled.")
     tz = ZoneInfo(venue.timezone or "America/New_York")
     start = event.start_time if event.start_time.tzinfo else event.start_time.replace(tzinfo=timezone.utc)
     end = event.end_time if event.end_time.tzinfo else event.end_time.replace(tzinfo=timezone.utc)

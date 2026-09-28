@@ -57,7 +57,7 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
 
   return (
     <ModalShell
-      title="Duplicate shift"
+      title="Duplicate event"
       subtitle={`${event.title} · ${fmtDate(event.start_time, timeZone)} · ${fmtTimeRange(event.start_time, event.end_time, timeZone)}`}
       icon={<Copy className="w-5 h-5 text-emerald-400" />}
       onClose={onClose}
@@ -99,7 +99,7 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
         </span>
       </label>
       <p className="text-[11px] text-slate-500 mt-3">
-        Same start time ({timeZone || 'venue'} time), positions, pay, notes and approval settings. Nobody is booked on the copies.
+        Same start time ({timeZone || 'venue'} time), shifts, pay, notes and approval settings. Nobody is booked on the copies.
       </p>
       {dates.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">

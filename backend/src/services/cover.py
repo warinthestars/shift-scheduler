@@ -404,7 +404,7 @@ async def sweep(db: AsyncSession, now: datetime) -> List[Tuple[str, UUID]]:
             await _close(cover, "cancelled", "The booking changed (dropped, removed or cancelled)", "cancelled_by_sender")
             continue
         if (shift.status or "").upper() == "CANCELLED":
-            await _close(cover, "cancelled", "The position was cancelled", "cancelled_by_sender")
+            await _close(cover, "cancelled", "The shift was cancelled", "cancelled_by_sender")
             continue
         if cover.status != "open":
             continue

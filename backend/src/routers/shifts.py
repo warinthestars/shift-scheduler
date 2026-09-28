@@ -241,7 +241,7 @@ async def update_shift_request_status(
             exclude_shift_id=shift.id
         )
         if shift.spots_filled >= shift.capacity:
-            raise HTTPException(status_code=400, detail="This position is already full.")
+            raise HTTPException(status_code=400, detail="This shift is already full.")
         shift.spots_filled += 1
         if shift.spots_filled >= shift.capacity:
             shift.status = "FILLED"
@@ -252,7 +252,7 @@ async def update_shift_request_status(
         # Phase 26.1: booked on this position -> close their other waiting requests in the event
         await withdraw_other_pending_in_event(
             db, shift_req.worker_id, shift.event_id, shift.id,
-            "Booked on another position for this event",
+            "Booked on another shift at this event",
         )
     elif target_clean == "rejected":
         if prev_status == "approved":

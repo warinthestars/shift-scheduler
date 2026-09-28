@@ -120,7 +120,7 @@ export default function VenueManagerDashboard() {
       console.error('Failed to load venue manager data:', err);
       setNotification({
         type: 'error',
-        message: "Couldn't load your shifts and requests. Check your connection and refresh.",
+        message: "Couldn't load your events and requests. Check your connection and refresh.",
       });
     } finally {
       setLoading(false);
@@ -313,7 +313,7 @@ export default function VenueManagerDashboard() {
   const askDeleteDraft = (ev) =>
     setConfirmDialog({
       title: 'Delete this draft?',
-      message: `“${ev.title}” and its positions will be deleted. Nobody was told about it, so nobody is affected.`,
+      message: `“${ev.title}” and its shifts will be deleted. Nobody was told about it, so nobody is affected.`,
       confirmLabel: 'Delete draft',
       danger: true,
       onConfirm: async () => {
@@ -325,12 +325,12 @@ export default function VenueManagerDashboard() {
   const askSaveTemplate = (ev) =>
     setConfirmDialog({
       title: 'Save as a template',
-      message: 'Saves the times, where, notes and positions (with pay) so you can post this event again in a few clicks. Dates and people are not saved.',
+      message: 'Saves the times, where, notes and shifts (with pay) so you can post this event again in a few clicks. Dates and people are not saved.',
       confirmLabel: 'Save template',
       input: { label: 'Template name', placeholder: 'e.g. Friday Jazz', initial: ev.title, required: true },
       onConfirm: async (name) => {
         await api.post(`/events/${ev.event_id}/save-as-template`, { name });
-        setNotification({ type: 'success', message: `Saved the template “${name}”. Pick it next time you post a shift.` });
+        setNotification({ type: 'success', message: `Saved the template “${name}”. Pick it next time you post an event.` });
       },
     });
 
@@ -343,7 +343,7 @@ export default function VenueManagerDashboard() {
     setReasonDialog({
       title: `Cancel ${pos.role_type}?`,
       message: `Everyone booked or waiting for ${pos.role_type} on "${ev.title}" will see it as cancelled.`,
-      confirmLabel: 'Cancel position',
+      confirmLabel: 'Cancel shift',
       danger: true,
       onConfirm: async (reason) => {
         await api.post(`/events/${ev.event_id}/positions/${pos.shift_id}/cancel`, { reason });
@@ -418,7 +418,7 @@ export default function VenueManagerDashboard() {
               onClick={() => setEventForm({ mode: 'create' })}
               className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
             >
-              <Plus className="w-4 h-4" /> Post a shift
+              <Plus className="w-4 h-4" /> Post an event
             </button>
             <button type="button" onClick={openTemplates} disabled={!venueDetails} className={headerBtn}>
               <LayoutTemplate className="w-4 h-4 text-indigo-300" /> Templates
@@ -564,7 +564,7 @@ export default function VenueManagerDashboard() {
             setNotification({
               type: 'success',
               message: saved?.status === 'draft'
-                ? 'Draft saved. Only managers can see it. Publish it from Posted Shifts when it’s ready.'
+                ? 'Draft saved. Only managers can see it. Publish it from Posted events when it’s ready.'
                 : info.published
                   ? 'Published. Workers can see it and your team has been told.'
                   : 'Event updated.',

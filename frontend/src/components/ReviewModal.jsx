@@ -99,7 +99,7 @@ export default function ReviewModal({ venueId, item, timeZone, busy, onApprove, 
           {!isTransfer && d.outside_department && (
             <div className="p-3 rounded-xl border border-amber-500/40 bg-amber-500/10 text-sm text-amber-100">
               <div className="font-bold text-amber-200">Outside the departments they work</div>
-              <div className="text-xs mt-0.5">They asked for {d.shift?.role_type || 'this position'}, which isn't in the departments on their profile or their positions here. That's why it's waiting for you.</div>
+              <div className="text-xs mt-0.5">They asked for {d.shift?.role_type || 'this shift'}, which isn't in the departments on their profile or their positions here. That's why it's waiting for you.</div>
             </div>
           )}
           <div className={`p-3 rounded-xl border text-sm ${note ? 'bg-amber-500/5 border-amber-500/40 text-amber-50' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>

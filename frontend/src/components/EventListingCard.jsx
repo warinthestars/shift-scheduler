@@ -161,7 +161,7 @@ export default function EventListingCard({ listing, onOpen }) {
           );
         })}
         {extra > 0 && (
-          <div className="px-3 py-1.5 text-[11px] text-slate-400">+{extra} more position{extra === 1 ? '' : 's'}</div>
+          <div className="px-3 py-1.5 text-[11px] text-slate-400">+{extra} more shift{extra === 1 ? '' : 's'}</div>
         )}
       </div>
 

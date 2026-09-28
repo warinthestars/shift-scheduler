@@ -1,236 +1,332 @@
-# ShiftBoard 📅⚡
+# ShiftBoard
 
-> **Modern Hospitality Call-Board & Shift Scheduling Platform**  
-> Connecting service-industry professionals with event venues, restaurants, and bars in real-time.
+> A shift scheduling and call-board platform for the service industry: venues post events, workers pick up shifts, and everyone knows who is working, where, and when.
+
+**Version:** see `frontend/package.json` (web app) and `backend/src/version.py` (server). History is in [CHANGELOG.md](CHANGELOG.md).
 
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg?style=flat&logo=fastapi)](https://fastapi.tiangolo.com)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB.svg?style=flat&logo=python)](https://www.python.org/)
-[![React](https://img.shields.io/badge/Frontend-React_18_(Vite)-61DAFB.svg?style=flat&logo=react)](https://react.dev/)
-[![Tailwind CSS](https://img.shields.io/badge/Styles-Tailwind_CSS-38B2AC.svg?style=flat&logo=tailwind-css)](https://tailwindcss.com/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB.svg?style=flat&logo=python)](https://www.python.org/)
+[![React](https://img.shields.io/badge/Frontend-React_18_(Vite_5)-61DAFB.svg?style=flat&logo=react)](https://react.dev/)
 [![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL_16-4169E1.svg?style=flat&logo=postgresql)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Container-Docker_Compose-2496ED.svg?style=flat&logo=docker)](https://www.docker.com/)
+[![Docker](https://img.shields.io/badge/Runs_on-Docker_Compose-2496ED.svg?style=flat&logo=docker)](https://www.docker.com/)
 
 ---
 
-## 1. Project Status & Working Features
-
-### Operational Features
-
-* **Authentication System**:
-  * Dual-mode authentication supporting local email/password login and configurable Firebase OAuth.
-  * Robust password security using `passlib[bcrypt]` salted hashes with defense-in-depth verification.
-  * Standard HS256 JWT tokens generated using `python-jose` encoding claims for subject UUID (`sub`), role (`role`), and venue assignments (`venue_id`).
-  * Global Axios HTTP interceptors that inject Bearer tokens, automatically handle 401 unauthorized errors, and normalize cross-origin proxy paths.
-
-* **Database Integrity**:
-  * High-performance asynchronous PostgreSQL integration powered by SQLAlchemy 2.0 and `asyncpg`.
-  * URL-safe dynamic connection strings that properly parse special characters and prevent password authentication failures across containerized environments.
-  * Resilient schema design: uses standard `VARCHAR(50)` columns for role attributes to bypass restrictive async driver ENUM casting errors while enforcing strict application-level validation via Pydantic models.
-
-* **Role-Based Access Control (RBAC)**:
-  * Client-side session parsing with `jwt-decode` extracts user claims directly on token acquisition.
-  * Declarative `<ProtectedRoute allowedRoles={[...]}>` route wrappers prevent unauthorized access across application areas.
-  * Isolated, dedicated user dashboards for **Platform Admin** (`/admin`), **Venue Manager** (`/venue`), and **Worker** (`/worker`).
-
-* **Automated Seeding**:
-  * Lifecycle startup hook (`seed_initial_data`) verifies and provisions the database on initial launch.
-  * Injects pre-configured, bcrypt-hashed demo accounts (Admin, Venue Manager, Worker), realistic venue locations with geofence radii, active shifts, and whitelist records for instant end-to-end testing.
+## Contents
+1. [Words we use](#1-words-we-use)
+2. [Roles](#2-roles)
+3. [What it does](#3-what-it-does)
+4. [Architecture](#4-architecture)
+5. [Database rules](#5-database-rules)
+6. [Running it](#6-running-it)
+7. [Configuration](#7-configuration)
+8. [Working on the code](#8-working-on-the-code)
+9. [Versioning & releases](#9-versioning--releases)
 
 ---
 
-## 2. Technical Stack & Architecture
+## 1. Words we use
+These are the words in the app. Use them in code comments, docs and every new screen.
 
-ShiftBoard utilizes a decoupled, containerized client-server architecture built for low latency, high throughput, and developer ergonomics.
+| Word | Meaning | Example | In the code |
+| :--- | :--- | :--- | :--- |
+| **Event** | The parent: one thing happening at one time and place. | *Saturday Banquet, 5 PM to 1 AM* | `ShiftEvent` / `shift_events` |
+| **Shift** | One role and time block inside an event, with a number of spots. | *Bartender, 5 PM to 1 AM, 3 spots* | `Shift` / `shifts` (the `role_type` column holds the position name) |
+| **Position** | A job type in the venue's catalog, with default pay. | *Bartender at $28/hr* | `VenuePosition` / `venue_positions` |
+| **Booking / request** | One person on one shift, waiting or booked. | *Ava is booked as Bartender* | `ShiftRequest` / `shift_requests` |
+| **Hand-off** | A booked worker gives their shift to a named teammate. | | `ShiftTransfer` / `shift_transfers` |
+| **Cover request** | A booked worker asks their team (or the public board) to take their shift. | | `CoverRequest` / `cover_requests` |
+| **Waitlist** | A line for a full shift. | | `WaitlistEntry` / `waitlist_entries` |
+| **Offer** | A manager offers a shift to one or more people; the first to accept gets it. | | `ShiftOffer` / `shift_offers` |
+
+Many API fields still say `positions` for an event's shifts (for example `EventListing.positions[]`). That's a historical name: the UI says **shifts**.
+
+---
+
+## 2. Roles
+Every account has exactly one role, stored as plain text in `users.role`.
+
+| Role | Key | Home page | What they do |
+| :--- | :--- | :--- | :--- |
+| **Platform Admin** | `platform_admin` | `/admin` | Everything, across every venue. The admin console has Overview, Venues, Users, Activity and System tabs. Admins can switch into any venue's manager view, and see the worker view. |
+| **Venue Manager** | `venue_manager` | `/venue` | Runs one or more venues: posts events, approves requests and hand-offs, staffs shifts, manages the team, edits time sheets, and downloads hours. |
+| **Worker** | `worker` | `/worker` | Finds and requests shifts, clocks in and out, hands off, asks for cover, joins waitlists, and tracks hours and pay. |
+
+Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_current_user`, `require_role(...)` and its shortcuts `require_admin`, `require_manager_or_admin`, `require_worker`, plus `verify_venue_access`. Admins pass every role check). In the browser, `<ProtectedRoute allowedRoles={[...]}>` does the same. Emails listed in `ALWAYS_ADMIN_EMAILS` are always promoted to admin, so you can't get locked out.
+
+---
+
+## 3. What it does
+
+### Signing in
+* **Email and password**: bcrypt hashes (`passlib`), HS256 JWTs (`python-jose`). The frontend keeps the token and an Axios interceptor adds it to every call.
+* **Google / Firebase sign-in with just-in-time accounts**: the backend verifies the Firebase ID token with `firebase-admin` (`POST /api/auth/firebase-login`), then matches the account in this order:
+  1. by Firebase UID;
+  2. by verified email, linking the UID to that existing account (which keeps its role);
+  3. otherwise it creates a **worker** account on the spot. This needs a verified email and `ALLOW_SELF_REGISTRATION=true`. Emails in `ALWAYS_ADMIN_EMAILS` become admins.
+* Mock Firebase mode (`USE_MOCK_FIREBASE=true`) for local testing without Google.
+* Invites: managers invite people by email, link or QR code. Joining through an invite adds them to the venue team.
+
+### For workers
+* **Find shifts**: upcoming events, grouped by day, with filters:
+  * date
+  * position
+  * venue
+  * instant book
+  * fits my availability
+  * only my departments
+
+  At the top, **Need cover**: teammates' shifts they can take. At the bottom, **Full: join a waitlist**.
+* **Booking rules** (same everywhere, `services/auto_confirm.py`):
+  * The shift's own setting comes first. Then the venue policy decides:
+    * **Book my team instantly**: team members are booked right away; everyone else waits for a manager.
+    * **I approve everyone**
+    * **Book anyone instantly**
+  * An optional rating threshold also books highly rated people instantly.
+  * Shifts outside the worker's departments, and asking back after a drop, always need a manager.
+* One request per event. Double-booking is refused. Certificates (e.g. an alcohol server card) are checked, including expiry dates.
+* **My shifts**:
+  * clock in / out (with a location check when the venue uses it)
+  * shift notes and "read the update" acknowledgements
+  * shift chat, directions, add to calendar
+  * hand off, **ask for cover**, drop
+  * offers from managers and waitlist offers (with a countdown)
+* **Dropping**: allowed until 24 hours before the start. A drop with less than 72 hours' notice counts as a late drop for reliability. Workers can ask to come back; a manager has to approve it.
+* **Hand-offs**: to a named teammate who is free. The teammate accepts, then the manager approves.
+* **Cover requests** (Phase 34):
+  * The worker asks their team, or their team plus the public board (if the venue allows it). They stay booked until someone takes it.
+  * Taking it follows the venue's usual booking rules.
+  * If nobody takes it, the worker and managers are warned 12 h and 3 h before the start. Asking for cover never counts against reliability.
+* **Waitlists** (Phase 34): people join the line for a full shift. When a spot opens, the next person is either booked automatically or offered the spot for 30 minutes (10 minutes when the shift starts within 3 hours). A spot on offer is held for that person.
+* **Calendar**, **Hours & pay** (weekly totals, per venue, CSV download), and a **profile** with:
+  * photo, phone, emergency contact
+  * departments, positions
+  * weekly availability and time off
+  * certificates (uploaded and verified by managers)
+
+### For managers
+* **Today / This week board**:
+  * who's booked, clocked in, late or missing
+  * open spots
+  * unread updates
+  * one-tap actions (assign, offer, message)
+* **Posting events**:
+  * one event with several shifts, each with its own pay (hourly or a range), tips / tip pool, notes, staff-only notes and approval setting
+  * drafts, templates, copies to other dates (series)
+  * saved locations (off-site events)
+* **Requests to review** and **Hand-offs to approve**. Cover takes that need approval appear in the hand-off list with a **Cover** tag.
+* **Staffing**:
+  * assign someone directly
+  * offer a shift to several people (first to accept gets it)
+  * book back someone who dropped
+  * remove someone, mark a no-show
+* **Team**: members, positions, notes, blocking, invites (email / link / QR / CSV), ratings and reviews.
+* **Time sheets**: fix clock-in / clock-out times (every edit is logged). Download hours and pay as CSV in the venue's time zone.
+* **Reliability scoring** (`services/reliability.py`):
+  * The score is `100 × (on-time + ½ × late) ÷ (worked + no-shows + late drops)`, across the whole platform.
+  * Late means clocking in more than 10 minutes after the start.
+  * Drops with 72 hours' notice or more are excused.
+  * Managers see it as a badge next to each person.
+* **Activity log** of every booking, change and approval. **Venue settings**:
+  * address, clock-in area, clock-in rules
+  * approval policy, public cover
+  * positions & pay, locations, templates
+
+### Clock-in location check (geofencing)
+* The browser only sends coordinates (`frontend/src/utils/geo.js`). The server decides (`backend/src/services/clock.py`):
+  * It computes the Haversine distance to the venue or the event's location.
+  * Inside the radius: **on site**.
+  * Within the extra buffer: allowed but flagged **outside the area**.
+  * Farther away: **refused**.
+  * No location while the check is on: **refused**.
+* Coordinates must be real numbers in range. NaN / Infinity / out-of-range values are refused with a 422.
+* Off by default per venue. Each event can turn it on or off.
+
+### Notifications
+* **In the app** (bell), **email** (console, SMTP or Resend), **text** (Twilio; urgent items only, if the person turned texts on) and **phone / browser push**:
+  * Firebase Cloud Messaging when it's configured
+  * otherwise ShiftBoard's own Web Push via `pywebpush` / VAPID (keys are made automatically and stored in the `app_keys` table)
+* People choose channels and quiet hours. New-shift alerts can be instant, a daily digest, or off.
+* The app installs as a **PWA** (manifest, service worker `public/sw.js`, offline page).
+
+### Background worker
+* Runs inside the backend container: `backend/src/main.py` starts `notification_worker_loop()` from the FastAPI lifespan with `asyncio.create_task()`.
+* Every minute:
+  * auto clock-out
+  * 24 h / 2 h reminders
+  * "not clocked in" alerts
+  * unread-update alerts
+  * unfilled-shift alerts
+  * certificate expiry reminders
+  * cover request warnings and clean-up
+  * the waitlist line
+  * email / text / push delivery with retries
+* A Redis lock means only one process runs each tick.
+* Admin → System shows its heartbeat. `NOTIFICATIONS_WORKER_ENABLED=false` turns it off (only for extra API replicas).
+
+---
+
+## 4. Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Ingress ["Public Ingress & Reverse Proxy"]
-        CF["Cloudflare Tunnel (Zero-Trust)"]
-        NGINX["Nginx (Reverse Proxy & Static Server)"]
-    end
-
-    subgraph Client ["Client Layer"]
-        PWA["React 18 + Vite (Tailwind CSS, Axios, React Router)"]
-    end
-
-    subgraph API ["Application Layer"]
-        FastAPI["FastAPI Backend (Python 3.11)"]
-        Auth["Auth Engine (Bcrypt + Jose JWT)"]
-        AutoEngine["Auto-Confirm Engine"]
-    end
-
-    subgraph Persistence ["Persistence Layer"]
-        PG[("PostgreSQL 16 (asyncpg + SQLAlchemy)")]
-        Redis[("Redis 7 (Cache & Queues)")]
-    end
-
-    CF --> NGINX
-    NGINX --> PWA
-    PWA -->|REST API / JWT| FastAPI
-    FastAPI --> Auth
-    FastAPI --> AutoEngine
-    FastAPI --> PG
-    FastAPI --> Redis
+flowchart LR
+    Internet --> CF["Cloudflare Tunnel (cloudflared)"]
+    CF --> FE["frontend: Vite dev server :5173<br/>React 18 SPA / PWA"]
+    FE -- "/api (proxy)" --> BE["backend: FastAPI :8000<br/>+ background worker"]
+    BE --> PG[("PostgreSQL 16")]
+    BE --> RD[("Redis 7<br/>worker lock + heartbeat")]
+    BE --> EXT["Firebase Auth / FCM, SMTP or Resend,<br/>Twilio, Web Push services"]
 ```
 
-### Component Details
+| Layer | Stack |
+| :--- | :--- |
+| **Frontend** | React 18, Vite 5, Tailwind CSS 3, React Router 6, Axios, jwt-decode, react-big-calendar, date-fns, lucide-react, Firebase JS SDK (sign-in / messaging) |
+| **Backend** | Python 3.11, FastAPI, SQLAlchemy 2 (async, `asyncpg`), Pydantic v2, passlib[bcrypt], python-jose, firebase-admin, pywebpush / py-vapid, redis |
+| **Data** | PostgreSQL 16 (schema in `database/init.sql`), Redis 7 |
+| **Infrastructure** | Docker Compose (`database`, `redis`, `backend`, `frontend`, `cloudflared`). Secrets live in `.secrets/` (git-ignored) and are mounted read-only. |
 
-* **Frontend**:
-  * **React 18 (Vite)**: High-speed single-page application with hot module replacement (HMR).
-  * **Tailwind CSS**: Modern dark-themed, mobile-first hospitality interface with responsive typography.
-  * **React Router DOM**: Client-side declarative routing and protected route boundaries.
-  * **Axios & jwt-decode**: Authenticated HTTP client with token injection and dynamic payload decoding.
+The frontend container runs the Vite dev server with hot reload. Vite proxies `/api` to `backend:8000`, and the Cloudflare tunnel points at the frontend.
 
-* **Backend**:
-  * **Python 3.11 & FastAPI**: Asynchronous REST framework utilizing native `async`/`await` endpoints.
-  * **SQLAlchemy 2.0**: Asynchronous ORM utilizing `asyncpg` connection pooling and declarative models.
-  * **passlib[bcrypt] & python-jose**: Industry-standard cryptographic hashing and JWT lifecycle management.
-  * **Pydantic v2**: Type enforcement, input sanitization, and output schema filtering (excluding sensitive credentials).
+**Code map**
+```text
+backend/src/
+  main.py            app, CORS, routers, lifespan (seed + background worker)
+  auth.py            JWT + role checks            (locked: change only when asked)
+  version.py         the server's version (keep equal to frontend/package.json)
+  models.py          SQLAlchemy models             (every table is also in database/init.sql)
+  schemas.py         Pydantic request / response models
+  routers/           one file per area (auth, venues, events, shifts, listings, transfers, cover, team, ...)
+  services/          the logic (booking, auto_confirm, clock, cover, waitlist, reliability, notify*, ...)
+frontend/src/
+  pages/             WorkerDashboard, VenueManagerDashboard, AdminPanel, EarningsPage, ProfilePage, ...
+  components/        shared UI; admin/, manager/, worker/, profile/ sub-folders
+  context/AuthContext.jsx, api/client.js   (locked: change only when asked)
+  utils/             formatting, time zones, errors, push, version
+database/init.sql    the whole schema (runs on an empty database)
+```
 
-* **Infrastructure**:
-  * **Docker Compose (Bare-Metal Host Network)**: Synchronized container orchestration for development and production environments.
-  * **Nginx**: Production web server and API reverse proxy forwarding `/api/` endpoints to the backend.
-  * **PostgreSQL 16**: Relational database with UUID primary keys and transactional integrity.
-  * **Redis 7**: In-memory key-value cache and background task queue.
-  * **Cloudflare Tunnel (`cloudflared`)**: Zero-trust inbound ingress routing external traffic to the stack without opening inbound ports.
+API docs are live at `/docs` (Swagger) and `/redoc` on the backend.
 
 ---
 
-## 3. Role & Permission Matrix
+## 5. Database rules
 
-ShiftBoard implements strict multi-tenant Role-Based Access Control (RBAC):
+> **No native PostgreSQL ENUMs are used.** All status and role columns are plain `VARCHAR`: the core `user_role`, `request_status`, `shift_status` and `transfer_status` columns are `VARCHAR(50)`. They are validated in the application by Pydantic models and Python `Enum` classes. The `asyncpg` driver couldn't cast Python strings to native ENUMs, which caused 500 errors, so never write `CREATE TYPE ... AS ENUM` and never use SQLAlchemy's `Enum` column type.
 
-1. **Platform Admin (`platform_admin`)**: System-wide administrative oversight, venue creation, tenant management, and platform analytics.
-2. **Venue Manager (`venue_manager`)**: Operations lead managing venues, publishing shifts, reviewing applicant queues, approving/denying workers, and managing trusted whitelists.
-3. **Worker (`worker`)**: Hospitality talent discovering open shifts, submitting shift claims, tracking scheduled shifts, conducting GPS check-ins, and trading shifts.
-
-| Capability | Worker | Venue Manager | Platform Admin |
-| :--- | :---: | :---: | :---: |
-| **Browse & Filter Open Shifts** | ✅ | ✅ | ✅ |
-| **Request / Apply for Open Shift** | ✅ | ❌ | ❌ |
-| **Instant Auto-Confirm Engine Execution** | ✅ | ❌ | ❌ |
-| **GPS Geofenced Check-In & Check-Out** | ✅ | ❌ | ❌ |
-| **Propose / Accept Shift Swaps** | ✅ | ❌ | ❌ |
-| **View Personal Work Schedule** | ✅ | ❌ | ❌ |
-| **Create & Publish Venue Shifts** | ❌ | ✅ | ✅ |
-| **Configure Dynamic Role Requirements** | ❌ | ✅ | ✅ |
-| **Manage Shift Approval Queue (Approve/Deny)** | ❌ | ✅ | ✅ |
-| **Add / Remove Workers from Venue Whitelist** | ❌ | ✅ | ✅ |
-| **Configure Venue Auto-Approve Thresholds** | ❌ | ✅ | ✅ |
-| **Create / Provision New Venues** | ❌ | ❌ | ✅ |
-| **Assign / Reassign Venue Managers** | ❌ | ❌ | ✅ |
-| **Access System-Wide Analytics & Metrics** | ❌ | ❌ | ✅ |
-| **Delete Venues & Override Global Settings** | ❌ | ❌ | ✅ |
+* **Every model in `backend/src/models.py` has a matching `CREATE TABLE` in `database/init.sql`**: same columns, types, nullability, foreign keys and indexes. Change both together.
+* **Time:** all timestamps are `TIMESTAMPTZ`, and all comparisons in Python use timezone-aware UTC (`datetime.now(timezone.utc)`). Venue-local times are only for display and exports.
+* **There is no migration tool.** `init.sql` only runs on an empty database. To apply a schema change, pick one:
+  * wipe and rebuild: `docker compose down -v`, then `docker compose up -d --build`
+  * or run that phase's "keep your data" SQL (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, `CREATE ... IF NOT EXISTS`)
 
 ---
 
-## 4. Developer Setup & Quick-Start Guide
+## 6. Running it
 
-Follow this frictionless guide to launch the complete ShiftBoard stack locally.
-
-### Prerequisites
-* [Docker Desktop](https://www.docker.com/products/docker-desktop/) (v24.0+) with Docker Compose v2.
-* Git.
-
-### Step 1: Clone the Repository
-```bash
-git clone https://github.com/your-org/shift-scheduler.git
-cd shift-scheduler
-```
-
-### Step 2: Configure Environment & Secrets
-ShiftBoard utilizes synchronized environment files across Docker services. Initialize your local configuration files:
+**You need:** Docker Desktop (Compose v2) and git.
 
 ```bash
-# 1. Copy the root environment file
+# 1. Settings (copy the templates, then fill in real values)
 cp .env.template .env
-
-# 2. Copy the secrets configuration into .secrets
 cp .secrets/.secrets.env.template .secrets/.secrets.env
+cp backend/.env.template backend/.env        # optional
+cp frontend/.env.template frontend/.env      # optional
 
-# 3. (Optional) Copy backend and frontend environment templates
-cp backend/.env.template backend/.env
-cp frontend/.env.template frontend/.env
-```
-
-> [!NOTE]
-> The default templates are pre-configured with safe local development values and `USE_MOCK_FIREBASE=true` enabled, allowing immediate zero-dependency startup.
-
-### Step 3: Clean Build & Launch Stack
-To guarantee a fresh database schema and execute initial data seeding cleanly, run the destructive rebuild commands:
-
-```bash
-# Tear down existing containers and delete persistent volumes
+# 2. Build and start (first time, or after a schema change)
 docker compose down -v
-
-# Rebuild images and start all services in detached background mode
 docker compose up -d --build
-```
 
-### Step 4: Verify Service Health
-Check the container status and health checks:
-```bash
+# 3. Check
 docker compose ps
-```
-
-| Service | Address | Description |
-| :--- | :--- | :--- |
-| **Frontend Application** | [http://localhost:5173](http://localhost:5173) | Vite dev server / React SPA |
-| **Backend REST API** | [http://localhost:8000](http://localhost:8000) | FastAPI application server |
-| **Interactive API Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) | Swagger UI interactive documentation |
-| **Alternative API Docs** | [http://localhost:8000/redoc](http://localhost:8000/redoc) | ReDoc API specifications |
-| **PostgreSQL Database** | `localhost:5432` | Relational database (shiftboard) |
-| **Redis Cache** | `localhost:6379` | In-memory cache & background broker |
-
----
-
-## 5. Demo Accounts
-
-The backend automatically provisions the database on initial launch with pre-hashed accounts, realistic venues, and test shifts. Use these credentials to test the UI immediately:
-
-| Persona | Email Address | Password | Role Key | Target Dashboard |
-| :--- | :--- | :--- | :--- | :--- |
-| **Super Admin** | `demo_admin@shiftboard.com` | `SuperSecretDemo123!` | `platform_admin` | `/admin` |
-| **Venue Manager** | `demo_manager@shiftboard.com` | `DemoManager123!` | `venue_manager` | `/venue` |
-| **Worker** | `demo_worker@shiftboard.com` | `DemoWorker123!` | `worker` | `/worker` |
-
-> [!TIP]
-> On the login screen (`/login`), you can also click any of the **Quick Demo Credentials** buttons (Admin, Manager, Worker) to instantly populate the form fields.
-
----
-
-## 6. Useful Commands & Workflows
-
-### Streaming Logs
-```bash
-# View all service logs
-docker compose logs -f
-
-# View backend logs only
 docker compose logs -f backend
-
-# View frontend logs only
-docker compose logs -f frontend
-
-# View database logs only
-docker compose logs -f database
 ```
 
-### Rebuilding Containers
-```bash
-# Rebuild without cache after changing package dependencies
-docker compose build --no-cache
-docker compose up -d
-```
+| Service | Address |
+| :--- | :--- |
+| Web app | http://localhost:5173 (also on `PORT_FRONTEND`, default 80) |
+| API + docs | http://localhost:8000/docs |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
 
-### Resetting Database Schema & Re-Seeding
+**Demo accounts** (created on first start; the login page shows buttons for them when `SHOW_DEMO_LOGINS=true`):
+
+| Role | Email | Password |
+| :--- | :--- | :--- |
+| Platform Admin | `demo_admin@shiftboard.com` | `SuperSecretDemo123!` (or `SUPER_ADMIN_PASSWORD`) |
+| Venue Manager | `demo_manager@shiftboard.com` | `DemoManager123!` |
+| Worker | `demo_worker@shiftboard.com` | `DemoWorker123!` |
+| Worker | `worker1@shiftboard.com`, `worker2@shiftboard.com` | `Worker123!` |
+
+Change these before anyone else can reach the app.
+
+**Everyday commands**
 ```bash
-# Wipe database volume and re-run seed script
-docker compose down -v
-docker compose up -d --build
+docker compose up -d --build                  # after pulling changes (keeps data)
+docker compose restart frontend               # after changing package.json "version" (Vite reads it at start)
+docker compose exec frontend rm -rf node_modules/.vite && docker compose restart frontend   # blank page / "Invalid hook call"
+docker compose down -v && docker compose up -d --build                                     # wipe the database and start fresh
 ```
 
 ---
 
-## License
-Proprietary — Internal service-industry call board platform. All rights reserved.
+## 7. Configuration
+Real values go in `.secrets/.secrets.env` (git-ignored). The templates list every setting. The main ones:
+
+| Area | Settings |
+| :--- | :--- |
+| Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
+| Sign-in | `SECRET_KEY` / `JWT_SECRET_KEY`, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS` |
+| Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_PROJECT_ID`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
+| Links | `APP_BASE_URL`: the public address used in emails, texts and invites |
+| Email | `EMAIL_PROVIDER` (`console` \| `smtp` \| `resend`), `EMAIL_FROM`, `SMTP_*`, `RESEND_API_KEY` |
+| Texts | `SMS_PROVIDER` (`off` \| `console` \| `twilio`), `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
+| Push | `VAPID_PRIVATE_KEY` (optional; otherwise generated and stored in the database) |
+| Background worker | `NOTIFICATIONS_WORKER_ENABLED` (default `true`), `NOTIFICATIONS_DIGEST_HOUR` |
+| Files | `R2_*` (Cloudflare R2, optional) |
+| Tunnel | `CLOUDFLARE_TUNNEL_TOKEN` |
+
+Admin → System shows what's configured, what's missing and whether the background worker is running.
+
+---
+
+## 8. Working on the code
+Changes are planned as numbered **phases**. The prompts are written against the current files and applied by the coding agent (AGY). These rules always apply:
+
+1. **No native PostgreSQL ENUMs** (see section 5).
+2. **Sign-in is locked.** Don't refactor these unless the phase explicitly says to:
+   * `backend/src/auth.py`, `backend/src/routers/auth.py`, `backend/src/services/firebase.py`, `backend/src/services/always_admin.py`
+   * the CORS setup in `backend/src/main.py`
+   * `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`
+3. **Timezone-aware UTC** for every datetime comparison.
+4. **Schema changes** update `models.py` and `init.sql` together, and ship the rebuild reminder (`docker compose down -v` / `up -d --build`) plus "keep your data" SQL.
+5. **Error handling:** raise `HTTPException` validation errors before the generic `try/except`, and call `await db.rollback()` in every `except`. Notifications and activity logging run after the commit and never raise.
+6. **Words:** Event → Shift → Position, as in section 1.
+7. **No new packages** unless the phase says so.
+8. **Every phase ends with a version bump and a CHANGELOG entry** (section 9).
+
+---
+
+## 9. Versioning & releases
+ShiftBoard uses [Semantic Versioning](https://semver.org/). While it's pre-1.0, the version follows the phase number:
+
+| Phase | Version |
+| :--- | :--- |
+| Phase 34 (feature freeze) | `0.34.0` |
+| Phase 35 | `0.35.0` |
+| Phase 35.1 | `0.35.1` |
+| Phase 35.1.1 (or 35.0.1) | `0.35.2` (the next patch number) |
+
+**The version lives in two places. Keep them equal:**
+* `frontend/package.json` → `"version"`
+  * `frontend/vite.config.js` injects it as `__APP_VERSION__`
+  * read it through `frontend/src/utils/version.js`
+* `backend/src/version.py` → `APP_VERSION`
+  * shown in the API docs and on Admin → System
+
+Admin → System shows both and warns when they differ (one container is running an old build). Admins also see the web app version next to "Platform admin".
+
+**At the end of every phase:**
+1. Bump both version numbers.
+2. Add a section at the top of [CHANGELOG.md](CHANGELOG.md): `## [x.y.z] - YYYY-MM-DD - Phase N: title`, followed by bullets.
+3. Update this README if the architecture, roles, rules or setup changed.
+4. Restart the frontend container so Vite picks up the new version.

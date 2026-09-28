@@ -49,8 +49,8 @@ export default function EventTemplatesPanel({ venue, onError, onUseTemplate }) {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
         <p className="text-xs text-slate-400 max-w-xl">
-          Save the events you run again and again: the name, times, where, notes and positions with pay. When you post a
-          shift, pick a template, choose the date, and publish (or save it as a draft). You can also save any posted event
+          Save the events you run again and again: the name, times, where, notes and shifts with pay. When you post an
+          event, pick a template, choose the date, and publish (or save it as a draft). You can also save any posted event
           as a template from its ⋯ menu.
         </p>
         <button type="button" onClick={() => setEditing({ template: null })}

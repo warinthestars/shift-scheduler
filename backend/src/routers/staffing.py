@@ -36,7 +36,7 @@ router = APIRouter(tags=["Staffing"])
 async def _managed_shift(db: AsyncSession, shift_id: UUID, user: User) -> Shift:
     shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
     if shift is None:
-        raise HTTPException(status_code=404, detail="Position not found.")
+        raise HTTPException(status_code=404, detail="Shift not found.")
     await verify_venue_manager_access(shift.venue_id, user, db)
     return shift
 

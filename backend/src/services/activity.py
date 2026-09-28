@@ -187,7 +187,7 @@ async def _for_event(db: AsyncSession, kind: str, event_id, actor_id, extra: str
         "event_created": f"Posted {what}",
         "event_updated": f"Edited {what}",
         "event_cancelled": f"Cancelled {what}",
-        "position_cancelled": f"Cancelled a position in {what}",
+        "position_cancelled": f"Cancelled a shift in {what}",
         "event_duplicated": f"Copied {what}",
         "event_drafted": f"Saved a draft: {what}",                 # Phase 29.3
         "event_published": f"Published {what}",

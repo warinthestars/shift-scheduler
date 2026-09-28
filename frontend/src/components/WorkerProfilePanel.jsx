@@ -246,7 +246,7 @@ function ProfileExtras({ data, venueId, workerId, onReviewed, setConfirm }) {
   };
   const askReject = (c) => setConfirm({
     title: `Don't accept this ${c.label.toLowerCase()}?`,
-    message: 'They’ll be told what’s wrong so they can fix it. Positions that need it stay locked for them until it’s fixed.',
+    message: 'They’ll be told what’s wrong so they can fix it. Shifts that need it stay locked for them until it’s fixed.',
     confirmLabel: 'Not accepted',
     danger: true,
     input: { label: 'What’s wrong?', placeholder: 'e.g. The photo is blurry, or the name doesn’t match', required: true },

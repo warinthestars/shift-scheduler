@@ -29,7 +29,7 @@ export default function CertificatesPanel({ certifications = [], types = [], onC
 
   const askDelete = (t) => setConfirm({
     title: `Remove your ${t.label.toLowerCase()}?`,
-    message: 'Positions that need it will be locked for you until you add it again.',
+    message: 'Shifts that need it will be locked for you until you add it again.',
     confirmLabel: 'Remove',
     danger: true,
     onConfirm: async () => {

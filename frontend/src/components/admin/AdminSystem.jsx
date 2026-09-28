@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import api from '../../api/client';
 import { card, inputCls, btnGhost, btnPrimary, SectionTitle, ago, fmtDateTime } from './adminUi';
+import { APP_VERSION } from '../../utils/version';   // Phase 34.5
 
 function Row({ state, label, children }) {
   const [Icon, tone] = state === 'ok' ? [CheckCircle2, 'text-emerald-400'] : state === 'bad' ? [XCircle, 'text-rose-400'] : [AlertTriangle, 'text-amber-400'];
@@ -80,6 +81,15 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
             )}
           />
           <div className="divide-y divide-slate-800">
+            {/* Phase 34.5: both halves should run the same release */}
+            <Row state={sys.app_version && sys.app_version === APP_VERSION ? 'ok' : 'warn'} label="Version">
+              Web app {APP_VERSION} · Server {sys.app_version || 'unknown'}
+              {sys.app_version !== APP_VERSION && (
+                <span className="block text-amber-300">
+                  These should match. One of them is running an old build: run docker compose up -d --build, then hard-refresh this page.
+                </span>
+              )}
+            </Row>
             <Row state={sys.app_base_url_ok ? 'ok' : 'bad'} label="Public address (APP_BASE_URL)">
               {sys.app_base_url || 'Not set'}{!sys.app_base_url_ok && ' · links in emails, texts and invites will not open for people.'}
             </Row>

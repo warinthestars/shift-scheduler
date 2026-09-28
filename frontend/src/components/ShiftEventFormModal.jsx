@@ -346,7 +346,7 @@ export default function ShiftEventFormModal({
       endIso = zonedLocalToUtcIso(end, tz);
       if (new Date(endIso) <= new Date(startIso)) return setError('End time must be after the start time.');
     }
-    if (rows.length === 0) return setError('Add at least one position.');
+    if (rows.length === 0) return setError('Add at least one shift.');
 
     const payloadPositions = [];
     for (const r of rows) {
@@ -354,7 +354,7 @@ export default function ShiftEventFormModal({
       const lo = parseFloat(r.hourly_rate);
       const hi = r.hourly_rate_max === '' ? null : parseFloat(r.hourly_rate_max);
       const cap = parseInt(r.capacity, 10) || 1;
-      if (!name) return setError('Pick a position for every row.');
+      if (!name) return setError('Pick a position for every shift.');
       if (!lo || lo <= 0) return setError(`${name}: pay must be more than $0.`);
       if (hi !== null && (Number.isNaN(hi) || hi < lo)) return setError(`${name}: the top of the pay range can't be lower than the bottom.`);
       if (cap < (r.booked || 0)) return setError(`${name}: ${r.booked} people are already booked, so it needs at least ${r.booked} spots.`);
@@ -479,7 +479,7 @@ export default function ShiftEventFormModal({
 
   const modalTitle = isTemplate
     ? (template ? `Edit template: ${template.name}` : 'New event template')
-    : isDraft ? 'Edit draft' : isEdit ? 'Edit posted shift' : 'Post a shift';
+    : isDraft ? 'Edit draft' : isEdit ? 'Edit event' : 'Post an event';
 
   return (
     <ModalShell
@@ -535,7 +535,7 @@ export default function ShiftEventFormModal({
               </div>
             )}
             <div>
-              <label className={labelCls}>Event / shift name *</label>
+              <label className={labelCls}>Event name *</label>
               <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="Friday Gala" />
             </div>
             {isTemplate ? (
@@ -639,7 +639,7 @@ export default function ShiftEventFormModal({
               />
               {isEdit && !isDraft && (
                 <p className="text-[10px] text-slate-500 mt-1">
-                  Changing the time or any notes flags the shift as “Updated” for everyone booked until they read it.
+                  Changing the time or any notes flags the event as “Updated” for everyone booked until they read it.
                 </p>
               )}
             </div>
@@ -653,17 +653,17 @@ export default function ShiftEventFormModal({
               </div>
             )}
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-              <label className={labelCls}>Approval for every position</label>
+              <label className={labelCls}>Approval for every shift</label>
               <select value={eventApproval} onChange={(e) => setAllApproval(e.target.value)} className={inputCls}>
                 {APPROVAL_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
-                <option value="mixed" disabled>Mixed (set per position)</option>
+                <option value="mixed" disabled>Mixed (set per shift)</option>
               </select>
               <p className="text-[11px] text-slate-500 flex items-start gap-1">
                 <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                 <span>
-                  “Use venue setting” means {POLICY_TEXT[venue?.approval_policy] || POLICY_TEXT.team_auto}. You can also set each position on the right.
+                  “Use venue setting” means {POLICY_TEXT[venue?.approval_policy] || POLICY_TEXT.team_auto}. You can also set each shift on the right.
                 </span>
               </p>
             </div>
@@ -678,14 +678,14 @@ export default function ShiftEventFormModal({
           <div className="lg:col-span-3 space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                <Users className="w-4 h-4 text-emerald-400" /> Positions
+                <Users className="w-4 h-4 text-emerald-400" /> Shifts
               </h4>
               <button
                 type="button"
                 onClick={addRow}
                 className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1"
               >
-                <Plus className="w-3.5 h-3.5" /> Add position
+                <Plus className="w-3.5 h-3.5" /> Add a shift
               </button>
             </div>
 
@@ -768,7 +768,7 @@ export default function ShiftEventFormModal({
                       type="button"
                       onClick={() => removeRow(r.key)}
                       disabled={locked || rows.length <= 1}
-                      title={locked ? 'People are booked or waiting on this position' : 'Remove position'}
+                      title={locked ? 'People are booked or waiting on this shift' : 'Remove shift'}
                       className="p-2.5 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-30 disabled:hover:bg-transparent"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -874,7 +874,7 @@ export default function ShiftEventFormModal({
                   {r.showNotes ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className={labelCls}>Notes for {r.role_type || 'this position'}</label>
+                        <label className={labelCls}>Notes for {r.role_type || 'this shift'}</label>
                         <textarea
                           rows={2}
                           value={r.role_notes}
@@ -902,7 +902,7 @@ export default function ShiftEventFormModal({
                       onClick={() => updateRow(r.key, { showNotes: true })}
                       className="text-xs text-emerald-400 hover:text-emerald-300"
                     >
-                      + Add notes for this position (public or staff-only)
+                      + Add notes for this shift (public or staff-only)
                     </button>
                   )}
                 </div>

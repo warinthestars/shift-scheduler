@@ -38,6 +38,10 @@ export function friendly422(detail) {
   const field = fieldName(first.loc);
   const type = String(first.type || '');
   const limit = first.ctx && (first.ctx.max_length ?? first.ctx.le ?? first.ctx.lt);
+  if (['latitude', 'longitude', 'accuracy m'].includes(field)) {   // Phase 34.5: clock-in coordinates the server refused
+    return "Your phone sent a location we can't use. Turn location off and on again, then try again.";
+  }
+  if (type === 'finite_number') return 'Please check the numbers you entered.';   // Phase 34.5: NaN / Infinity refused
   if (type === 'missing') return field ? `Please fill in the ${field}.` : 'Please fill in every required field.';
   if (field === 'email address' || type.includes('email')) return 'Please enter a valid email address.';
   if (type.includes('too_long')) return field ? `The ${field} is too long${limit ? ` (up to ${limit} characters)` : ''}.` : "That's too long.";

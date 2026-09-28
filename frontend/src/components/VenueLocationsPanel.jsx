@@ -179,7 +179,7 @@ export default function VenueLocationsPanel({ venue, onError }) {
     <div className="space-y-4">
       <p className="text-xs text-slate-400">
         Places you staff besides your own address: client sites, off-site events, other rooms. Pick them on
-        “Post a shift”. Typing a new place there saves it here automatically.
+        “Post an event”. Typing a new place there saves it here automatically.
       </p>
 
       {loading ? (

@@ -88,7 +88,7 @@ export default function EventRosterModal({
       {onEdit && event.event_id && (
         <button type="button" onClick={() => onEdit(event.event_id)}
           className="px-3 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/30 text-xs font-bold inline-flex items-center gap-1.5 self-start">
-          <Pencil className="w-3.5 h-3.5" /> Edit this shift
+          <Pencil className="w-3.5 h-3.5" /> Edit this event
         </button>
       )}
     </div>
@@ -141,7 +141,7 @@ export default function EventRosterModal({
                 {onCancelPosition && !event.cancelled && !isDraft && pos.status !== 'CANCELLED' && (
                   <button type="button" onClick={() => onCancelPosition(pos, event)}
                     className="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-300 text-xs border border-rose-600/30 inline-flex items-center gap-1">
-                    <Ban className="w-3 h-3" /> Cancel position
+                    <Ban className="w-3 h-3" /> Cancel shift
                   </button>
                 )}
                 {pos.status === 'CANCELLED' && (
@@ -247,7 +247,7 @@ export default function EventRosterModal({
                     <UserPlus className="w-3.5 h-3.5 text-amber-400" /> Requested ({pos.requested.length})
                   </div>
                   {pos.requested.length === 0 ? (
-                    <p className="text-xs text-slate-500 italic">No pending requests for this position.</p>
+                    <p className="text-xs text-slate-500 italic">No pending requests for this shift.</p>
                   ) : (
                     <div className="space-y-2">
                       {pos.requested.map((p) => {
@@ -279,7 +279,7 @@ export default function EventRosterModal({
                                 <X className="w-3 h-3" /> {denying ? '…' : 'Deny'}
                               </button>
                               <button type="button" onClick={() => onApprove && onApprove(p.request_id)} disabled={isFull || approving || denying}
-                                title={isFull ? 'Position is full' : 'Approve'}
+                                title={isFull ? 'Shift is full' : 'Approve'}
                                 className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                                 <Check className="w-3 h-3" /> {approving ? '…' : 'Approve'}
                               </button>
@@ -319,7 +319,7 @@ export default function EventRosterModal({
                           {venueId && !event.cancelled && !ended && pos.status !== 'CANCELLED' && event.status !== 'draft' && (
                             <button type="button" onClick={() => setBookBack({ person: p, pos })}
                               disabled={pos.assigned.length >= pos.capacity}
-                              title={pos.assigned.length >= pos.capacity ? 'Position is full' : 'Book them back on this position'}
+                              title={pos.assigned.length >= pos.capacity ? 'Shift is full' : 'Book them back on this shift'}
                               className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-slate-700 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                               <RotateCcw className="w-3 h-3" /> Book back…
                             </button>

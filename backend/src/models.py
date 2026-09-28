@@ -3,7 +3,7 @@ from enum import Enum
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, Numeric,
-    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint,
+    DateTime, ForeignKey, ARRAY, CheckConstraint, UniqueConstraint,   # Phase 34.5: no SQLAlchemy Enum (no native PG ENUMs)
     Date, SmallInteger, LargeBinary,
 )
 from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
@@ -495,8 +495,8 @@ class NotificationPreference(Base):
     new_shift_alerts = Column(String(10), nullable=False, default="daily")   # off | instant | daily
     manager_alerts_email = Column(Boolean, nullable=False, default=True)
     push_enabled = Column(Boolean, nullable=False, default=True)             # Phase 33: phone / browser notifications
-    quiet_start = Column(Integer, nullable=True)                             # hour 0-23
-    quiet_end = Column(Integer, nullable=True)
+    quiet_start = Column(SmallInteger, nullable=True)                        # hour 0-23 (Phase 34.5: SMALLINT, as in init.sql)
+    quiet_end = Column(SmallInteger, nullable=True)
     timezone = Column(String(64), nullable=False, default="America/New_York")
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

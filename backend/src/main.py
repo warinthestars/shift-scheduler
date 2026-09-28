@@ -26,6 +26,8 @@ from src.routers.event_templates import router as event_templates_router
 from src.routers.profile import router as profile_router   # Phase 31 + 32
 from src.routers.cover import router as cover_router       # Phase 34
 from src.services.notification_worker import notification_worker_loop
+from src.version import APP_VERSION                          # Phase 34.5
+from src.json_guard import RejectNonFiniteJSON                # Phase 34.5
 
 
 # Configure logging
@@ -92,9 +94,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ShiftBoard API",
     description="Shift scheduling and community call-board platform for the service industry",
-    version="0.2.0",
+    version=APP_VERSION,                                     # Phase 34.5 (was a fixed "0.2.0")
     lifespan=lifespan
 )
+
+# Phase 34.5: refuse NaN / Infinity in JSON bodies (added BEFORE CORS so CORS stays the outer layer)
+app.add_middleware(RejectNonFiniteJSON)
 
 # CORS middleware configuration
 app.add_middleware(

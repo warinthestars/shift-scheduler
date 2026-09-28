@@ -53,6 +53,14 @@ services:
 
   # ----------------------------------------------------------------------------
   # Backend API (Python / FastAPI)
+  #
+  # The background worker runs INSIDE this container: the FastAPI lifespan in
+  # backend/src/main.py starts it with asyncio.create_task() (no separate service).
+  # Every minute it sends reminders and alerts, runs cover requests and waitlists,
+  # auto clocks-out, and delivers email / text / push. A Redis lock makes sure only
+  # one process runs each tick. Health: Admin -> System -> Background worker.
+  # Set NOTIFICATIONS_WORKER_ENABLED=false (in .secrets/.secrets.env) only if you
+  # add extra API replicas that should not run it.
   # ----------------------------------------------------------------------------
   backend:
     build:

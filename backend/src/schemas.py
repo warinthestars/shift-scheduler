@@ -378,12 +378,13 @@ class ShiftRequestStatusUpdate(BaseModel):
     status: str = Field(description="Must be APPROVED or REJECTED")
 
 class CheckInRequest(BaseModel):
-    latitude: float
-    longitude: float
+    # Phase 34.5: same limits as ClockBody (these legacy routes build a ClockBody from them)
+    latitude: float = Field(..., ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(..., ge=-180, le=180, allow_inf_nan=False)
 
 class CheckOutRequest(BaseModel):
-    latitude: float
-    longitude: float
+    latitude: float = Field(..., ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(..., ge=-180, le=180, allow_inf_nan=False)
 
 # ------------------------------------------------------------------------------
 # Time Tracking Schemas
@@ -714,9 +715,11 @@ class ListingLocation(BaseModel):
 
 
 class ClockBody(BaseModel):
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    accuracy_m: Optional[float] = None
+    # Phase 34.5: the server does the distance check, so the numbers must be real coordinates.
+    # NaN / Infinity / out-of-range values are refused (422) instead of crashing the distance math (500).
+    latitude: Optional[float] = Field(None, ge=-90, le=90, allow_inf_nan=False)
+    longitude: Optional[float] = Field(None, ge=-180, le=180, allow_inf_nan=False)
+    accuracy_m: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
 
 
 class ClockResult(BaseModel):
@@ -1629,6 +1632,7 @@ class AdminDeliveryStats(BaseModel):
 
 
 class AdminSystem(BaseModel):
+    app_version: str = ""                    # Phase 34.5: the server's version (backend/src/version.py)
     app_base_url: str = ""
     app_base_url_ok: bool = False
     email_provider: str = "console"

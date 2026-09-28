@@ -496,7 +496,9 @@ async def system_status(current_user: User = Depends(require_admin), db: AsyncSe
     ):
         counts[label] = int(await db.scalar(select(func.count()).select_from(model)) or 0)
 
+    from src.version import APP_VERSION             # Phase 34.5
     return AdminSystem(
+        app_version=APP_VERSION,
         app_base_url=settings.APP_BASE_URL or "", app_base_url_ok=_base_url_ok(),
         email_provider=(settings.EMAIL_PROVIDER or "console").lower(), email_from=settings.EMAIL_FROM or "",
         email_ready=email_available(), sms_provider=(settings.SMS_PROVIDER or "off").lower(), sms_ready=sms_available(),

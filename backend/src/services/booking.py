@@ -40,10 +40,10 @@ ASSIGNED_STATUSES = ("approved", "confirmed", "checked_in", "completed")
 ACTIVE_STATUSES = PENDING_STATUSES + ASSIGNED_STATUSES
 REREQUESTABLE_STATUSES = ("withdrawn", "dropped")      # Phase 29.4: dropped = ask to come back
 BLOCKED_MESSAGES = {
-    "rejected": "The venue already passed on your request for this position. You can request a different position.",
+    "rejected": "The venue already passed on your request for this shift. You can request a different one.",
     "removed": "The venue removed you from this shift.",
     "no_show": "You were marked as a no-show for this shift.",
-    "cancelled": "This position was cancelled.",
+    "cancelled": "This shift was cancelled.",
     "transferred": "You handed this shift off earlier.",
 }
 NOTE_MAX = 500
@@ -114,7 +114,7 @@ def _clean_note(note: Optional[str]) -> Optional[str]:
 async def _load_shift_locked(db: AsyncSession, shift_id: UUID) -> Shift:
     shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
     if not shift:
-        raise HTTPException(status_code=404, detail="Position not found.")
+        raise HTTPException(status_code=404, detail="Shift not found.")
     if shift.event_id:
         # Lock the event first so every request for this event is handled one at a time.
         await db.execute(select(ShiftEvent.id).where(ShiftEvent.id == shift.event_id).with_for_update())
@@ -140,7 +140,7 @@ async def request_position(
     try:
         shift = await _load_shift_locked(db, shift_id)
         if expected_event_id is not None and shift.event_id != expected_event_id:
-            raise HTTPException(status_code=400, detail="That position isn't part of this event.")
+            raise HTTPException(status_code=400, detail="That shift isn't part of this event.")
 
         if shift.event_id:
             event = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id))
@@ -149,7 +149,7 @@ async def request_position(
 
         shift_status = (shift.status or "").upper()
         if shift_status == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
+            raise HTTPException(status_code=400, detail="This shift was cancelled.")
         if shift_status == "DRAFT":                                                   # Phase 29.3
             raise HTTPException(status_code=400, detail="This event isn't open for requests.")
         if as_utc(shift.start_time) <= datetime.now(timezone.utc):
@@ -177,8 +177,8 @@ async def request_position(
             st = (req.status or "").lower()
             if req.shift_id == shift.id:
                 if st in PENDING_STATUSES:
-                    raise HTTPException(status_code=400, detail="You've already requested this position.")
-                raise HTTPException(status_code=400, detail="You're already booked on this position.")
+                    raise HTTPException(status_code=400, detail="You've already requested this shift.")
+                raise HTTPException(status_code=400, detail="You're already booked on this shift.")
             if st in PENDING_STATUSES:
                 if not switch:
                     raise HTTPException(
@@ -189,7 +189,7 @@ async def request_position(
             else:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"You're already booked as {role} for this event. Drop or hand off that shift before picking a different position.",
+                    detail=f"You're already booked as {role} for this event. Drop or hand off that shift before picking a different one.",
                 )
 
         # --- Phase 29.4: coming back after a drop needs a reason and a manager ---------------
@@ -214,15 +214,15 @@ async def request_position(
             if st in BLOCKED_MESSAGES:
                 raise HTTPException(status_code=400, detail=BLOCKED_MESSAGES[st])
             if st not in REREQUESTABLE_STATUSES:
-                raise HTTPException(status_code=400, detail="You're already on this position.")
+                raise HTTPException(status_code=400, detail="You're already on this shift.")
 
         # --- Capacity (checked under the lock) -------------------------------------------
         if shift_status != "OPEN" or (shift.spots_filled or 0) >= (shift.capacity or 1):
-            raise HTTPException(status_code=400, detail="This position just filled up.")
+            raise HTTPException(status_code=400, detail="This shift just filled up.")
         # Phase 34: a spot offered to someone on the waitlist is held for them until the offer runs out
         from src.services.waitlist import held_by_offers
         if (shift.spots_filled or 0) + await held_by_offers(db, shift.id, exclude_worker_id=worker.id) >= (shift.capacity or 1):
-            raise HTTPException(status_code=400, detail="This position just filled up.")
+            raise HTTPException(status_code=400, detail="This shift just filled up.")
 
         await check_double_booking(db, worker.id, shift.start_time, shift.end_time, exclude_shift_id=shift.id)
 
@@ -286,7 +286,7 @@ async def request_position(
     except Exception as e:
         await db.rollback()
         logger.exception("request_position failed")
-        raise HTTPException(status_code=500, detail=f"Could not request this position: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not request this shift: {e}")
 
     # Phase 28: tell the venue's managers a request is waiting (runs after the commit; never raises)
     if status_val != "approved":

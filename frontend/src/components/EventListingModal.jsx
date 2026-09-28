@@ -292,11 +292,11 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
       blockedReason = `This overlaps a shift you're booked on (${listing.conflict}).`;
     } else if (!selected && listing.full) {
       // Phase 34: nothing to request; the waitlist buttons are on each position
-      primary = <span className="text-xs text-slate-400">Every position is full. Join a waitlist above.</span>;
+      primary = <span className="text-xs text-slate-400">Every shift is full. Join a waitlist above.</span>;
     } else if (!selected) {
       primary = (
         <button type="button" disabled className="px-5 py-2 rounded-xl bg-slate-800 text-slate-500 text-xs font-bold cursor-not-allowed">
-          Pick a position
+          Pick a shift
         </button>
       );
     } else if (!selectedIsMine) {
@@ -404,7 +404,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
             <CheckCircle2 className="w-4 h-4" /> You're booked as {mine.role_type}
           </div>
           <p className="text-xs text-emerald-300/80 mt-1">
-            To change position, drop or hand off this shift from My shifts first.
+            To switch to a different shift here, drop or hand off this one from My shifts first.
             {bookedPosition && bookedPosition.hourly_rate !== null && (
               <> Pay: <PayLabel rate={bookedPosition.hourly_rate} rateMax={bookedPosition.hourly_rate_max} className="font-semibold" /></>
             )}
@@ -491,11 +491,11 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
         {/* RIGHT: positions */}
         <div className="md:col-span-3 space-y-3">
           <div className="flex items-baseline justify-between">
-            <h4 className="text-sm font-bold text-white">Positions</h4>
-            <span className="text-[11px] text-slate-400">You can request one position per event</span>
+            <h4 className="text-sm font-bold text-white">Shifts</h4>
+            <span className="text-[11px] text-slate-400">You can request one shift per event</span>
           </div>
 
-          <div className="space-y-2" role="radiogroup" aria-label="Positions">
+          <div className="space-y-2" role="radiogroup" aria-label="Shifts">
             {listing.positions.map((p) => {
               const full = p.status !== 'OPEN';
               const ps = p.my_status ? String(p.my_status).toLowerCase() : null;
@@ -610,7 +610,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
 
           {listing.positions.some((p) => p.status === 'OPEN' && (p.missing_certs || []).length > 0) && (
             <p className="text-xs text-amber-200 bg-amber-950/30 border border-amber-800/40 rounded-lg p-2.5">
-              Some positions need certificates you haven't added yet.{' '}
+              Some shifts need certificates you haven't added yet.{' '}
               <Link to="/profile?tab=certificates" onClick={onClose} className="font-bold underline hover:text-amber-100">Add them on your profile</Link>
               , then come back to request.
             </p>

@@ -63,10 +63,10 @@ async def join(db: AsyncSession, worker: User, shift_id: UUID, auto_book: bool) 
     try:
         shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
         if shift is None:
-            raise HTTPException(status_code=404, detail="Position not found.")
+            raise HTTPException(status_code=404, detail="Shift not found.")
         st = (shift.status or "").upper()
         if st == "CANCELLED":
-            raise HTTPException(status_code=400, detail="This position was cancelled.")
+            raise HTTPException(status_code=400, detail="This shift was cancelled.")
         if st == "DRAFT":
             raise HTTPException(status_code=400, detail="This event isn't open for requests.")
         event = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == shift.event_id)) if shift.event_id else None
@@ -76,7 +76,7 @@ async def join(db: AsyncSession, worker: User, shift_id: UUID, auto_book: bool) 
             raise HTTPException(status_code=400, detail="This shift has already started.")
         cap = shift.capacity if shift.capacity is not None else 1
         if not _is_full(shift) and (shift.spots_filled or 0) + await held_by_offers(db, shift.id, worker.id) < cap:
-            raise HTTPException(status_code=400, detail="This position has open spots. Request it instead.")
+            raise HTTPException(status_code=400, detail="This shift has open spots. Request it instead.")
         if await is_blocked(db, shift.venue_id, worker.id):
             raise HTTPException(status_code=403, detail="This venue isn't taking requests from you right now.")
         await require_certs(db, worker, shift, you=True)
@@ -100,7 +100,7 @@ async def join(db: AsyncSession, worker: User, shift_id: UUID, auto_book: bool) 
         live = select(WaitlistEntry.id).where(WaitlistEntry.worker_id == worker.id, WaitlistEntry.status.in_(LIVE))
         live = live.where(WaitlistEntry.event_id == shift.event_id) if shift.event_id else live.where(WaitlistEntry.shift_id == shift.id)
         if await db.scalar(live.limit(1)):
-            raise HTTPException(status_code=400, detail="You're already on a waitlist for this event. Leave it first to pick a different position.")
+            raise HTTPException(status_code=400, detail="You're already on a waitlist for this event. Leave it first to pick a different shift.")
 
         entry = WaitlistEntry(shift_id=shift.id, venue_id=shift.venue_id, event_id=shift.event_id,
                               worker_id=worker.id, auto_book=bool(auto_book), status="waiting")
@@ -301,7 +301,7 @@ async def process_shift(db: AsyncSession, shift_id, now: datetime, events: list)
         if start <= now:
             reason = "The shift started"
         elif (shift.status or "").upper() == "CANCELLED" or (event is not None and event.cancelled_at is not None):
-            reason = "The position was cancelled"
+            reason = "The shift was cancelled"
         if reason:
             for e in entries:
                 await _close(e, "closed", reason, events, notify=reason != "The shift started")
@@ -354,7 +354,7 @@ async def process_shift(db: AsyncSession, shift_id, now: datetime, events: list)
         except HTTPException as ex:
             e = await db.scalar(select(WaitlistEntry).where(WaitlistEntry.id == entry_id))
             if e is not None and e.status in LIVE:
-                if ex.detail == "This position just filled up.":
+                if ex.detail == "This shift just filled up.":
                     await db.commit()
                     return                                    # someone else got it first; stay in line
                 await _close(e, "closed", f"We couldn't book you: {ex.detail}", events)

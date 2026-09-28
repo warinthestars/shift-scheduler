@@ -160,7 +160,7 @@ async def _request_decided(db: AsyncSession, request_id, approved: bool) -> None
         await notify_in(
             db, [req.worker_id], "request_denied",
             f"Not selected: {shift.role_type} · {name}",
-            f"{when_text(shift.start_time, venue)}. You can request a different position or another shift.",
+            f"{when_text(shift.start_time, venue)}. You can request another shift at this event, or a different event.",
             worker_event_link(shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id,
         )
 

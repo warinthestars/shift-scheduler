@@ -120,7 +120,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
           type="button"
           onClick={position.is_active ? () => setConfirmRemove(true) : toggleActive}
           disabled={saving || confirmRemove}
-          title={position.is_active ? 'Remove from the Post a Shift list' : 'Bring back'}
+          title={position.is_active ? 'Remove from the Post an event list' : 'Bring back'}
           className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10"
         >
           {position.is_active ? <Trash2 className="w-4 h-4" /> : <RotateCcw className="w-4 h-4" />}
@@ -129,7 +129,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
       {confirmRemove && (
         <div className="p-2.5 rounded-lg border border-rose-500/40 bg-rose-500/10 flex flex-wrap items-center gap-2">
           <p className="flex-1 min-w-[12rem] text-xs text-rose-100">
-            Remove <b>{position.name}</b> from the Post a Shift list? Shifts already posted keep it, and you can bring it back later.
+            Remove <b>{position.name}</b> from the Post an event list? Events already posted keep it, and you can bring it back later.
           </p>
           <button type="button" onClick={() => setConfirmRemove(false)} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">
             Keep it
@@ -493,7 +493,7 @@ export default function VenueSettingsModal({
                   </label>
                 ))}
               </div>
-              <p className="text-[11px] text-slate-500">Each posted shift and position can override this.</p>
+              <p className="text-[11px] text-slate-500">Each event and shift can override this.</p>
               <details className="text-xs text-slate-400">
                 <summary className="cursor-pointer select-none">Advanced: also auto-approve highly rated workers</summary>
                 <div className="mt-2 flex items-center gap-2">
@@ -566,9 +566,9 @@ export default function VenueSettingsModal({
       ) : (
         <div className="space-y-4">
           <p className="text-xs text-slate-400">
-            These fill in pay and tips when you post a shift. Changing them doesn't change shifts you already posted. "Hide pay" keeps the rate off listings until someone is booked.
+            These fill in pay and tips when you post an event. Changing them doesn't change events you already posted. "Hide pay" keeps the rate off listings until someone is booked.
             The department decides who it's offered to first: people who work that department book it as usual, anyone else needs your OK. General is open to anyone.
-            "Requires" means people need that certificate on their profile (in date) to request or be offered the position. You can still assign someone yourself after a warning.
+            "Requires" means people need that certificate on their profile (in date) to request or be offered shifts in that position. You can still assign someone yourself after a warning.
           </p>
           {loadingPositions ? (
             <p className="text-xs text-slate-500">Loading…</p>

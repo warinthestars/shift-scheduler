@@ -61,13 +61,13 @@ def _validate_basics(data) -> None:
     if _as_utc(data.end_time) <= _as_utc(data.start_time):
         raise HTTPException(status_code=400, detail="End time must be after the start time.")
     if not data.positions:
-        raise HTTPException(status_code=400, detail="Add at least one position.")
+        raise HTTPException(status_code=400, detail="Add at least one shift.")
 
 
 def _validate_position(p: EventPositionInput) -> None:
     name = (p.role_type or "").strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Every position needs a name.")
+        raise HTTPException(status_code=400, detail="Every shift needs a position (e.g. Bartender).")
     if p.capacity is None or p.capacity < 1:
         raise HTTPException(status_code=400, detail=f"{name}: needs at least 1 spot.")
     if p.hourly_rate is None or p.hourly_rate <= 0:
@@ -204,7 +204,7 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
     keep_ids = {p.shift_id for p in data.positions if p.shift_id}
     unknown = keep_ids - set(by_id.keys())
     if unknown:
-        raise HTTPException(status_code=400, detail="One of the positions doesn't belong to this event.")
+        raise HTTPException(status_code=400, detail="One of the shifts doesn't belong to this event.")
 
     for s in existing:
         if s.id not in keep_ids:
@@ -212,7 +212,7 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
             if a + pn > 0:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"'{s.role_type}' has {a} booked and {pn} waiting. Remove or deny them before deleting this position."
+                    detail=f"'{s.role_type}' has {a} booked and {pn} waiting. Remove or deny them before deleting this shift."
                 )
 
     for p in data.positions:
@@ -403,7 +403,7 @@ async def cancel_shifts(db: AsyncSession, event: ShiftEvent, shift_ids: Optional
         q = q.where(Shift.id.in_(shift_ids))
     shifts = (await db.execute(q)).scalars().all()
     if shift_ids is not None and not shifts:
-        raise HTTPException(status_code=404, detail="Position not found or already cancelled.")
+        raise HTTPException(status_code=404, detail="Shift not found or already cancelled.")
 
     try:
         ids = [s.id for s in shifts]
@@ -464,7 +464,7 @@ async def duplicate_event(
         .order_by(Shift.created_at.asc())
     )).scalars().all()
     if not shifts:
-        raise HTTPException(status_code=400, detail="Nothing to copy: every position is cancelled.")
+        raise HTTPException(status_code=400, detail="Nothing to copy: every shift is cancelled.")
 
     positions = [
         EventPositionInput(
@@ -535,7 +535,7 @@ async def publish_event(db: AsyncSession, event: ShiftEvent) -> None:
         select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
     )).scalars().all()
     if not shifts:
-        raise HTTPException(status_code=400, detail="Add at least one position before publishing.")
+        raise HTTPException(status_code=400, detail="Add at least one shift before publishing.")
     try:
         for s in shifts:
             s.status = "FILLED" if (s.spots_filled or 0) >= (s.capacity or 1) else "OPEN"
