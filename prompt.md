@@ -1,3397 +1,1051 @@
-# Phase 35: Venue Payroll, Staffing Companies, Overtime & Pay Periods
+# Phase 35.1.1: Secrets Out of .env (Stack Secrets + Integration Keys)
 
-**Why:** at many venues most of the crew is on the venue's own payroll and clocks in on the venue's time clock, while overhire comes through staffing companies and should clock in with ShiftBoard. Each venue now decides who tracks time where, can tag people with the company they work through, gets overtime flags, and can approve and lock each pay period. Every rule is a per-venue setting. (**Tips per event come next, in Phase 35.1.**)
+**Why:** 35.1 put every secret in the root `.env`, because `docker-compose.yml` passed passwords with `${...}` and Compose only fills `${...}` from `.env`. That breaks the project rule that secrets live in `.secrets/`. Now settings are split three ways, and **no secret goes through `${...}` any more**:
+
+| File | Holds | Read by |
+| :--- | :--- | :--- |
+| `.env` | ordinary settings, **no secrets** | `backend` (plus non-secret `${...}` like ports and names) |
+| `.secrets/stack.env` | `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN` | `database`, `redis`, `cloudflared`, `backend` |
+| `.secrets/integrations.env` | `SMTP_USERNAME`, `SMTP_PASSWORD`, `RESEND_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `VAPID_PRIVATE_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | `backend` **only** |
+
+So Postgres, Redis and the tunnel never see email / text / storage keys. The frontend still gets nothing.
 
 ## What changes
-* **Venue settings → new "Time & pay periods" tab** (saved with the same *Save changes* button as Details):
-  * **How your team's time is tracked:** *Clock in with ShiftBoard* (default) or *Your venue's payroll tracks their time* → `venues.team_time_tracking`.
-  * **Overtime flags:** over N hours in a work week (default on, 40), over N hours in a day (default off), and the day the work week starts (default Monday).
-  * **Pay periods:** weekly (default), every two weeks (with an optional first day; blank = this work week), twice a month (1st–15th, 16th–end) or monthly, plus **Approve and lock each pay period** (default on).
-* **Team → Edit** (the old "Positions & note" button): **How their time is tracked** (*Use the venue setting* / *Venue's payroll* / *Clock in with ShiftBoard*) and **Works through (staffing company)**, with suggestions from names already used. Rows show *Venue payroll* and company chips; the filter also searches the company.
-* **Who tracks where** (`services/time_tracking.py`, first match wins):
-  1. the person's own setting (only while they're on the team)
-  2. they work through a company → ShiftBoard
-  3. they're on the team and the venue uses payroll → payroll
-  4. otherwise (including everyone booked from outside the team) → ShiftBoard
-  * When a shift **starts**, the background worker writes the answer on the booking (`shift_requests.time_tracking`). Until then the live settings apply. Later settings changes never rewrite past hours.
-* **Payroll-tracked people:**
-  * no clock-in button (*"Clock in with the venue's system"*, then *"Worked · tracked by venue payroll"*), and the server refuses a clock-in with a plain message
-  * no "not clocked in" alerts; a violet **Venue payroll** state on the Today board (a manager can still mark a no-show once the shift has started)
-  * reliability counts the shift as worked and on time unless it's marked a no-show
-  * their hours aren't in time sheets, the hours download or Hours & pay (which says how many payroll shifts there were); pay periods list them separately with scheduled hours
-* **Overtime** is a flag and an hour count. Daily overtime is counted per local day; weekly overtime counts the rest of the hours past the weekly limit in each work week, with no double counting. It shows on time sheets (OT chip), pay periods and the hours download. **No premium is added to pay.**
-* **Pay periods** (new header button on the manager dashboard): the current period and the 7 before it, each with people, hours, overtime and pay; a per-person table with company, open / edited / auto-closed / outside-the-area counts; a company filter; and a download.
-  * States: *In progress*, *Ready to approve*, *Approved · locked*, *Ended* (approving turned off) and *No hours*.
-  * **Approve and lock** needs the period to be over with no open clock-ins. It saves a snapshot of the totals. While a period is approved, adding, editing or deleting a time in it, or changing someone's pay rate for hours in it, is refused with **409** *"The pay period … is approved and locked. Reopen it on the Pay periods screen to change its times."*
-  * **Reopen** needs a reason. Approvals and reopens go in the activity log.
-* **Hours download** (and the payroll CSV): three new columns at the **end**: *Regular hours*, *Overtime hours*, *Works through*. Existing columns keep their positions. New optional `company=` filter.
-* **API** (187 → **191** operations):
-  * `GET /api/venues/{id}/pay-periods?count=6`
-  * `GET /api/venues/{id}/pay-periods/{start}?company=`
-  * `POST /api/venues/{id}/pay-periods/{start}/approve`
-  * `POST /api/venues/{id}/pay-periods/{start}/reopen` with `{"reason": "..."}`
-  * Managers of the venue and admins only.
-* **Database:** 7 new `venues` columns, 2 new `venue_whitelists` columns, 1 new `shift_requests` column and a new `pay_period_approvals` table. All status-like columns are `VARCHAR`, **no ENUMs**.
-* **Version 0.35.0.** `frontend/package.json` and `backend/src/version.py` are both bumped, and the CHANGELOG and README updates are included below. **This covers the standing directive for this phase, so don't bump again.**
+* **`docker-compose.yml`:**
+  * `database`: `env_file: .secrets/stack.env`. Postgres reads `POSTGRES_PASSWORD` from it directly. **`POSTGRES_PASSWORD` is removed from `environment:`**: an `environment:` entry would win over the file and be blank.
+  * `redis`: `env_file: .secrets/stack.env`. It starts through `sh -c` with `--requirepass "$${REDIS_PASSWORD:?...}"` (`$$` = the container's shell reads it, not Compose), and refuses to start without a password. The healthcheck uses `$$REDIS_PASSWORD` too.
+  * `backend`: `env_file` = `.env` + `.secrets/stack.env` + `.secrets/integrations.env` (all required). `environment:` keeps only `POSTGRES_HOST=database`, `POSTGRES_PORT=5432`, `REDIS_HOST=redis`. `DATABASE_URL`, `REDIS_URL`, `POSTGRES_PASSWORD` and `SUPER_ADMIN_*` are gone from it.
+  * `cloudflared`: `env_file: .secrets/stack.env`; command `tunnel --no-autoupdate run`. cloudflared reads **`TUNNEL_TOKEN`** from its environment by itself; the setting is renamed from `CLOUDFLARE_TUNNEL_TOKEN`.
+* **`backend/src/config.py`:** `REDIS_URL` is built from `REDIS_PASSWORD` (URL-encoded) + `REDIS_HOST` + port 6379, unless `REDIS_URL` is set (local runs). The database address was already built from `POSTGRES_*`, which is unchanged. The fallback with no Redis settings is exactly the old default.
+* **Templates:** `.env.template` has no secrets (replaced whole). New `.secrets/stack.env.template` and `.secrets/integrations.env.template`. **Delete** `.secrets/.secrets.env.template`. `backend/.env.template` gets a comment fix.
+* **`scripts/consolidate_env.py`** (replaced whole) sorts settings into the three files, from either the 0.35.0 or the 0.35.1 layout. It prints names only.
+  * **Template placeholders** (`your_..._here`) are never carried over, and it **refuses** while the database password or `SECRET_KEY` is only a placeholder.
+  * **`--source <file>`** reads the root settings from another file.
+  * Unknown settings that look secret go to `integrations.env`.
+  * Backups are `*.pre-0.35.2.bak`; `--undo` restores them.
+* **`.gitignore`:** also ignores `*.bak`; the stale `!.secrets/.secrets.env.template` line is removed. `.secrets/*` stays.
+* **`agy_system_instructions.md`:**
+  * the tree and the **Configuration rules** are updated for three files
+  * **the "Standing rules (added in Phase 34.5)" section is restored**: it went missing when 35.1 was applied
+* Admin → System hint text mentions the secret files.
+* **Version 0.35.2** (a third-level phase takes the next patch number). `frontend/package.json` and `backend/src/version.py` are both bumped, and the CHANGELOG and README updates are included below. **This covers the standing directive for this phase, so don't bump again.**
 
 ## 0. Rules for this phase
 * Do **NOT** touch:
-  - `backend/src/auth.py`, `backend/src/routers/auth.py`, `backend/src/services/firebase.py`
-  - `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/vite.config.js`
-  - In `backend/src/main.py`, **only** add the router import and `include_router` line in A11. Don't touch CORS or anything else.
-* **Schema change:** see Part C (keep-your-data SQL, or `docker compose down -v` / `up -d --build`). No ENUMs.
-* No new packages.
-* **NEW FILES:** create them with exactly the content shown.
+  - `backend/src/auth.py`, `backend/src/routers/auth.py`, `backend/src/main.py`
+  - `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/vite.config.js`, both Dockerfiles
+  - In `backend/src/config.py`, **only** the two edits in A2.
+* **NEVER open, print, `cat`, `type`, `Get-Content`, diff or commit** any real settings file: `.env`, `.env.old.env`, anything in `.secrets/` except `*.template`, or any `*.bak`. The only thing that reads their contents is the script in Part S; the only comparison allowed is the silent `git diff --no-index --quiet` in Part S.
+* **Do NOT run** `docker compose down`, `up`, `restart`, `build` or `down -v`. Andrew rebuilds himself. The only Docker command allowed is `docker compose config --quiet`.
+* No schema change. No new packages.
+* **NEW FILES / REPLACE THE WHOLE FILE:** write exactly the content shown.
 * **EDITS:** each edit is an exact *Find* → *Replace with*; every *Find* appears **exactly once** in the current file; apply them in order.
   - Some files use Windows line endings (CRLF). Match on the text and keep the file's line endings.
-* **Verification.** All 31 edited files were checked against your repo and match (34.6 is fully applied). They were verified:
-  - **Backend:** imports cleanly. 191 API operations. The API reports **0.35.0**.
-  - **Frontend:** bundles with no missing imports.
-  - **A new 58-check suite passes.** It covers:
-    - settings defaults and validation (bad tracking value, weekly OT 0, daily OT 30, week start 7, pay period "daily")
-    - team rules: venue default, agency person, per-person override, bad value refused, activity log
-    - the calendar mode, the clock-in refusal, freezing at the start, no late alert for payroll, the Today board, the roster
-    - a started shift keeps its mode after the venue switches; an upcoming one follows the new setting
-    - reliability (payroll = worked; a ShiftBoard no-show still counts) and Hours & pay
-    - overtime: weekly 45 h → 5; daily 8 h + weekly → 5 (no double count); limit 42 → 3; off → 0; a Wednesday work week
-    - export columns (old ones in place) and the company filter
-    - pay periods: list, bad start date (400), an open entry blocks approval, approve, snapshot, can't approve twice or approve the current period, the lock on edit / delete / add / pay rate (409), reopen needs a reason, edit after reopening, approve again, activity log
-    - managers and admins only (workers 403); payroll people listed separately
-    - approval off, semimonthly, biweekly (start date set automatically) and monthly periods
-  - **Every earlier suite still passes** (t1–t18), including the schema audit: model and `init.sql` match, no ENUMs.
-  - **The keep-your-data SQL** was run twice on a copy of your current schema, and the result matches a fresh `init.sql` exactly.
-  - In real Chromium: the Time & pay periods tab saves; Team → Edit saves tracking + company; the Today board shows *Venue payroll* with No-show; the time sheet shows the payroll note and company chip; Pay periods shows 81 h / 17 h OT for a test week, approves and locks it; a payroll worker's phone shows no Clock in button. No page errors.
+* **Verification.** All files were checked against your repo. 35.1 is fully applied, except that `agy_system_instructions.md` lost its Standing rules section; A5 restores it. They were verified:
+  - **`docker compose config --quiet` passes** with the three templates copied in.
+    - In the resolved config, `database` / `redis` / `cloudflared` get only the stack keys (no Twilio, SMTP or R2); `frontend` gets nothing.
+    - The backend gets all three files, with `POSTGRES_PORT=5432` and `REDIS_HOST=redis`, and no `DATABASE_URL` / `REDIS_URL`.
+    - The Redis command and healthcheck keep `$$REDIS_PASSWORD` for the container's shell.
+  - **The Redis start command**, run in a real shell, passes a password with `@`, a space, `$` and a quote through intact. With no password it stops with *"REDIS_PASSWORD is not set in .secrets/stack.env"*.
+  - **The backend's own config**, loaded with exactly the environment Compose produces, reads `SECRET_KEY`, builds the correct database address and `redis://:…@redis:6379/0` (special characters URL-encoded, and the Redis client decodes them back), and reads the integration keys.
+  - **`.gitignore`**, tested in a scratch repo: tracked are `.env.template`, `backend/.env.template`, `.secrets/stack.env.template`, `.secrets/integrations.env.template` and `.secrets/firebase-web-config.js.template`. Ignored are `.env`, `.secrets/stack.env`, `.secrets/integrations.env` and every `*.bak`.
+  - **The script** was run on test copies of three layouts:
+    - (a) the 0.35.0 four-file layout
+    - (b) the 0.35.1 single `.env`
+    - (c) **your current layout**: `.env` is a copy of `.env.template`, and the real 35.1 output is in `.env.old.env`
+
+    It gave the right values in the right files each time. In (c) it **refused** without `--source` (placeholders), worked with `--source .env.old.env`, and `--undo` restored everything. No value was ever printed.
+  - **Backend suites pass**, including the admin System check (reports **0.35.2**). The frontend bundles.
 
   Don't "improve" them.
 
 ---
 
-# PART A: Backend
+# PART A: Compose, backend config & git
 
-## A1. `database/init.sql` (EDITS)
-New columns in `venues`, `venue_whitelists` and `shift_requests`, and the new `pay_period_approvals` table at the end.
+## A1. `docker-compose.yml` (EDITS)
 
 **Edit 1.** Find:
-```sql
-    auto_clock_out_hours INT NOT NULL DEFAULT 2,
-    allow_public_cover BOOLEAN NOT NULL DEFAULT TRUE,        -- Phase 34: workers may also post cover on the public board
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+```yaml
+# ------------------------------------------------------------------------------
+# Phase 35.1: ALL settings come from ONE file, the root .env (template: .env.template).
+#  * ${...} values below are substituted from .env when Compose starts.
+#  * The backend also gets every line of .env as environment variables (env_file).
+#  * database / redis / cloudflared only get the few values they need.
+# backend/.env, frontend/.env and .secrets/.secrets.env are NOT read any more.
+# .secrets/ still holds the Firebase files and is mounted read-only into the backend.
+# ------------------------------------------------------------------------------
+
 ```
 Replace with:
-```sql
-    auto_clock_out_hours INT NOT NULL DEFAULT 2,
-    allow_public_cover BOOLEAN NOT NULL DEFAULT TRUE,        -- Phase 34: workers may also post cover on the public board
-    team_time_tracking VARCHAR(20) NOT NULL DEFAULT 'shiftboard', -- Phase 35: shiftboard | payroll (team members' default)
-    ot_weekly_hours NUMERIC(5, 2) DEFAULT 40,                -- Phase 35: overtime after this many hours a work week (NULL = off)
-    ot_daily_hours NUMERIC(5, 2),                            -- Phase 35: overtime after this many hours a day (NULL = off)
-    work_week_start SMALLINT NOT NULL DEFAULT 0,             -- Phase 35: 0 = Monday ... 6 = Sunday
-    pay_period VARCHAR(20) NOT NULL DEFAULT 'weekly',        -- Phase 35: weekly | biweekly | semimonthly | monthly
-    pay_period_anchor DATE,                                  -- Phase 35: biweekly: the first day of any pay period
-    pay_period_approval BOOLEAN NOT NULL DEFAULT TRUE,       -- Phase 35: managers approve and lock each pay period
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+```yaml
+# ------------------------------------------------------------------------------
+# Phase 35.1.1: settings live in THREE files (each has a .template next to it):
+#   .env                          ordinary settings, NO secrets (ports, names, providers, URLs, switches)
+#   .secrets/stack.env            stack secrets: database / Redis passwords, login signing key,
+#                                 super-admin password, tunnel token
+#   .secrets/integrations.env     outside-service keys: email, texts, push, file storage
+# Who gets what:
+#   database, redis, cloudflared  -> .secrets/stack.env only (never the integration keys)
+#   backend                       -> all three
+#   frontend                      -> nothing
+# ${...} below is only used for NON-secret values from .env. Secrets are never put in
+# ${...}: Compose would read them from .env only, which is how secrets ended up there before.
+# .secrets/ also holds the Firebase files and is mounted read-only into the backend.
+# ------------------------------------------------------------------------------
+
 ```
 
 **Edit 2.** Find:
-```sql
-    positions TEXT[] NOT NULL DEFAULT '{}',                -- Phase 29: positions this person works here
-    source VARCHAR(20) NOT NULL DEFAULT 'manager',         -- Phase 29: manager | invite | import | admin
-    added_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+```yaml
+    container_name: shiftboard-database
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-shiftboard_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-shiftboard}
+    volumes:
 ```
 Replace with:
-```sql
-    positions TEXT[] NOT NULL DEFAULT '{}',                -- Phase 29: positions this person works here
-    source VARCHAR(20) NOT NULL DEFAULT 'manager',         -- Phase 29: manager | invite | import | admin
-    time_tracking VARCHAR(20),                             -- Phase 35: payroll | shiftboard (NULL = the venue's setting)
-    works_through VARCHAR(120),                            -- Phase 35: staffing company / agency they come through
-    added_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+```yaml
+    container_name: shiftboard-database
+    restart: unless-stopped
+    # POSTGRES_PASSWORD comes from .secrets/stack.env. Don't add it under environment: (that would win and be blank).
+    env_file:
+      - path: ./.secrets/stack.env
+        required: true
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-shiftboard_user}
+      - POSTGRES_DB=${POSTGRES_DB:-shiftboard}
+    volumes:
 ```
 
 **Edit 3.** Find:
-```sql
-    pay_rate NUMERIC(10, 2),
-    info_seen_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+```yaml
+    container_name: shiftboard-redis
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD:-shiftboard_redis_pass}"]
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-shiftboard_redis_pass}", "ping"]
+      interval: 10s
+      timeout: 5s
 ```
 Replace with:
-```sql
-    pay_rate NUMERIC(10, 2),
-    info_seen_at TIMESTAMPTZ,
-    time_tracking VARCHAR(20),                                -- Phase 35: payroll | shiftboard, written when the shift starts
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+```yaml
+    container_name: shiftboard-redis
+    restart: unless-stopped
+    # REDIS_PASSWORD comes from .secrets/stack.env; the container's shell reads it ($$ = not a Compose ${...}).
+    env_file:
+      - path: ./.secrets/stack.env
+        required: true
+    command: ["sh", "-c", "exec redis-server /usr/local/etc/redis/redis.conf --requirepass \"$${REDIS_PASSWORD:?REDIS_PASSWORD is not set in .secrets/stack.env}\""]
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
 ```
 
 **Edit 4.** Find:
-```sql
--- one live place per person per position
-CREATE UNIQUE INDEX uq_waitlist_live ON waitlist_entries(shift_id, worker_id) WHERE status IN ('waiting', 'offered');
+```yaml
+      - path: ./.env
+        required: true
+    # These win over .env: how the backend reaches the other containers (always port 5432 / 6379
+    # inside the Docker network; POSTGRES_PORT / REDIS_PORT in .env are only the ports on your computer).
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-shiftboard_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=database
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-shiftboard}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-shiftboard_user}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-shiftboard}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-shiftboard_redis_pass}@redis:6379/0
+      - SUPER_ADMIN_USERNAME=${SUPER_ADMIN_USERNAME:-demo_admin@shiftboard.com}
+      - SUPER_ADMIN_PASSWORD=${SUPER_ADMIN_PASSWORD:-SuperSecretDemo123!}
+    volumes:
+      - ./backend:/app
 ```
 Replace with:
-```sql
--- one live place per person per position
-CREATE UNIQUE INDEX uq_waitlist_live ON waitlist_entries(shift_id, worker_id) WHERE status IN ('waiting', 'offered');
-
--- ==============================================================================
--- Phase 35: Pay periods (approved = locked)
--- ==============================================================================
-CREATE TABLE pay_period_approvals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
-    start_date DATE NOT NULL,                                 -- venue-local dates, inclusive
-    end_date DATE NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'approved',           -- approved (locked) | reopened
-    people INT NOT NULL DEFAULT 0,                            -- totals when it was approved
-    total_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
-    overtime_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
-    total_pay NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    approved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reopened_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    reopened_at TIMESTAMPTZ,
-    reopen_reason TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_pay_period_approvals_venue ON pay_period_approvals(venue_id, start_date);
--- one live approval per venue and period
-CREATE UNIQUE INDEX uq_pay_period_approved ON pay_period_approvals(venue_id, start_date) WHERE status = 'approved';
-```
-
----
-
-## A2. `backend/src/models.py` (EDITS)
-`Index` import, the new columns, and the `PayPeriodApproval` model. (The partial unique index lives only in `init.sql`, on purpose.)
-
-**Edit 1.** Find:
-```python
-    Column, String, Text, Boolean, Integer, Float, Numeric,
-    DateTime, ForeignKey, ARRAY, CheckConstraint, UniqueConstraint,   # Phase 34.5: no SQLAlchemy Enum (no native PG ENUMs)
-    Date, SmallInteger, LargeBinary,
-)
-from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
-```
-Replace with:
-```python
-    Column, String, Text, Boolean, Integer, Float, Numeric,
-    DateTime, ForeignKey, ARRAY, CheckConstraint, UniqueConstraint,   # Phase 34.5: no SQLAlchemy Enum (no native PG ENUMs)
-    Date, SmallInteger, LargeBinary, Index,                           # Phase 35: Index
-)
-from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
-```
-
-**Edit 2.** Find:
-```python
-    auto_clock_out_hours = Column(Integer, nullable=False, default=2)          # Phase 27
-    allow_public_cover = Column(Boolean, nullable=False, default=True)         # Phase 34
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-```
-Replace with:
-```python
-    auto_clock_out_hours = Column(Integer, nullable=False, default=2)          # Phase 27
-    allow_public_cover = Column(Boolean, nullable=False, default=True)         # Phase 34
-    team_time_tracking = Column(String(20), nullable=False, default="shiftboard")   # Phase 35: shiftboard | payroll
-    ot_weekly_hours = Column(Numeric(5, 2), nullable=True, default=40)             # Phase 35: None = off
-    ot_daily_hours = Column(Numeric(5, 2), nullable=True)                          # Phase 35: None = off
-    work_week_start = Column(SmallInteger, nullable=False, default=0)              # Phase 35: 0 = Monday
-    pay_period = Column(String(20), nullable=False, default="weekly")              # Phase 35
-    pay_period_anchor = Column(Date, nullable=True)                                # Phase 35: biweekly
-    pay_period_approval = Column(Boolean, nullable=False, default=True)            # Phase 35
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-```
-
-**Edit 3.** Find:
-```python
-    positions = Column(ARRAY(String), nullable=False, default=list)          # Phase 29
-    source = Column(String(20), nullable=False, default="manager")           # Phase 29: manager | invite | import | admin
-    added_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-```
-Replace with:
-```python
-    positions = Column(ARRAY(String), nullable=False, default=list)          # Phase 29
-    source = Column(String(20), nullable=False, default="manager")           # Phase 29: manager | invite | import | admin
-    time_tracking = Column(String(20), nullable=True)                        # Phase 35: payroll | shiftboard | None = venue setting
-    works_through = Column(String(120), nullable=True)                       # Phase 35: staffing company / agency
-    added_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-```
-
-**Edit 4.** Find:
-```python
-    pay_rate = Column(Numeric(10, 2), nullable=True)
-    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-```
-Replace with:
-```python
-    pay_rate = Column(Numeric(10, 2), nullable=True)
-    info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
-    time_tracking = Column(String(20), nullable=True)                       # Phase 35: written when the shift starts
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+```yaml
+      - path: ./.env
+        required: true
+      - path: ./.secrets/stack.env
+        required: true
+      - path: ./.secrets/integrations.env
+        required: true
+    # These win over the files: how the backend reaches the other containers (always 5432 / 6379
+    # inside the Docker network; POSTGRES_PORT / REDIS_PORT in .env are only the ports on your computer).
+    # backend/src/config.py builds the database and Redis addresses from these + the passwords.
+    environment:
+      - POSTGRES_HOST=database
+      - POSTGRES_PORT=5432
+      - REDIS_HOST=redis
+    volumes:
+      - ./backend:/app
 ```
 
 **Edit 5.** Find:
-```python
-    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="SET NULL"), nullable=True)
-    closed_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+```yaml
+    container_name: shiftboard-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
 ```
 Replace with:
-```python
-    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="SET NULL"), nullable=True)
-    closed_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-
-class PayPeriodApproval(Base):
-    """Phase 35: a pay period a manager approved. While status == 'approved' its times are locked."""
-    __tablename__ = "pay_period_approvals"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
-    start_date = Column(Date, nullable=False)
-    end_date = Column(Date, nullable=False)
-    status = Column(String(20), nullable=False, default="approved")           # approved | reopened
-    people = Column(Integer, nullable=False, default=0)
-    total_hours = Column(Numeric(10, 2), nullable=False, default=0)
-    overtime_hours = Column(Numeric(10, 2), nullable=False, default=0)
-    total_pay = Column(Numeric(12, 2), nullable=False, default=0)
-    approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    approved_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    reopened_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    reopened_at = Column(DateTime(timezone=True), nullable=True)
-    reopen_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-
-    __table_args__ = (Index("idx_pay_period_approvals_venue", "venue_id", "start_date"),)
+```yaml
+    container_name: shiftboard-cloudflared
+    restart: unless-stopped
+    # cloudflared reads TUNNEL_TOKEN from .secrets/stack.env by itself.
+    env_file:
+      - path: ./.secrets/stack.env
+        required: true
+    command: tunnel --no-autoupdate run
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
 ```
 
 ---
 
-## A3. `backend/src/schemas.py` (EDITS)
-Venue fields, roster / time sheet / calendar / team / earnings fields, and the pay-period models (just before the `model_rebuild()` lines).
+## A2. `backend/src/config.py` (EDITS)
+A `_redis_url()` helper just above `class Settings`, and the `REDIS_URL` line.
 
 **Edit 1.** Find:
 ```python
-    auto_clock_out_hours: int = 2           # Phase 27
-    allow_public_cover: bool = True         # Phase 34
+    )
 
-class VenueCreate(BaseModel):
+class Settings(BaseSettings):
+    ENV: str = os.getenv("ENV", "development")
 ```
 Replace with:
 ```python
-    auto_clock_out_hours: int = 2           # Phase 27
-    allow_public_cover: bool = True         # Phase 34
-    team_time_tracking: str = "shiftboard"  # Phase 35: shiftboard | payroll (team members' default)
-    ot_weekly_hours: Optional[float] = 40   # Phase 35: None = off
-    ot_daily_hours: Optional[float] = None  # Phase 35: None = off
-    work_week_start: int = 0                # Phase 35: 0 = Monday ... 6 = Sunday
-    pay_period: str = "weekly"              # Phase 35: weekly | biweekly | semimonthly | monthly
-    pay_period_anchor: Optional[date] = None  # Phase 35: biweekly only
-    pay_period_approval: bool = True        # Phase 35: approve and lock each pay period
+    )
 
-class VenueCreate(BaseModel):
+def _redis_url() -> str:
+    """Phase 35.1.1: REDIS_URL if set (e.g. local runs), else redis://:<REDIS_PASSWORD>@<REDIS_HOST>:6379/0.
+    Always port 6379: REDIS_PORT in .env is the port on the host computer, not inside Docker."""
+    explicit = os.getenv("REDIS_URL", "").strip()
+    if explicit:
+        return explicit
+    from urllib.parse import quote
+    password = os.getenv("REDIS_PASSWORD", "shiftboard_redis_pass")
+    host = os.getenv("REDIS_HOST", "redis")
+    return f"redis://:{quote(password, safe='')}@{host}:6379/0"
+
+
+class Settings(BaseSettings):
+    ENV: str = os.getenv("ENV", "development")
 ```
 
 **Edit 2.** Find:
 ```python
-    auto_clock_out_hours: Optional[int] = None        # Phase 27
-    allow_public_cover: Optional[bool] = None         # Phase 34
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
-class VenueResponse(VenueBase):
+    # Redis
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://:shiftboard_redis_pass@redis:6379/0")
+
+    # JWT Authentication
 ```
 Replace with:
 ```python
-    auto_clock_out_hours: Optional[int] = None        # Phase 27
-    allow_public_cover: Optional[bool] = None         # Phase 34
-    team_time_tracking: Optional[str] = None          # Phase 35
-    ot_weekly_hours: Optional[float] = None           # Phase 35: send null to turn it off
-    ot_daily_hours: Optional[float] = None            # Phase 35: send null to turn it off
-    work_week_start: Optional[int] = None             # Phase 35
-    pay_period: Optional[str] = None                  # Phase 35
-    pay_period_anchor: Optional[date] = None          # Phase 35
-    pay_period_approval: Optional[bool] = None        # Phase 35
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
-class VenueResponse(VenueBase):
-```
+    # Redis. Phase 35.1.1: built from REDIS_PASSWORD (.secrets/stack.env) and REDIS_HOST unless REDIS_URL is set.
+    REDIS_URL: str = _redis_url()
 
-**Edit 3.** Find:
-```python
-    outside_department: bool = False             # Phase 32.2: their request is outside their departments
-    cover: Optional[str] = None                  # Phase 34: open | pending_approval (they asked for cover)
-
-
-```
-Replace with:
-```python
-    outside_department: bool = False             # Phase 32.2: their request is outside their departments
-    cover: Optional[str] = None                  # Phase 34: open | pending_approval (they asked for cover)
-    time_tracking: Optional[str] = None          # Phase 35: shiftboard | payroll (booked people)
-    works_through: Optional[str] = None          # Phase 35: staffing company, from the team list
-
-
-```
-
-**Edit 4.** Find:
-```python
-    total_hours: float
-    est_pay: float
-
-
-```
-Replace with:
-```python
-    total_hours: float
-    est_pay: float
-    time_tracking: str = "shiftboard"        # Phase 35: payroll = the venue's own system tracks their time
-    works_through: Optional[str] = None      # Phase 35
-    overtime_hours: float = 0                # Phase 35: part of total_hours that is overtime (venue rules)
-
-
-```
-
-**Edit 5.** Find:
-```python
-    cancelled: bool = False
-    cancel_reason: Optional[str] = None
-
-
-```
-Replace with:
-```python
-    cancelled: bool = False
-    cancel_reason: Optional[str] = None
-    time_tracking: str = "shiftboard"             # Phase 35: payroll = clock in with the venue's own system
-
-
-```
-
-**Edit 6.** Find:
-```python
-    certs: List[str] = []                    # Phase 32: cert keys that are verified and in date
-    cert_attention: int = 0                  # Phase 32: certificates waiting for a check (not verified yet)
-
-
-class TeamMemberUpdate(BaseModel):
-    status: Optional[str] = None             # active | removed | blocked
-    positions: Optional[List[str]] = None
-    notes: Optional[str] = None
-
-
-```
-Replace with:
-```python
-    certs: List[str] = []                    # Phase 32: cert keys that are verified and in date
-    cert_attention: int = 0                  # Phase 32: certificates waiting for a check (not verified yet)
-    time_tracking: Optional[str] = None      # Phase 35: this person's setting: payroll | shiftboard | None = venue setting
-    effective_time_tracking: str = "shiftboard"   # Phase 35: what applies to their next booking
-    works_through: Optional[str] = None      # Phase 35: staffing company / agency
-
-
-class TeamMemberUpdate(BaseModel):
-    status: Optional[str] = None             # active | removed | blocked
-    positions: Optional[List[str]] = None
-    notes: Optional[str] = None
-    time_tracking: Optional[str] = None      # Phase 35: payroll | shiftboard | venue (or null) = use the venue setting
-    works_through: Optional[str] = Field(None, max_length=120)   # Phase 35: "" clears it
-
-
-```
-
-**Edit 7.** Find:
-```python
-    phone: Optional[str] = None
-    request_status: str                          # approved | confirmed | checked_in | completed | no_show
-    clock_state: str                             # upcoming | due | late | in | done | missed | no_show
-    clock_in_time: Optional[datetime] = None     # first clock-in
-    clock_out_time: Optional[datetime] = None    # last clock-out (when done)
-```
-Replace with:
-```python
-    phone: Optional[str] = None
-    request_status: str                          # approved | confirmed | checked_in | completed | no_show
-    clock_state: str                             # upcoming | due | late | in | done | missed | no_show | payroll (Phase 35)
-    clock_in_time: Optional[datetime] = None     # first clock-in
-    clock_out_time: Optional[datetime] = None    # last clock-out (when done)
-```
-
-**Edit 8.** Find:
-```python
-    shifts: List[EarningsShift] = []         # newest first
-    upcoming: EarningsUpcoming = EarningsUpcoming()
-
-
-```
-Replace with:
-```python
-    shifts: List[EarningsShift] = []         # newest first
-    upcoming: EarningsUpcoming = EarningsUpcoming()
-    payroll_shifts: int = 0                  # Phase 35: shifts in the period tracked by a venue's own payroll (not counted here)
-    payroll_venues: List[str] = []           # Phase 35
-
-
-```
-
-**Edit 9.** Find:
-```python
-
-
-WorkerProfile.model_rebuild()
-EventListing.model_rebuild()   # Phase 32.3: series is a list of EventListing
-```
-Replace with:
-```python
-
-
-
-# ------------------------------------------------------------------------------------------------
-# Phase 35: Pay periods
-# ------------------------------------------------------------------------------------------------
-class PayPeriodPerson(BaseModel):
-    worker_id: UUID
-    name: str
-    email: Optional[str] = None
-    works_through: Optional[str] = None
-    shifts: int = 0
-    hours: float = 0
-    regular_hours: float = 0
-    overtime_hours: float = 0
-    pay: float = 0                           # hours x rate (overtime premium not added; that's the payroll's job)
-    open_entries: int = 0                    # still clocked in / never clocked out
-    edited_entries: int = 0
-    outside_area: int = 0
-    auto_closed: int = 0
-
-
-class PayPeriodPayrollPerson(BaseModel):
-    worker_id: UUID
-    name: str
-    shifts: int = 0
-    scheduled_hours: float = 0               # from the posted times (their real hours are in the venue's payroll)
-
-
-class PayPeriodSummary(BaseModel):
-    start_date: date
-    end_date: date
-    label: str
-    state: str                               # current | ready | approved | not_required | empty (nobody worked)
-    can_approve: bool = False
-    blocked_reason: Optional[str] = None     # why it can't be approved yet
-    people: int = 0
-    total_hours: float = 0
-    overtime_hours: float = 0
-    total_pay: float = 0
-    open_entries: int = 0
-    payroll_people: int = 0
-    payroll_shifts: int = 0
-    approved_at: Optional[datetime] = None
-    approved_by: Optional[str] = None
-    last_reopened_at: Optional[datetime] = None
-    last_reopen_reason: Optional[str] = None
-
-
-class PayPeriodDetail(PayPeriodSummary):
-    rows: List[PayPeriodPerson] = []
-    payroll_rows: List[PayPeriodPayrollPerson] = []
-
-
-class PayPeriodList(BaseModel):
-    pay_period: str
-    approval_on: bool
-    overtime_text: str                       # "Over 40 h a week" / "Off"
-    timezone: str
-    companies: List[str] = []                # for the company filter
-    periods: List[PayPeriodSummary] = []
-
-
-class PayPeriodReopenBody(BaseModel):
-    reason: str = Field(..., min_length=3, max_length=500)
-
-
-WorkerProfile.model_rebuild()
-EventListing.model_rebuild()   # Phase 32.3: series is a list of EventListing
+    # JWT Authentication
 ```
 
 ---
 
-## A4. NEW FILE `backend/src/services/time_tracking.py`
-Who clocks in where, freezing the mode at the start, and company names.
+## A3. `.gitignore` (EDIT)
 
-```python
-"""
-Phase 35: Who clocks in with ShiftBoard, and who is on the venue's own payroll system.
-
-  'shiftboard' : clock in / out in ShiftBoard; hours count in time sheets, exports, Hours & pay.
-  'payroll'    : the venue's own payroll / time clock tracks their time. ShiftBoard shows no clock button,
-                 sends no "not clocked in" alerts, and leaves them out of hours and pay. The shift counts as
-                 worked unless a manager marks a no-show.
-
-How it's decided for one person at one venue (first match wins):
-  1. their team-member setting (venue_whitelists.time_tracking = 'payroll' | 'shiftboard')
-  2. they work through another company (venue_whitelists.works_through set) -> 'shiftboard'  (overhire / agency)
-  3. they're on the venue's team and the venue says team members use payroll
-     (venues.team_time_tracking = 'payroll') -> 'payroll'
-  4. otherwise -> 'shiftboard'  (people booked from outside the team always clock in here)
-
-A booking follows the CURRENT settings until its shift starts. At the start, the background worker writes the
-answer on the booking (shift_requests.time_tracking), so later settings changes never rewrite history.
-"""
-from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
-
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.models import Shift, ShiftRequest, Venue, VenueWhitelist
-
-SHIFTBOARD = "shiftboard"
-PAYROLL = "payroll"
-MODES = (SHIFTBOARD, PAYROLL)
-FREEZE_STATUSES = ("approved", "confirmed", "checked_in", "completed", "no_show")
-COMPANY_MAX = 120
-
-
-def resolve(venue_team_mode: Optional[str], member: Optional[VenueWhitelist]) -> str:
-    """The rule above, for one venue + (optional) team-list row."""
-    on_team = member is not None and member.status == "active" and bool(member.is_active)
-    if member is not None and on_team and member.time_tracking in MODES:
-        return member.time_tracking
-    if member is not None and on_team and (member.works_through or "").strip():
-        return SHIFTBOARD
-    if on_team and venue_team_mode == PAYROLL:
-        return PAYROLL
-    return SHIFTBOARD
-
-
-async def live_modes(db: AsyncSession, pairs: Iterable[Tuple]) -> Dict[Tuple, str]:
-    """{(venue_id, worker_id): mode} from the current settings."""
-    pairs = list({(v, w) for v, w in pairs if v is not None and w is not None})
-    if not pairs:
-        return {}
-    venue_ids = list({v for v, _ in pairs})
-    worker_ids = list({w for _, w in pairs})
-    venue_mode = dict((await db.execute(
-        select(Venue.id, Venue.team_time_tracking).where(Venue.id.in_(venue_ids))
-    )).all())
-    members = {(m.venue_id, m.worker_id): m for m in (await db.execute(
-        select(VenueWhitelist).where(VenueWhitelist.venue_id.in_(venue_ids), VenueWhitelist.worker_id.in_(worker_ids))
-    )).scalars().all()}
-    return {(v, w): resolve(venue_mode.get(v), members.get((v, w))) for v, w in pairs}
-
-
-async def modes_for_requests(db: AsyncSession, rows: Iterable[Tuple[ShiftRequest, Shift]]) -> Dict:
-    """{request_id: mode}: the value written on the booking when its shift started, else the live setting."""
-    rows = list(rows)
-    need = [(s.venue_id, r.worker_id) for r, s in rows if r.time_tracking not in MODES]
-    live = await live_modes(db, need)
-    out = {}
-    for r, s in rows:
-        out[r.id] = r.time_tracking if r.time_tracking in MODES else live.get((s.venue_id, r.worker_id), SHIFTBOARD)
-    return out
-
-
-async def mode_for(db: AsyncSession, req: ShiftRequest, shift: Shift) -> str:
-    return (await modes_for_requests(db, [(req, shift)]))[req.id]
-
-
-async def freeze_started(db: AsyncSession, now: datetime) -> int:
-    """Background worker, every minute: write the tracking mode on bookings whose shift has started.
-    Does NOT commit. Returns how many were written."""
-    rows = (await db.execute(
-        select(ShiftRequest, Shift).join(Shift, Shift.id == ShiftRequest.shift_id)
-        .where(ShiftRequest.time_tracking.is_(None), Shift.start_time <= now,
-               func.lower(ShiftRequest.status).in_(FREEZE_STATUSES))
-        .limit(2000)
-    )).all()
-    if not rows:
-        return 0
-    modes = await modes_for_requests(db, rows)
-    for r, _s in rows:
-        r.time_tracking = modes[r.id]
-    return len(rows)
-
-
-def clean_company(value) -> Optional[str]:
-    v = " ".join(str(value or "").split())[:COMPANY_MAX]
-    return v or None
-
-
-async def venue_companies(db: AsyncSession, venue_id) -> List[str]:
-    """Companies named on this venue's team list (for filters)."""
-    rows = (await db.execute(
-        select(VenueWhitelist.works_through).where(
-            VenueWhitelist.venue_id == venue_id, VenueWhitelist.works_through.isnot(None))
-        .distinct()
-    )).scalars().all()
-    return sorted({r for r in rows if r}, key=str.lower)
+**Edit 1.** Find:
+```text
+# Ignoring the folder itself makes git skip it entirely, and the !-rules below
+# can no longer re-include the *.template files (they silently become untracked).
+# Phase 35.1: the real settings live in the root .env. ".env.*" also covers .env.local and the
+# *.pre-0.35.1.bak backups made by scripts/consolidate_env.py, in any folder.
+.env
+.env.local
+.env.*
+*.env
+!.env.template
+.secrets/*
+!.secrets/*.template
+!.secrets/.secrets.env.template
+*.pem
+*.key
+```
+Replace with:
+```text
+# Ignoring the folder itself makes git skip it entirely, and the !-rules below
+# can no longer re-include the *.template files (they silently become untracked).
+# Phase 35.1.1: real settings live in .env, .secrets/stack.env and .secrets/integrations.env.
+# ".env.*" also covers .env.local and the *.pre-0.35.x.bak backups made by
+# scripts/consolidate_env.py, in any folder. Templates (*.template) stay tracked.
+.env
+.env.local
+.env.*
+*.env
+*.bak
+!.env.template
+.secrets/*
+!.secrets/*.template
+*.pem
+*.key
 ```
 
 ---
 
-## A5. NEW FILE `backend/src/services/pay_periods.py`
-Pay period dates, overtime, locks and totals.
+## A4. `frontend/src/components/admin/AdminSystem.jsx` (EDIT)
+
+**Edit 1.** Find:
+```jsx
+            </Row>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-2">Change these in the .env file, then recreate the containers: docker compose up -d --force-recreate (keeps your data).</p>
+        </section>
+
+```
+Replace with:
+```jsx
+            </Row>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-2">Change these in .env (secrets in .secrets/stack.env or .secrets/integrations.env), then recreate the containers: docker compose up -d --force-recreate (keeps your data).</p>
+        </section>
+
+```
+
+---
+
+## A5. `agy_system_instructions.md` (EDITS)
+Edit 2 replaces the Configuration rules and puts back the **Standing rules (Phase 34.5)** section above them.
+
+**Edit 1.** Find:
+```markdown
+/shift-scheduler
+├── .gitignore               # MUST ignore .env, .env.*, .secrets/* (NOT ".secrets/"), node_modules, etc.
+├── docker-compose.yml       # reads ONLY the root .env (Phase 35.1)
+├── .env                     # THE settings file. Ignored by git.
+├── .env.template            # documents every setting
+├── .secrets/
+│   ├── firebase-web-config.js          # ignored; mounted read-only into the backend
+│   └── firebase_service_account.json   # ignored; mounted read-only into the backend
+├── scripts/
+│   └── consolidate_env.py   # one-time merge of the pre-0.35.1 settings files
+├── cloudflared/
+│   └── config.yml
+```
+Replace with:
+```markdown
+/shift-scheduler
+├── .gitignore               # MUST ignore .env, .env.*, .secrets/* (NOT ".secrets/"), node_modules, etc.
+├── docker-compose.yml       # reads .env + .secrets/stack.env + .secrets/integrations.env (Phase 35.1.1)
+├── .env                     # ordinary settings, NO secrets. Ignored by git.
+├── .env.template            # documents every ordinary setting
+├── .secrets/
+│   ├── stack.env                       # ignored; stack secrets (database, redis, cloudflared, backend)
+│   ├── integrations.env                # ignored; outside-service keys (backend only)
+│   ├── *.template                      # tracked; document the two files above
+│   ├── firebase-web-config.js          # ignored; mounted read-only into the backend
+│   └── firebase_service_account.json   # ignored; mounted read-only into the backend
+├── scripts/
+│   └── consolidate_env.py   # one-time sort of older settings files into the three files
+├── cloudflared/
+│   └── config.yml
+```
+
+**Edit 2.** Find:
+```markdown
+
+The project rules that always apply are in README.md → "Working on the code" (no native PostgreSQL ENUMs, locked sign-in files, timezone-aware UTC, schema changes in models.py AND database/init.sql, Event → Shift → Position wording).
+
+## Configuration rules (added in Phase 35.1, apply to every phase)
+1. **One settings file:** every setting lives in the root `.env`. `docker-compose.yml` reads only that file (`env_file: .env` on the backend; `${...}` for `database`, `redis`, `cloudflared`). Never add `env_file` entries for `backend/.env`, `frontend/.env` or `.secrets/.secrets.env`.
+2. **A new setting** goes in `.env.template` (with a comment) AND in `backend/src/config.py`. If it's a secret, also list it in `.secrets/.secrets.env.template`. Update the README Configuration table.
+3. **Never read, print or commit real `.env` / `.secrets` contents.** Only templates hold example values.
+4. **The frontend has no settings.** Don't add `VITE_` variables or Docker build args unless a phase explicitly asks; the Firebase web config comes from the backend (`GET /api/auth/firebase-config`).
+5. **Don't touch `.secrets/*` in `.gitignore`** (ignoring `.secrets/` itself untracks the templates).
+6. Changing `.env` needs `docker compose up -d --force-recreate`, NOT `down -v` (that deletes the database).
+```
+Replace with:
+```markdown
+
+The project rules that always apply are in README.md → "Working on the code" (no native PostgreSQL ENUMs, locked sign-in files, timezone-aware UTC, schema changes in models.py AND database/init.sql, Event → Shift → Position wording).
+---
+
+## Standing rules (added in Phase 34.5, apply to every phase)
+
+**CRITICAL SYSTEM DIRECTIVE: Starting immediately, upon the successful completion of any future phase or feature implementation, you must autonomously bump the version number in `frontend/package.json`, append a bulleted summary of changes to `CHANGELOG.md`, and update `README.md` if the architecture changed. Do not ask for permission to do this.**
+
+How to follow it:
+1. **Which number:** while pre-1.0 the version follows the phase: Phase N → `0.N.0`, Phase N.x → `0.N.x`; a third level (N.x.y) takes the next patch number. If the phase prompt names the version, use exactly that one.
+2. **Both places, same number:** `frontend/package.json` → `"version"` AND `backend/src/version.py` → `APP_VERSION`. Admin → System warns when they differ.
+3. **CHANGELOG.md:** add the new section at the TOP (under the intro), as `## [x.y.z] - YYYY-MM-DD - Phase N: title`, with bullets under Added / Changed / Fixed / Removed. Never edit older sections.
+4. **README.md:** update it when the architecture, roles, rules, configuration or setup changed. Otherwise leave it.
+5. Do this only after the phase's own changes are complete and verified, and include these files in your summary of changed files. The frontend container must be restarted to show a new version (Vite reads package.json at start).
+
+The project rules that always apply are in README.md → "Working on the code" (no native PostgreSQL ENUMs, locked sign-in files, timezone-aware UTC, schema changes in models.py AND database/init.sql, Event → Shift → Position wording).
+
+## Configuration rules (added in Phase 35.1, updated in 35.1.1; apply to every phase)
+1. **Three settings files:** `.env` (ordinary settings, NO secrets), `.secrets/stack.env` (`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN`), `.secrets/integrations.env` (keys for outside services). `database`, `redis` and `cloudflared` read ONLY `stack.env`; the backend reads all three; the frontend reads none. Never add other `env_file` entries.
+2. **Never put a secret in `${...}` in `docker-compose.yml`** (Compose reads `${...}` only from `.env`). Containers get secrets through `env_file`; if a command needs one, use the container's shell with `$$VAR`.
+3. **A new setting** goes in `backend/src/config.py` AND in the right template: `.env.template` if it isn't secret, `.secrets/stack.env.template` if the stack needs it, `.secrets/integrations.env.template` for an outside service's key. Update the README Configuration table.
+4. **Never read, print or commit real `.env` / `.secrets` contents.** Only templates hold example values.
+5. **The frontend has no settings.** Don't add `VITE_` variables or Docker build args unless a phase explicitly asks; the Firebase web config comes from the backend (`GET /api/auth/firebase-config`).
+6. **Don't touch `.secrets/*` in `.gitignore`** (ignoring `.secrets/` itself untracks the templates).
+7. Changing settings needs `docker compose up -d --force-recreate`, NOT `down -v` (that deletes the database).
+```
+
+---
+
+# PART B: Templates
+
+## B1. REPLACE THE WHOLE FILE `.env.template`
+No secrets in it any more.
+
+```bash
+# ==============================================================================
+# ShiftBoard - ordinary settings (NO secrets in this file)          Phase 35.1.1
+#
+#   cp .env.template .env        then fill in real values. .env is ignored by git.
+#
+# Settings live in three files; each has a .template:
+#   .env                          THIS file: ports, names, providers, addresses, on/off switches
+#   .secrets/stack.env            stack secrets: database / Redis passwords, login signing key,
+#                                 super-admin password, Cloudflare tunnel token
+#   .secrets/integrations.env     outside-service keys: email, texts, push, file storage
+# Docker Compose reads only these three. The backend gets all of them; the database, Redis and
+# the tunnel get only .secrets/stack.env; the frontend gets nothing.
+# Two more files stay in .secrets/ because they aren't KEY=VALUE text:
+#   .secrets/firebase-web-config.js          (Firebase web config, see its .template)
+#   .secrets/firebase_service_account.json   (Firebase service-account key, for FCM push)
+#
+# After changing any of them: docker compose up -d --force-recreate   (keeps your data)
+# Placeholders look like your_value_here. Blank = off / use the default.
+# Upgrading? Run scripts/consolidate_env.py once (see README).
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Database (PostgreSQL)
+# ------------------------------------------------------------------------------
+POSTGRES_USER=shiftboard_user
+# POSTGRES_PASSWORD is in .secrets/stack.env
+POSTGRES_DB=shiftboard
+# Port on YOUR computer (host). Containers always talk to each other on 5432.
+POSTGRES_PORT=5432
+# Connection pool (optional)
+DB_POOL_SIZE=20
+DB_MAX_OVERFLOW=10
+
+# ------------------------------------------------------------------------------
+# Redis
+# ------------------------------------------------------------------------------
+# REDIS_PASSWORD is in .secrets/stack.env
+# Port on your computer (host).
+REDIS_PORT=6379
+# REDIS_URL is built by the backend from REDIS_PASSWORD. Don't set it here.
+
+# ------------------------------------------------------------------------------
+# Ports on your computer and the Cloudflare tunnel
+# ------------------------------------------------------------------------------
+PORT_BACKEND=8000
+PORT_FRONTEND=80
+# The Cloudflare tunnel token (TUNNEL_TOKEN) is in .secrets/stack.env
+
+# ------------------------------------------------------------------------------
+# Backend and sign-in
+# ------------------------------------------------------------------------------
+ENV=development
+DEBUG=true
+# SECRET_KEY (signs every login) is in .secrets/stack.env
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1440
+# The first Platform Admin, created on first start (the password is in .secrets/stack.env)
+SUPER_ADMIN_USERNAME=demo_admin@shiftboard.com
+# Comma-separated emails that are ALWAYS Platform Admins (can't be demoted or deleted)
+ALWAYS_ADMIN_EMAILS=
+# true = public "Create account" button (new people become Workers)
+ALLOW_SELF_REGISTRATION=true
+# true = the login page shows one-tap demo account buttons. Keep false anywhere public.
+SHOW_DEMO_LOGINS=false
+
+# ------------------------------------------------------------------------------
+# Firebase (sign-in with Google etc., and phone / browser push)
+# ------------------------------------------------------------------------------
+# true = demo mode ("Sign in with Google (Demo)"), no real Firebase
+USE_MOCK_FIREBASE=false
+# Blank = discover the sign-in methods enabled in the Firebase Console. Or a comma-separated
+# list of: password, google.com, microsoft.com, apple.com, github.com, facebook.com, twitter.com, yahoo.com
+FIREBASE_AUTH_PROVIDERS=
+# Paths INSIDE the backend container (.secrets/ is mounted at /app/secrets). Leave as they are.
+FIREBASE_WEB_CONFIG_PATH=/app/secrets/firebase-web-config.js
+FIREBASE_CREDENTIALS_PATH=/app/secrets/firebase_service_account.json
+# Firebase Console > Project settings > Cloud Messaging > Web Push certificates > Key pair.
+# This is the PUBLIC key (browsers get it), so it lives here. With it, the service-account file and
+# messagingSenderId/appId in the web config, push goes through Firebase Cloud Messaging.
+# Otherwise ShiftBoard's own Web Push is used.
+FIREBASE_VAPID_KEY=
+
+# ------------------------------------------------------------------------------
+# ShiftBoard's own Web Push (used when FCM isn't set up)
+# ------------------------------------------------------------------------------
+# VAPID_PRIVATE_KEY (optional) is in .secrets/integrations.env
+# Optional contact, e.g. mailto:you@yourdomain.com (blank = APP_BASE_URL when it's https)
+VAPID_SUBJECT=
+
+# ------------------------------------------------------------------------------
+# Notifications
+# ------------------------------------------------------------------------------
+# The public address of the site, used in links in emails, texts and invites
+APP_BASE_URL=https://your-public-address.example.com
+# The background worker (reminders, alerts, cover, waitlists, sending). Leave true.
+NOTIFICATIONS_WORKER_ENABLED=true
+# Hour (in each person's own time zone) of the daily "new shifts" email
+NOTIFICATIONS_DIGEST_HOUR=9
+
+# Email: console (only printed in the backend log) | smtp | resend
+EMAIL_PROVIDER=console
+EMAIL_FROM=ShiftBoard <no-reply@example.com>
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_STARTTLS=true
+SMTP_SSL=false
+# SMTP_USERNAME, SMTP_PASSWORD and RESEND_API_KEY are in .secrets/integrations.env
+
+# Texts: off | console | twilio  (only urgent messages are ever texted)
+SMS_PROVIDER=off
+TWILIO_FROM_NUMBER=
+# TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are in .secrets/integrations.env
+
+# ------------------------------------------------------------------------------
+# Cloudflare R2 file storage (reserved: the app reads these but doesn't upload to R2 yet)
+# ------------------------------------------------------------------------------
+R2_ACCOUNT_ID=
+# R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are in .secrets/integrations.env
+R2_BUCKET_NAME=shiftboard-media
+R2_S3_ENDPOINT_URL=
+R2_PUBLIC_URL_PREFIX=
+
+# ------------------------------------------------------------------------------
+# Frontend
+# ------------------------------------------------------------------------------
+# None. The web app reads no VITE_ variables: it calls /api on its own address (Vite
+# forwards it to the backend), and the Firebase web config comes from the backend at
+# runtime (GET /api/auth/firebase-config), read from .secrets/firebase-web-config.js.
+```
+
+---
+
+## B2. NEW FILE `.secrets/stack.env.template`
+
+```bash
+# ==============================================================================
+# ShiftBoard - stack secrets                                         Phase 35.1.1
+#
+#   cp .secrets/stack.env.template .secrets/stack.env     (ignored by git)
+#
+# Read by: database, redis, cloudflared and backend. Nothing else goes in here: outside-service
+# keys (email, texts, push, R2) belong in .secrets/integrations.env, so these containers never
+# see them. Ordinary settings belong in the root .env.
+# After changing it: docker compose up -d --force-recreate   (keeps your data)
+# ==============================================================================
+
+# PostgreSQL password. Only used the FIRST time the database volume is created; changing it
+# later doesn't change the database's password (the backend would then fail to connect).
+POSTGRES_PASSWORD=your_postgres_password_here
+
+# Redis password (required: Redis won't start without it)
+REDIS_PASSWORD=your_redis_password_here
+
+# Signs every login token (JWT). A long random string, for example the output of:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+# Changing it signs everyone out once. If it's missing, a built-in public key is used: never do that.
+SECRET_KEY=your_long_random_secret_here
+
+# Password of the first Platform Admin (SUPER_ADMIN_USERNAME in .env)
+SUPER_ADMIN_PASSWORD=your_admin_password_here
+
+# Cloudflare Zero Trust > Networks > Tunnels > your tunnel > the token after --token.
+# cloudflared reads this name (TUNNEL_TOKEN) by itself.
+TUNNEL_TOKEN=your_tunnel_token_here
+```
+
+---
+
+## B3. NEW FILE `.secrets/integrations.env.template`
+
+```bash
+# ==============================================================================
+# ShiftBoard - keys for outside services                             Phase 35.1.1
+#
+#   cp .secrets/integrations.env.template .secrets/integrations.env     (ignored by git)
+#
+# Read by the backend ONLY (the database, Redis and the tunnel never get these).
+# Blank = that service is off. Which service is used is set in the root .env
+# (EMAIL_PROVIDER, SMS_PROVIDER, ...); the matching keys go here.
+# After changing it: docker compose up -d --force-recreate   (keeps your data)
+# ==============================================================================
+
+# Email over SMTP (EMAIL_PROVIDER=smtp; SMTP_HOST / SMTP_PORT are in .env)
+SMTP_USERNAME=
+SMTP_PASSWORD=
+# Email through Resend (EMAIL_PROVIDER=resend)
+RESEND_API_KEY=
+
+# Texts through Twilio (SMS_PROVIDER=twilio; TWILIO_FROM_NUMBER is in .env)
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+
+# ShiftBoard's own Web Push: optional fixed private key (PEM or base64url).
+# Blank = generated once and kept in the database.
+VAPID_PRIVATE_KEY=
+
+# Cloudflare R2 file storage (reserved: not used by the app yet; R2_ACCOUNT_ID etc. are in .env)
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+```
+
+---
+
+## B4. DELETE `.secrets/.secrets.env.template`
+`git rm .secrets/.secrets.env.template`. It's replaced by B2 and B3.
+
+---
+
+## B5. `backend/.env.template` (EDIT)
+
+**Edit 1.** Find:
+```bash
+# ShiftBoard - backend settings for running the API OUTSIDE Docker (local uvicorn)
+#
+# With Docker you don't need this file: docker compose gives the backend everything
+# from the root .env (see /.env.template, which documents every setting).
+#
+# Local run, from the backend/ folder:
+```
+Replace with:
+```bash
+# ShiftBoard - backend settings for running the API OUTSIDE Docker (local uvicorn)
+#
+# With Docker you don't need this file: docker compose gives the backend .env,
+# .secrets/stack.env and .secrets/integrations.env (their templates document every setting).
+#
+# Local run, from the backend/ folder:
+```
+
+---
+
+# PART C: Script
+
+## C1. REPLACE THE WHOLE FILE `scripts/consolidate_env.py`
 
 ```python
+#!/usr/bin/env python3
 """
-Phase 35: Pay periods, overtime and approving / locking a period.
+Phase 35.1.1: sort ShiftBoard's settings into its three settings files.
 
-Everything here is in the VENUE's time zone and works on ShiftBoard time entries (people whose time the venue's
-own payroll tracks have no entries; they are listed separately so the manager can cross-check).
+    .env                        ordinary settings, no secrets
+    .secrets/stack.env          stack secrets (database, Redis, tunnel, backend read it)
+    .secrets/integrations.env   outside-service keys (only the backend reads it)
 
-Pay periods (venues.pay_period):
-  weekly       7 days starting on the venue's work-week start day (venues.work_week_start, 0 = Monday)
-  biweekly     14 days counted from venues.pay_period_anchor (any first day of a pay period)
-  semimonthly  the 1st to the 15th, and the 16th to the end of the month
-  monthly      calendar months
+Works from any earlier layout:
+    0.35.0 and older   .env + backend/.env + frontend/.env + .secrets/.secrets.env
+    0.35.1             everything in the root .env
+It keeps exactly the values the running app uses, puts each one in the right file, and renames
+the old files to <name>.pre-0.35.2.bak so nothing is lost (git ignores them).
 
-Overtime (a flag and hour count; ShiftBoard does not change anyone's pay rate):
-  * daily   (venues.ot_daily_hours, None = off): hours past the limit on one day (the day the entry started)
-  * weekly  (venues.ot_weekly_hours, None = off): hours past the limit in one work week, not counting hours
-            already counted as daily overtime
-  A time entry that crosses the limit is split: its overtime part is what's past the limit.
+It NEVER prints a value, only setting names and which file each came from / goes to.
 
-Approving a period (venues.pay_period_approval): only after it has ended and nobody is still clocked in for it.
-While approved, times and pay rates in that period can't change (409) until a manager reopens it with a reason.
+    python scripts/consolidate_env.py            # dry run: shows what it would do, changes nothing
+    python scripts/consolidate_env.py --apply    # writes the three files and renames the old ones
+    python scripts/consolidate_env.py --undo     # puts the old files back
+    python scripts/consolidate_env.py --source .env.old.env   # read the root settings from another file
+
+Template placeholders (your_..._here) are never carried over: the script refuses to --apply
+while a secret the stack needs is still a placeholder.
+
+Run it from the repository root (the folder with docker-compose.yml). Needs Python 3.8+ only.
+No Python on this computer? Use Docker:
+    docker run --rm -v "${PWD}:/work" -w /work python:3.11-slim python scripts/consolidate_env.py --apply
+
+Which value wins (what 0.35.0 / 0.35.1 actually used):
+  * Values that docker-compose.yml substituted with ${...} (database / Redis passwords, ports,
+    super-admin login, tunnel token) came ONLY from the root .env. So the root .env value wins.
+    If the root .env didn't have it, Compose's built-in default was used: the same default is
+    kept (written out where the new layout needs it), unless Compose had no default, in which
+    case the value from the other files is used and flagged CHECK IT.
+  * Everything else reached the backend through env_file, where the later file won:
+    .secrets/.secrets.env  >  backend/.env  >  root .env.
+  * DATABASE_URL, REDIS_URL and POSTGRES_HOST are built for you now: dropped.
+  * CLOUDFLARE_TUNNEL_TOKEN is renamed TUNNEL_TOKEN (the name cloudflared reads by itself).
+  * frontend/.env: the web app reads no settings, so nothing is taken from it.
 """
-import calendar
-from collections import defaultdict
-from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
 
-from fastapi import HTTPException
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+SUFFIX = ".pre-0.35.2.bak"
+ROOT_ENV = Path(".env")
+STACK = Path(".secrets/stack.env")
+INTEGRATIONS = Path(".secrets/integrations.env")
+SOURCES = [  # lowest priority first (env_file order before 0.35.1; later wins)
+    ("root .env", Path(".env")),
+    ("backend/.env", Path("backend/.env")),
+    (".secrets/.secrets.env", Path(".secrets/.secrets.env")),
+]
+FRONTEND = Path("frontend/.env")
+RETIRE = [Path("backend/.env"), FRONTEND, Path(".secrets/.secrets.env")]
 
-from src.models import (
-    PayPeriodApproval, Shift, ShiftRequest, TimeEntry, TimeEntryEdit, User, Venue, VenueWhitelist,
-)
-from src.services.fit import tz_of
+# ${...} in the old docker-compose.yml -> their compose default (None = no default)
+INTERPOLATED = {
+    "POSTGRES_USER": "shiftboard_user",
+    "POSTGRES_PASSWORD": None,
+    "POSTGRES_DB": "shiftboard",
+    "POSTGRES_PORT": "5432",
+    "REDIS_PASSWORD": "shiftboard_redis_pass",
+    "REDIS_PORT": "6379",
+    "PORT_BACKEND": "8000",
+    "PORT_FRONTEND": "80",
+    "SUPER_ADMIN_USERNAME": "demo_admin@shiftboard.com",
+    "SUPER_ADMIN_PASSWORD": "SuperSecretDemo123!",
+    "CLOUDFLARE_TUNNEL_TOKEN": None,
+}
+# Defaults that must be written out because the new layout has no fallback for them
+WRITE_DEFAULT = {"REDIS_PASSWORD"}
+COMPUTED = {"DATABASE_URL", "REDIS_URL", "POSTGRES_HOST"}
+RENAMED = {"CLOUDFLARE_TUNNEL_TOKEN": "TUNNEL_TOKEN"}
 
-PERIODS = ("weekly", "biweekly", "semimonthly", "monthly")
-DEFAULT_ANCHOR = date(2026, 1, 5)          # a Monday; moved to the venue's week start when no anchor is set
-BOOKED = ("approved", "confirmed", "checked_in", "completed")
+STACK_KEYS = ["POSTGRES_PASSWORD", "REDIS_PASSWORD", "SECRET_KEY", "SUPER_ADMIN_PASSWORD", "TUNNEL_TOKEN"]
+INTEGRATION_KEYS = ["SMTP_USERNAME", "SMTP_PASSWORD", "RESEND_API_KEY", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN",
+                    "VAPID_PRIVATE_KEY", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]
 
+# The layout of the new .env (same order as .env.template); no secrets
+SECTIONS = [
+    ("Database (PostgreSQL)", ["POSTGRES_USER", "POSTGRES_DB", "POSTGRES_PORT", "DB_POOL_SIZE", "DB_MAX_OVERFLOW"]),
+    ("Redis", ["REDIS_PORT"]),
+    ("Ports on your computer", ["PORT_BACKEND", "PORT_FRONTEND"]),
+    ("Backend and sign-in", ["ENV", "DEBUG", "JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "SUPER_ADMIN_USERNAME",
+                             "ALWAYS_ADMIN_EMAILS", "ALLOW_SELF_REGISTRATION", "SHOW_DEMO_LOGINS"]),
+    ("Firebase", ["USE_MOCK_FIREBASE", "FIREBASE_AUTH_PROVIDERS", "FIREBASE_WEB_CONFIG_PATH",
+                  "FIREBASE_CREDENTIALS_PATH", "FIREBASE_VAPID_KEY"]),
+    ("ShiftBoard's own Web Push", ["VAPID_SUBJECT"]),
+    ("Notifications", ["APP_BASE_URL", "NOTIFICATIONS_WORKER_ENABLED", "NOTIFICATIONS_DIGEST_HOUR",
+                       "EMAIL_PROVIDER", "EMAIL_FROM", "SMTP_HOST", "SMTP_PORT", "SMTP_STARTTLS", "SMTP_SSL",
+                       "SMS_PROVIDER", "TWILIO_FROM_NUMBER"]),
+    ("Cloudflare R2 (reserved: not used by the app yet)", ["R2_ACCOUNT_ID", "R2_BUCKET_NAME", "R2_S3_ENDPOINT_URL",
+                                                          "R2_PUBLIC_URL_PREFIX"]),
+]
+KNOWN_PLAIN = {k for _, keys in SECTIONS for k in keys}
+# Read by nothing in ShiftBoard 0.35.x. Kept (so nothing is lost) in their own section.
+UNUSED = {
+    "JWT_SECRET_KEY": "not used: logins are signed with SECRET_KEY",
+    "JWT_ALGORITHM": "not used: always HS256",
+    "ALGORITHM": "not used: always HS256",
+    "CORS_ORIGINS": "not used: the allowed origins are set in backend/src/main.py",
+    "FIREBASE_PROJECT_ID": "not used: the project comes from .secrets/firebase-web-config.js",
+    "DEFAULT_GEOFENCE_RADIUS_METERS": "not used: each venue sets its own clock-in area",
+    "PORT": "not used in Docker",
+    "PROJECT_NAME": "not used", "ENVIRONMENT": "not used (ENV is)", "LOG_LEVEL": "not used",
+    "APP_DOMAIN": "not used", "CLOUDFLARE_TUNNEL_ID": "not used (the tunnel runs with TUNNEL_TOKEN)",
+}
+PLACEHOLDER = re.compile(r"^[\"']?your_[A-Za-z0-9_]*_here[\"']?$")
+SECRET_WORDS = re.compile(r"(PASSWORD|SECRET|TOKEN|API_KEY|PRIVATE|_KEY$|_SID$|CREDENTIAL)")
 
-def _utc(dt):
-    if dt is None:
-        return None
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
-
-
-def local_date(dt, tz) -> date:
-    return _utc(dt).astimezone(tz).date()
-
-
-def day_bounds(first: date, last: date, tz) -> Tuple[datetime, datetime]:
-    lo = datetime.combine(first, time.min, tzinfo=tz).astimezone(timezone.utc)
-    hi = datetime.combine(last + timedelta(days=1), time.min, tzinfo=tz).astimezone(timezone.utc)
-    return lo, hi
-
-
-# ------------------------------------------------------------------------------------------------
-# Periods
-# ------------------------------------------------------------------------------------------------
-def week_start_for(venue: Venue, d: date) -> date:
-    ws = int(venue.work_week_start or 0)
-    return d - timedelta(days=(d.weekday() - ws) % 7)
-
-
-def period_for(venue: Venue, d: date) -> Tuple[date, date]:
-    kind = venue.pay_period if venue.pay_period in PERIODS else "weekly"
-    if kind == "weekly":
-        s = week_start_for(venue, d)
-        return s, s + timedelta(days=6)
-    if kind == "biweekly":
-        anchor = venue.pay_period_anchor or week_start_for(venue, DEFAULT_ANCHOR)
-        s = anchor + timedelta(days=((d - anchor).days // 14) * 14)
-        return s, s + timedelta(days=13)
-    if kind == "semimonthly":
-        if d.day <= 15:
-            return d.replace(day=1), d.replace(day=15)
-        return d.replace(day=16), d.replace(day=calendar.monthrange(d.year, d.month)[1])
-    return d.replace(day=1), d.replace(day=calendar.monthrange(d.year, d.month)[1])      # monthly
-
-
-def recent_periods(venue: Venue, today: date, count: int) -> List[Tuple[date, date]]:
-    """The current period first, then the ones before it."""
-    out = []
-    s, e = period_for(venue, today)
-    for _ in range(max(1, count)):
-        out.append((s, e))
-        s, e = period_for(venue, s - timedelta(days=1))
-    return out
-
-
-def check_period_start(venue: Venue, start: date) -> Tuple[date, date]:
-    s, e = period_for(venue, start)
-    if s != start:
-        raise HTTPException(status_code=400, detail="That date isn't the first day of a pay period at this venue.")
-    return s, e
-
-
-def period_label(start: date, end: date) -> str:
-    if start.year != end.year:
-        return f"{start:%b %-d, %Y} – {end:%b %-d, %Y}"
-    if start.month == end.month:
-        return f"{start:%b %-d} – {end:%-d}, {end:%Y}"
-    return f"{start:%b %-d} – {end:%b %-d}, {end:%Y}"
+KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
 
-# ------------------------------------------------------------------------------------------------
-# Overtime
-# ------------------------------------------------------------------------------------------------
-def entry_hours(e: TimeEntry) -> float:
-    if not e.clock_in_time or not e.clock_out_time:
-        return 0.0
-    return max(0.0, (_utc(e.clock_out_time) - _utc(e.clock_in_time)).total_seconds() / 3600.0)
-
-
-def split_overtime(venue: Venue, entries: Iterable[TimeEntry]) -> Dict:
-    """{entry_id: overtime hours} for ONE worker's closed entries at ONE venue (any order)."""
-    tz = tz_of(venue.timezone)
-    daily = float(venue.ot_daily_hours) if venue.ot_daily_hours is not None else None
-    weekly = float(venue.ot_weekly_hours) if venue.ot_weekly_hours is not None else None
-    day_tot, week_tot, out = defaultdict(float), defaultdict(float), {}
-    for e in sorted([e for e in entries if e.clock_out_time], key=lambda x: _utc(x.clock_in_time)):
-        h = entry_hours(e)
-        d = local_date(e.clock_in_time, tz)
-        daily_ot = 0.0
-        if daily:
-            before = day_tot[d]
-            day_tot[d] = before + h
-            daily_ot = max(0.0, day_tot[d] - daily) - max(0.0, before - daily)
-        weekly_ot = 0.0
-        if weekly:
-            wk = week_start_for(venue, d)
-            before = week_tot[wk]
-            week_tot[wk] = before + (h - daily_ot)
-            weekly_ot = max(0.0, week_tot[wk] - weekly) - max(0.0, before - weekly)
-        out[e.id] = round(daily_ot + weekly_ot, 4)
-    return out
-
-
-async def overtime_for(db: AsyncSession, venue: Venue, worker_ids: Iterable, first: date, last: date) -> Dict:
-    """{entry_id: overtime hours} for these workers' entries at this venue that START between first and last
-    (venue dates). Whole work weeks are read so weekly overtime is right even when the range starts mid-week."""
-    worker_ids = list(set(worker_ids))
-    if not worker_ids or (venue.ot_daily_hours is None and venue.ot_weekly_hours is None):
-        return {}
-    tz = tz_of(venue.timezone)
-    lo, hi = day_bounds(week_start_for(venue, first), last, tz)
-    rows = (await db.execute(
-        select(TimeEntry).join(Shift, Shift.id == TimeEntry.shift_id)
-        .where(Shift.venue_id == venue.id, TimeEntry.worker_id.in_(worker_ids),
-               TimeEntry.clock_in_time >= lo, TimeEntry.clock_in_time < hi)
-    )).scalars().all()
-    per = defaultdict(list)
-    for e in rows:
-        per[e.worker_id].append(e)
-    out = {}
-    for es in per.values():
-        out.update(split_overtime(venue, es))
-    return out
-
-
-# ------------------------------------------------------------------------------------------------
-# Locks
-# ------------------------------------------------------------------------------------------------
-async def approval_for(db: AsyncSession, venue_id, start: date) -> Optional[PayPeriodApproval]:
-    return await db.scalar(select(PayPeriodApproval).where(
-        PayPeriodApproval.venue_id == venue_id, PayPeriodApproval.start_date == start,
-        PayPeriodApproval.status == "approved"))
-
-
-async def lock_covering(db: AsyncSession, venue_id, day: date) -> Optional[PayPeriodApproval]:
-    return await db.scalar(select(PayPeriodApproval).where(
-        PayPeriodApproval.venue_id == venue_id, PayPeriodApproval.status == "approved",
-        PayPeriodApproval.start_date <= day, PayPeriodApproval.end_date >= day).limit(1))
-
-
-async def assert_unlocked(db: AsyncSession, venue: Venue, *moments) -> None:
-    """409 if any of these times falls in an approved (locked) pay period at this venue."""
-    tz = tz_of(venue.timezone)
-    for m in moments:
-        if m is None:
+def parse(path: Path):
+    """KEY -> raw value text exactly as written (quotes kept). Later duplicates win, like Compose.
+    Multi-line values in double or single quotes are kept whole. Returns (values, problems)."""
+    values, problems = {}, []
+    if not path.exists():
+        return values, problems
+    lines = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        lock = await lock_covering(db, venue.id, local_date(m, tz))
-        if lock is not None:
-            raise HTTPException(status_code=409, detail=(
-                f"The pay period {period_label(lock.start_date, lock.end_date)} is approved and locked. "
-                "Reopen it on the Pay periods screen to change its times."))
-
-
-# ------------------------------------------------------------------------------------------------
-# Summaries
-# ------------------------------------------------------------------------------------------------
-async def summarize(db: AsyncSession, venue: Venue, start: date, end: date, company: Optional[str] = None,
-                    people: bool = True) -> dict:
-    """Totals (and per-person rows when people=True) for one period. Plain dicts; the router builds schemas."""
-    from src.services.time_tracking import modes_for_requests, PAYROLL
-    tz = tz_of(venue.timezone)
-    lo, hi = day_bounds(start, end, tz)
-    rows = (await db.execute(
-        select(TimeEntry, Shift, ShiftRequest, User)
-        .join(Shift, Shift.id == TimeEntry.shift_id)
-        .join(User, User.id == TimeEntry.worker_id)
-        .outerjoin(ShiftRequest, (ShiftRequest.shift_id == TimeEntry.shift_id) & (ShiftRequest.worker_id == TimeEntry.worker_id))
-        .where(Shift.venue_id == venue.id, TimeEntry.clock_in_time >= lo, TimeEntry.clock_in_time < hi)
-    )).all()
-    members = {m.worker_id: m for m in (await db.execute(
-        select(VenueWhitelist).where(VenueWhitelist.venue_id == venue.id))).scalars().all()}
-
-    def company_of(wid):
-        m = members.get(wid)
-        return (m.works_through or None) if m is not None else None
-
-    if company:
-        want = company.strip().lower()
-        rows = [r for r in rows if (company_of(r[3].id) or "").lower() == want]
-    ot = await overtime_for(db, venue, {r[3].id for r in rows}, start, end)
-    edited = set()
-    ids = [r[0].id for r in rows]
-    if ids:
-        edited = set((await db.execute(
-            select(TimeEntryEdit.time_entry_id).where(TimeEntryEdit.time_entry_id.in_(ids),
-                                                      TimeEntryEdit.action.in_(("edit", "add"))).distinct()
-        )).scalars().all())
-
-    per = {}
-    for e, s, r, u in rows:
-        p = per.setdefault(u.id, {
-            "worker_id": u.id, "name": (f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email),
-            "email": u.email, "works_through": company_of(u.id), "shifts": set(), "hours": 0.0, "overtime_hours": 0.0,
-            "pay": 0.0, "open_entries": 0, "edited_entries": 0, "outside_area": 0, "auto_closed": 0,
-        })
-        p["shifts"].add(s.id)
-        if e.clock_out_time is None:
-            p["open_entries"] += 1
+        m = KEY_RE.match(line)
+        if not m:
+            problems.append(f"{path}: line {i} isn't KEY=VALUE, skipped")
             continue
-        h = entry_hours(e)
-        rate = float(r.pay_rate) if (r is not None and r.pay_rate is not None) else float(s.hourly_rate or 0)
-        p["hours"] += h
-        p["overtime_hours"] += ot.get(e.id, 0.0)
-        p["pay"] += h * rate
-        p["edited_entries"] += 1 if e.id in edited else 0
-        p["outside_area"] += 1 if e.clock_in_geo_status == "outside_geofence" else 0
-        p["auto_closed"] += 1 if e.auto_closed else 0
+        key, raw = m.group(1), m.group(2).strip()
+        if raw[:1] in ('"', "'"):
+            q = raw[0]
+            body = raw[1:]
+            closed = re.search(r"(?<!\\)" + re.escape(q), body) if q == '"' else (q in body)
+            if not closed:  # multi-line quoted value
+                start = i
+                buf = [raw]
+                while i < len(lines):
+                    buf.append(lines[i])
+                    i += 1
+                    if (re.search(r"(?<!\\)" + re.escape(q), lines[i - 1]) if q == '"' else q in lines[i - 1]):
+                        break
+                else:
+                    problems.append(f"{path}: {key} starts a quoted value on line {start} that never closes; skipped")
+                    continue
+                raw = "\n".join(buf)
+        values[key] = raw
+    return values, problems
 
-    # People the venue's payroll tracks: booked shifts in the period (no ShiftBoard hours)
-    booked = (await db.execute(
-        select(ShiftRequest, Shift, User)
-        .join(Shift, Shift.id == ShiftRequest.shift_id).join(User, User.id == ShiftRequest.worker_id)
-        .where(Shift.venue_id == venue.id, Shift.start_time >= lo, Shift.start_time < hi,
-               func.lower(ShiftRequest.status).in_(BOOKED), func.upper(Shift.status) != "CANCELLED")
-    )).all()
-    modes = await modes_for_requests(db, [(r, s) for r, s, _u in booked])
-    payroll = {}
-    for r, s, u in booked:
-        if modes.get(r.id) != PAYROLL:
+
+def is_blank(raw):
+    return raw is None or raw.strip().strip('"').strip("'").strip() == ""
+
+
+def plan():
+    files = {label: parse(p) for label, p in SOURCES}
+    placeholders = set()
+    for label, (values, _) in files.items():
+        for k, v in list(values.items()):
+            if PLACEHOLDER.match(v.strip()):
+                placeholders.add(k)
+                del values[k]
+    fe_values, fe_problems = parse(FRONTEND)
+    problems = [p for _, (_, probs) in files.items() for p in probs] + fe_problems
+    root_label = SOURCES[0][0]
+    root = files[root_label][0]
+    merged, origin, notes = {}, {}, []
+
+    all_keys = []
+    for label, _ in SOURCES:
+        for k in files[label][0]:
+            if k not in all_keys:
+                all_keys.append(k)
+
+    for key in all_keys:
+        where = [(label, files[label][0][key]) for label, _ in SOURCES if key in files[label][0]]
+        if key in COMPUTED:
+            notes.append(f"{key}: dropped (built for you now)")
             continue
-        if company and (company_of(u.id) or "").lower() != company.strip().lower():
+        if key in INTERPOLATED:
+            others = [l for l, v in where if l != root_label and not is_blank(v)]
+            root_blank = key in root and is_blank(root[key])
+            if key in root and root_blank and INTERPOLATED[key] is None and others:
+                label = others[-1]
+                merged[key], origin[key] = files[label][0][key], label
+                notes.append(f"{key}: empty in the root .env; taken from {label}. CHECK IT: Docker was not using it before.")
+            elif key in root and not (root_blank and INTERPOLATED[key] is not None):
+                merged[key], origin[key] = root[key], root_label
+                differs = [l for l, v in where if l != root_label and v != root[key]]
+                if differs:
+                    notes.append(f"{key}: kept the root .env value (the one Docker used); a different value in "
+                                 f"{', '.join(differs)} was never used and is dropped")
+            elif INTERPOLATED[key] is not None:
+                if others:
+                    notes.append(f"{key}: not set in the root .env, so Docker used its built-in default; the value in "
+                                 f"{', '.join(others)} was never used. Kept the default.")
+            elif others:
+                label = others[-1]
+                merged[key], origin[key] = files[label][0][key], label
+                notes.append(f"{key}: not in the root .env; taken from {label}. CHECK IT: Docker was not using it before.")
             continue
-        q = payroll.setdefault(u.id, {"worker_id": u.id, "name": (f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email),
-                                      "shifts": 0, "scheduled_hours": 0.0})
-        q["shifts"] += 1
-        q["scheduled_hours"] += max(0.0, (_utc(s.end_time) - _utc(s.start_time)).total_seconds() / 3600.0)
+        label, value = where[-1]  # later file wins
+        merged[key], origin[key] = value, label
+        losers = [l for l, v in where[:-1] if v != value]
+        if losers:
+            notes.append(f"{key}: {label} wins over {', '.join(losers)} (same as before)")
 
-    people_rows = []
-    for p in per.values():
-        people_rows.append({**p, "shifts": len(p["shifts"]), "hours": round(p["hours"], 2),
-                            "overtime_hours": round(p["overtime_hours"], 2),
-                            "regular_hours": round(p["hours"] - p["overtime_hours"], 2), "pay": round(p["pay"], 2)})
-    people_rows.sort(key=lambda x: x["name"].lower())
-    payroll_rows = sorted([{**q, "scheduled_hours": round(q["scheduled_hours"], 2)} for q in payroll.values()],
-                          key=lambda x: x["name"].lower())
-    out = {
-        "people": len(people_rows),
-        "total_hours": round(sum(p["hours"] for p in people_rows), 2),
-        "overtime_hours": round(sum(p["overtime_hours"] for p in people_rows), 2),
-        "total_pay": round(sum(p["pay"] for p in people_rows), 2),
-        "open_entries": sum(p["open_entries"] for p in people_rows),
-        "payroll_people": len(payroll_rows),
-        "payroll_shifts": sum(q["shifts"] for q in payroll_rows),
-    }
-    if people:
-        out["rows"] = people_rows
-        out["payroll_rows"] = payroll_rows
-    return out
-```
+    # Defaults the new layout needs written out
+    for key in WRITE_DEFAULT:
+        if key not in merged:
+            merged[key], origin[key] = INTERPOLATED[key], "built-in default"
+            notes.append(f"{key}: Docker was using the built-in default; written out so Redis keeps the same "
+                         f"password. Consider changing it in .secrets/stack.env (then recreate the containers).")
+    # Renames
+    for old, new in RENAMED.items():
+        if old in merged:
+            if new in merged:
+                notes.append(f"{old}: {new} is also set; kept {new}")
+                merged.pop(old)
+                origin.pop(old)
+            else:
+                merged[new] = merged.pop(old)
+                origin[new] = origin.pop(old)
+                notes.append(f"{old}: renamed {new} (cloudflared reads that name by itself)")
 
----
-
-## A6. `backend/src/services/venue_positions.py` (EDITS)
-Validation for the new venue settings.
-
-**Edit 1.** Find:
-```python
-    "geofence_enabled", "geofence_buffer_meters", "clock_in_early_minutes", "auto_clock_out_hours",   # Phase 27
-    "allow_public_cover",                                                                            # Phase 34
-)
-TEXT_VENUE_FIELDS = (
-    "name", "address", "phone", "arrival_instructions", "dress_code",
-```
-Replace with:
-```python
-    "geofence_enabled", "geofence_buffer_meters", "clock_in_early_minutes", "auto_clock_out_hours",   # Phase 27
-    "allow_public_cover",                                                                            # Phase 34
-    "team_time_tracking", "work_week_start", "pay_period", "pay_period_approval",                    # Phase 35
-)
-VALID_TIME_TRACKING = ("shiftboard", "payroll")                                                      # Phase 35
-VALID_PAY_PERIODS = ("weekly", "biweekly", "semimonthly", "monthly")
-TEXT_VENUE_FIELDS = (
-    "name", "address", "phone", "arrival_instructions", "dress_code",
-```
-
-**Edit 2.** Find:
-```python
-    if "auto_clock_out_hours" in data and not (1 <= int(data["auto_clock_out_hours"]) <= 12):
-        raise HTTPException(status_code=400, detail="Auto clock-out must be between 1 and 12 hours after the shift ends.")
-    if data.get("auto_approve_rating_threshold") is not None:
-        t = float(data["auto_approve_rating_threshold"])
-```
-Replace with:
-```python
-    if "auto_clock_out_hours" in data and not (1 <= int(data["auto_clock_out_hours"]) <= 12):
-        raise HTTPException(status_code=400, detail="Auto clock-out must be between 1 and 12 hours after the shift ends.")
-    # Phase 35: time tracking, overtime, pay periods
-    if "team_time_tracking" in data and data["team_time_tracking"] not in VALID_TIME_TRACKING:
-        raise HTTPException(status_code=400, detail="Choose how your team's time is tracked.")
-    if data.get("ot_weekly_hours") is not None and not (1 <= float(data["ot_weekly_hours"]) <= 168):
-        raise HTTPException(status_code=400, detail="Weekly overtime must start between 1 and 168 hours.")
-    if data.get("ot_daily_hours") is not None and not (1 <= float(data["ot_daily_hours"]) <= 24):
-        raise HTTPException(status_code=400, detail="Daily overtime must start between 1 and 24 hours.")
-    if "work_week_start" in data and not (0 <= int(data["work_week_start"]) <= 6):
-        raise HTTPException(status_code=400, detail="Pick the day your work week starts.")
-    if "pay_period" in data and data["pay_period"] not in VALID_PAY_PERIODS:
-        raise HTTPException(status_code=400, detail="Choose how often you pay: weekly, every two weeks, twice a month or monthly.")
-    if data.get("auto_approve_rating_threshold") is not None:
-        t = float(data["auto_approve_rating_threshold"])
-```
-
----
-
-## A7. `backend/src/routers/venues.py` (EDITS)
-Settings update (sets the every-two-weeks start date when needed), roster fields, and the export (company filter + 3 trailing columns).
-
-**Edit 1.** Find:
-```python
-        for field, value in data.items():
-            setattr(venue, field, value)
-        await db.commit()
-        await db.refresh(venue)
-```
-Replace with:
-```python
-        for field, value in data.items():
-            setattr(venue, field, value)
-        # Phase 35: every-two-weeks pay with no start date yet -> a period starts this work week
-        if venue.pay_period == "biweekly" and venue.pay_period_anchor is None:
-            from src.services.pay_periods import week_start_for
-            from src.services.fit import tz_of
-            venue.pay_period_anchor = week_start_for(venue, datetime.now(timezone.utc).astimezone(tz_of(venue.timezone)).date())
-        await db.commit()
-        await db.refresh(venue)
-```
-
-**Edit 2.** Find:
-```python
-async def export_venue_payroll_csv(
-    venue_id: UUID,
-    start: Optional[date] = Query(None, description="Phase 33.1: first day (venue time), optional"),
-    end: Optional[date] = Query(None, description="Phase 33.1: last day (venue time), optional"),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-```
-Replace with:
-```python
-async def export_venue_payroll_csv(
-    venue_id: UUID,
-    start: Optional[date] = Query(None, description="Phase 33.1: first day (venue time), optional"),
-    end: Optional[date] = Query(None, description="Phase 33.1: last day (venue time), optional"),
-    company: Optional[str] = Query(None, max_length=120, description="Phase 35: only people who work through this company"),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-```
-
-**Edit 3.** Find:
-```python
-    Calculates hours worked for workers at this venue.
-    Phase 27: adds work location, clock-in/out location check, late minutes and auto-closed flags.
-    """
-    venue = await verify_venue_manager_access(venue_id, current_user, db)
-```
-Replace with:
-```python
-    Calculates hours worked for workers at this venue.
-    Phase 27: adds work location, clock-in/out location check, late minutes and auto-closed flags.
-    Phase 35: optional company filter; last three columns: Regular hours, Overtime hours, Works through.
-    """
-    venue = await verify_venue_manager_access(venue_id, current_user, db)
-```
-
-**Edit 4.** Find:
-```python
-        query = query.where(TimeEntry.clock_in_time < hi)
-    records = (await db.execute(query)).all()
-
-    entry_ids = [r[0].id for r in records]
-```
-Replace with:
-```python
-        query = query.where(TimeEntry.clock_in_time < hi)
-    records = (await db.execute(query)).all()
-
-    # Phase 35: staffing company (from the team list) and overtime under the venue's rules
-    companies = dict((await db.execute(
-        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
-            VenueWhitelist.venue_id == venue_id, VenueWhitelist.works_through.isnot(None))
-    )).all())
-    if company:
-        want = company.strip().lower()
-        records = [r for r in records if (companies.get(r[1].id) or "").lower() == want]
-    ot = {}
-    if records:
-        from src.services.pay_periods import overtime_for, local_date
-        days = [local_date(r[0].clock_in_time, vtz) for r in records]
-        ot = await overtime_for(db, venue, {r[1].id for r in records}, min(days), max(days))
-
-    entry_ids = [r[0].id for r in records]
-```
-
-**Edit 5.** Find:
-```python
-        "Hourly rate", "Pay before tips", "Gets tips", "Tip pool", "Time changed by a manager",
-        "Clock-in location", "Clock-out location", "Minutes late", "Clocked out automatically",
-    ])
-
-```
-Replace with:
-```python
-        "Hourly rate", "Pay before tips", "Gets tips", "Tip pool", "Time changed by a manager",
-        "Clock-in location", "Clock-out location", "Minutes late", "Clocked out automatically",
-        "Regular hours", "Overtime hours", "Works through",                        # Phase 35 (added at the end)
-    ])
-
-```
-
-**Edit 6.** Find:
-```python
-            clock_late_minutes(entry.clock_in_time, shift.start_time) or "",
-            "Yes" if entry.auto_closed else "No",
-        ])
-
-```
-Replace with:
-```python
-            clock_late_minutes(entry.clock_in_time, shift.start_time) or "",
-            "Yes" if entry.auto_closed else "No",
-            f"{max(0.0, hours - ot.get(entry.id, 0.0)):.2f}", f"{ot.get(entry.id, 0.0):.2f}",   # Phase 35
-            companies.get(worker.id, ""),
-        ])
-
-```
-
-**Edit 7.** Find:
-```python
-        for person in ps:
-            person.cover = cover_by_request.get(person.request_id)
-    waitlist_by_shift = defaultdict(list)
-    for e, wu in (await db.execute(
-```
-Replace with:
-```python
-        for person in ps:
-            person.cover = cover_by_request.get(person.request_id)
-    # Phase 35: time tracking + staffing company on booked people
-    from src.services.time_tracking import modes_for_requests
-    shift_by_id = {s.id: s for s in shifts}
-    tracking = await modes_for_requests(db, [(r, shift_by_id[r.shift_id]) for r, _u in req_rows if r.shift_id in shift_by_id])
-    companies = dict((await db.execute(
-        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
-            VenueWhitelist.venue_id == venue_id, VenueWhitelist.works_through.isnot(None))
-    )).all())
-    for ps in list(assigned_by_shift.values()) + list(requested_by_shift.values()):
-        for person in ps:
-            person.time_tracking = tracking.get(person.request_id)
-            person.works_through = companies.get(person.worker_id)
-    waitlist_by_shift = defaultdict(list)
-    for e, wu in (await db.execute(
-```
-
----
-
-## A8. `backend/src/routers/team.py` (EDITS)
-Team list fields and saving time tracking / company (logged as `team_tracking`).
-
-**Edit 1.** Find:
-```python
-                cert_wait[c.worker_id] = cert_wait.get(c.worker_id, 0) + 1
-
-    out = []
-    for wid, u in users.items():
-```
-Replace with:
-```python
-                cert_wait[c.worker_id] = cert_wait.get(c.worker_id, 0) + 1
-
-    # Phase 35: time tracking (team members' venue default + this person's setting) and staffing company
-    from src.services.time_tracking import resolve
-    venue_mode = await db.scalar(select(Venue.team_time_tracking).where(Venue.id == venue_id))
-
-    out = []
-    for wid, u in users.items():
-```
-
-**Edit 2.** Find:
-```python
-            certs=sorted(cert_ok.get(wid, [])),
-            cert_attention=cert_wait.get(wid, 0),
-        ))
-    out.sort(key=lambda m: ((m.first_name or "").lower(), (m.last_name or "").lower()))
-```
-Replace with:
-```python
-            certs=sorted(cert_ok.get(wid, [])),
-            cert_attention=cert_wait.get(wid, 0),
-            time_tracking=row.time_tracking if row is not None else None,              # Phase 35
-            effective_time_tracking=resolve(venue_mode, row),
-            works_through=row.works_through if row is not None else None,
-        ))
-    out.sort(key=lambda m: ((m.first_name or "").lower(), (m.last_name or "").lower()))
-```
-
-**Edit 3.** Find:
-```python
-        if "notes" in data:
-            row.notes = (data["notes"] or "").strip()[:2000] or None
-
-        if new_status == "blocked":
-```
-Replace with:
-```python
-        if "notes" in data:
-            row.notes = (data["notes"] or "").strip()[:2000] or None
-        # Phase 35: time tracking + staffing company (upcoming bookings follow; started ones keep what applied)
-        if "time_tracking" in data:
-            tt = (data["time_tracking"] or "venue").strip().lower()
-            if tt not in ("venue", "payroll", "shiftboard"):
-                raise HTTPException(status_code=400, detail="Choose how this person's time is tracked.")
-            row.time_tracking = None if tt == "venue" else tt
-        if "works_through" in data:
-            from src.services.time_tracking import clean_company
-            row.works_through = clean_company(data["works_through"])
-
-        if new_status == "blocked":
-```
-
-**Edit 4.** Find:
-```python
-        raise HTTPException(status_code=500, detail=f"Could not save: {e}")
-
-    if new_status is not None:
-        await activity.for_worker(
-```
-Replace with:
-```python
-        raise HTTPException(status_code=500, detail=f"Could not save: {e}")
-
-    if "time_tracking" in data or "works_through" in data:                          # Phase 35
-        bits = []
-        if "time_tracking" in data:
-            bits.append({"payroll": "time tracked by the venue's payroll", "shiftboard": "clocks in with ShiftBoard"}
-                        .get(row.time_tracking, "time tracking follows the venue setting"))
-        if "works_through" in data:
-            bits.append(f"works through {row.works_through}" if row.works_through else "no staffing company")
-        await activity.for_worker("team_tracking", venue_id, worker_id, current_user.id,
-                                  "{name}: " + ", ".join(bits).replace("{", "{{").replace("}", "}}"))
-    if new_status is not None:
-        await activity.for_worker(
-```
-
----
-
-## A9. `backend/src/routers/timesheets.py` (EDITS)
-The pay-period lock on adding, editing and deleting times and on pay-rate changes.
-
-**Edit 1.** Find:
-```python
-    ASSIGNED_STATUSES, as_utc, fmt_range, validate_times, require_reason, audit,
-)
-
-router = APIRouter(prefix="/api", tags=["Time Sheets"])
-```
-Replace with:
-```python
-    ASSIGNED_STATUSES, as_utc, fmt_range, validate_times, require_reason, audit,
-)
-from src.services.pay_periods import assert_unlocked          # Phase 35: approved pay periods are locked
-from src.models import Venue
-
-router = APIRouter(prefix="/api", tags=["Time Sheets"])
-```
-
-**Edit 2.** Find:
-```python
-        raise HTTPException(status_code=403, detail="You don't manage this venue.")
-    return entry, req, shift
+    if is_blank(merged.get("SECRET_KEY")):
+        extra = " (only JWT_SECRET_KEY, which ShiftBoard doesn't read)" if not is_blank(merged.get("JWT_SECRET_KEY")) else ""
+        notes.append(f"WARNING SECRET_KEY is not set{extra}: logins are signed with the built-in public fallback "
+                     "key. Set SECRET_KEY in .secrets/stack.env to a long random value; everyone is signed out once.")
+    if is_blank(merged.get("POSTGRES_PASSWORD")):
+        notes.append("WARNING POSTGRES_PASSWORD is not set anywhere: the backend can't reach the database.")
+    if is_blank(merged.get("TUNNEL_TOKEN")):
+        notes.append("WARNING TUNNEL_TOKEN is not set: the Cloudflare tunnel won't connect.")
+    if placeholders:
+        notes.append("WARNING still template placeholders (your_..._here), not carried over: " + ", ".join(sorted(placeholders)))
+    fe_keys = sorted(fe_values)
+    if fe_keys:
+        notes.append(f"frontend/.env: {', '.join(fe_keys)} not carried over (the web app reads no settings)")
+    return merged, origin, notes, problems, placeholders
 
 
-```
-Replace with:
-```python
-        raise HTTPException(status_code=403, detail="You don't manage this venue.")
-    return entry, req, shift
+def destination(key):
+    if key in STACK_KEYS:
+        return "stack"
+    if key in INTEGRATION_KEYS:
+        return "integrations"
+    if key in KNOWN_PLAIN:
+        return "env"
+    # Unknown or unused: anything that looks secret goes to the backend-only file
+    return "integrations" if SECRET_WORDS.search(key) else "env"
 
 
-async def _locked_check(db: AsyncSession, shift: Shift, *moments) -> None:
-    """Phase 35: refuse (409) when any of these times is inside an approved pay period at this venue."""
-    venue = await db.scalar(select(Venue).where(Venue.id == shift.venue_id))
-    if venue is not None:
-        await assert_unlocked(db, venue, *moments)
+HEADERS = {
+    "env": ["ShiftBoard: ordinary settings (NO secrets). Explained in .env.template."],
+    "stack": ["ShiftBoard: stack secrets. Read by database, redis, cloudflared and backend.",
+              "Explained in .secrets/stack.env.template."],
+    "integrations": ["ShiftBoard: keys for outside services. Read by the backend only.",
+                     "Explained in .secrets/integrations.env.template."],
+}
 
 
-```
-
-**Edit 3.** Find:
-```python
-    if body.pay_rate is not None and body.pay_rate <= 0:
-        raise HTTPException(status_code=400, detail="Pay must be more than $0.")
-    try:
-        old = f"{float(req.pay_rate):.2f}" if req.pay_rate is not None else f"default {float(shift.hourly_rate):.2f}"
-```
-Replace with:
-```python
-    if body.pay_rate is not None and body.pay_rate <= 0:
-        raise HTTPException(status_code=400, detail="Pay must be more than $0.")
-    ins = (await db.execute(select(TimeEntry.clock_in_time).where(
-        TimeEntry.shift_id == req.shift_id, TimeEntry.worker_id == req.worker_id))).scalars().all()
-    await _locked_check(db, shift, *ins)                                  # Phase 35
-    try:
-        old = f"{float(req.pay_rate):.2f}" if req.pay_rate is not None else f"default {float(shift.hourly_rate):.2f}"
-```
-
-**Edit 4.** Find:
-```python
-        raise HTTPException(status_code=400, detail="Time can only be added for people booked on this shift.")
-    cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
-    reclaim = st == "no_show" and await _no_show_released_spot(db, req.id)   # Phase 30
-    try:
-```
-Replace with:
-```python
-        raise HTTPException(status_code=400, detail="Time can only be added for people booked on this shift.")
-    cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
-    await _locked_check(db, shift, cin)                                   # Phase 35
-    reclaim = st == "no_show" and await _no_show_released_spot(db, req.id)   # Phase 30
-    try:
-```
-
-**Edit 5.** Find:
-```python
-    reason = require_reason(body.reason)
-    cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
-    try:
-        old = fmt_range(entry.clock_in_time, entry.clock_out_time)
-```
-Replace with:
-```python
-    reason = require_reason(body.reason)
-    cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
-    await _locked_check(db, shift, entry.clock_in_time, cin)              # Phase 35: old and new day
-    try:
-        old = fmt_range(entry.clock_in_time, entry.clock_out_time)
-```
-
-**Edit 6.** Find:
-```python
-    entry, req, shift = await _load_entry(db, entry_id, current_user)
-    reason = require_reason(body.reason)
-    try:
-        audit(db, req.id, entry.id, current_user.id, "delete", fmt_range(entry.clock_in_time, entry.clock_out_time), None, reason)
-```
-Replace with:
-```python
-    entry, req, shift = await _load_entry(db, entry_id, current_user)
-    reason = require_reason(body.reason)
-    await _locked_check(db, shift, entry.clock_in_time)                   # Phase 35
-    try:
-        audit(db, req.id, entry.id, current_user.id, "delete", fmt_range(entry.clock_in_time, entry.clock_out_time), None, reason)
-```
-
----
-
-## A10. NEW FILE `backend/src/routers/pay_periods.py`
-
-```python
-"""
-Phase 35: Pay periods: totals per person, overtime, and approve / reopen (lock / unlock).
-All dates are the venue's local dates.
-"""
-from datetime import date, datetime, timezone
-from typing import Optional
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.database import get_db
-from src.models import PayPeriodApproval, TimeEntry, Shift, User
-from src.schemas import (
-    PayPeriodList, PayPeriodSummary, PayPeriodDetail, PayPeriodPerson, PayPeriodPayrollPerson, PayPeriodReopenBody,
-)
-from src.auth import require_manager_or_admin
-from src.routers.venues import verify_venue_manager_access
-from src.services import pay_periods as pp
-from src.services.time_tracking import venue_companies
-from src.services.clock import auto_close_open_entries
-from src.services.fit import tz_of
-from src.services import activity
-
-router = APIRouter(prefix="/api/venues", tags=["Pay periods"])
-
-
-def _ot_text(venue) -> str:
-    parts = []
-    if venue.ot_daily_hours is not None:
-        parts.append(f"over {float(venue.ot_daily_hours):g} h a day")
-    if venue.ot_weekly_hours is not None:
-        parts.append(f"over {float(venue.ot_weekly_hours):g} h a week")
-    return ("Overtime: " + " or ".join(parts)) if parts else "Overtime flags are off"
-
-
-async def _summary(db: AsyncSession, venue, start: date, end: date, today: date, detail: bool = False,
-                   company: Optional[str] = None):
-    data = await pp.summarize(db, venue, start, end, company=company, people=detail)
-    appr = await pp.approval_for(db, venue.id, start)
-    last_reopen = await db.scalar(
-        select(PayPeriodApproval).where(PayPeriodApproval.venue_id == venue.id, PayPeriodApproval.start_date == start,
-                                        PayPeriodApproval.status == "reopened")
-        .order_by(PayPeriodApproval.reopened_at.desc()).limit(1))
-    approved_by = None
-    if appr is not None and appr.approved_by_user_id:
-        u = await db.scalar(select(User).where(User.id == appr.approved_by_user_id))
-        approved_by = (f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email) if u else None
-
-    blocked = None
-    if appr is not None:
-        state = "approved"
-    elif end >= today:
-        state = "current"
-        blocked = "This pay period hasn't ended yet."
-    elif not venue.pay_period_approval:
-        state = "not_required"
-        blocked = "Approving pay periods is turned off in Venue settings."
-    elif not data["people"] and not data["payroll_shifts"] and not data["open_entries"] and company is None:
-        state = "empty"
-        blocked = "Nobody worked in this pay period, so there's nothing to approve."
+def render(merged, which):
+    out = ["# ==============================================================================",
+           *[f"# {h}" for h in HEADERS[which]],
+           "# Made by scripts/consolidate_env.py (your old files are kept as *.pre-0.35.2.bak).",
+           "# After changing it: docker compose up -d --force-recreate   (keeps your data)",
+           "# =============================================================================="]
+    keys = [k for k in merged if destination(k) == which]
+    done = set()
+    if which == "env":
+        for title, section in SECTIONS:
+            present = [k for k in section if k in merged]
+            if present:
+                out += ["", f"# --- {title}"] + [f"{k}={merged[k]}" for k in present]
+                done.update(present)
     else:
-        state = "ready"
-        if data["open_entries"]:
-            n = data["open_entries"]
-            blocked = f"{n} time entr{'y is' if n == 1 else 'ies are'} still open. Fix the clock-out time first."
-    base = dict(
-        start_date=start, end_date=end, label=pp.period_label(start, end), state=state,
-        can_approve=state == "ready" and blocked is None, blocked_reason=blocked if state != "approved" else None,
-        people=data["people"], total_hours=data["total_hours"], overtime_hours=data["overtime_hours"],
-        total_pay=data["total_pay"], open_entries=data["open_entries"],
-        payroll_people=data["payroll_people"], payroll_shifts=data["payroll_shifts"],
-        approved_at=appr.approved_at if appr else None, approved_by=approved_by,
-        last_reopened_at=last_reopen.reopened_at if last_reopen else None,
-        last_reopen_reason=last_reopen.reopen_reason if last_reopen else None,
-    )
-    if not detail:
-        return PayPeriodSummary(**base)
-    return PayPeriodDetail(
-        **base,
-        rows=[PayPeriodPerson(**r) for r in data["rows"]],
-        payroll_rows=[PayPeriodPayrollPerson(**r) for r in data["payroll_rows"]],
-    )
+        order = STACK_KEYS if which == "stack" else INTEGRATION_KEYS
+        present = [k for k in order if k in merged]
+        if present:
+            out += [""] + [f"{k}={merged[k]}" for k in present]
+            done.update(present)
+    other = [k for k in keys if k not in done and k not in UNUSED]
+    unused = [k for k in keys if k not in done and k in UNUSED]
+    if other:
+        out += ["", "# --- Other settings kept from your old files (not in the templates)"]
+        out += [f"{k}={merged[k]}" for k in other]
+    if unused:
+        out += ["", "# --- Not read by ShiftBoard (kept so nothing is lost; safe to delete)"]
+        for k in unused:
+            out += [f"# {UNUSED[k]}", f"{k}={merged[k]}"]
+    return "\n".join(out) + "\n"
 
 
-def _today(venue) -> date:
-    return datetime.now(timezone.utc).astimezone(tz_of(venue.timezone)).date()
-
-
-@router.get("/{venue_id}/pay-periods", response_model=PayPeriodList)
-async def list_pay_periods(
-    venue_id: UUID,
-    count: int = Query(6, ge=1, le=26),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """The current pay period and the ones before it, with totals and approval state."""
-    venue = await verify_venue_manager_access(venue_id, current_user, db)
-    await auto_close_open_entries(db, venue_id=venue_id)
-    today = _today(venue)
-    periods = [await _summary(db, venue, s, e, today) for s, e in pp.recent_periods(venue, today, count)]
-    return PayPeriodList(
-        pay_period=venue.pay_period or "weekly", approval_on=bool(venue.pay_period_approval),
-        overtime_text=_ot_text(venue), timezone=venue.timezone or "America/New_York",
-        companies=await venue_companies(db, venue_id), periods=periods,
-    )
-
-
-@router.get("/{venue_id}/pay-periods/{start}", response_model=PayPeriodDetail)
-async def get_pay_period(
-    venue_id: UUID,
-    start: date,
-    company: Optional[str] = Query(None, max_length=120),
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """One pay period: a row per person (hours, overtime, pay, flags), plus people the venue's payroll tracks."""
-    venue = await verify_venue_manager_access(venue_id, current_user, db)
-    s, e = pp.check_period_start(venue, start)
-    return await _summary(db, venue, s, e, _today(venue), detail=True, company=company)
-
-
-@router.post("/{venue_id}/pay-periods/{start}/approve", response_model=PayPeriodDetail)
-async def approve_pay_period(
-    venue_id: UUID,
-    start: date,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """Approve and lock: after this, nobody can change times or pay rates in the period until it's reopened."""
-    venue = await verify_venue_manager_access(venue_id, current_user, db)
-    s, e = pp.check_period_start(venue, start)
-    await auto_close_open_entries(db, venue_id=venue_id)
-    current = await _summary(db, venue, s, e, _today(venue))
-    if current.state == "approved":
-        raise HTTPException(status_code=400, detail="This pay period is already approved.")
-    if not current.can_approve:
-        raise HTTPException(status_code=400, detail=current.blocked_reason or "This pay period can't be approved yet.")
+def write(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(content)
     try:
-        db.add(PayPeriodApproval(
-            venue_id=venue.id, start_date=s, end_date=e, status="approved", people=current.people,
-            total_hours=current.total_hours, overtime_hours=current.overtime_hours, total_pay=current.total_pay,
-            approved_by_user_id=current_user.id, approved_at=datetime.now(timezone.utc),
-        ))
-        await db.commit()
-    except Exception as ex:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not approve the pay period: {ex}")
-    await activity.for_venue("pay_period_approved", venue_id, current_user.id,
-                             f"Approved and locked pay period {pp.period_label(s, e)} "
-                             f"({current.total_hours:g} h, ${current.total_pay:,.2f})")
-    return await _summary(db, venue, s, e, _today(venue), detail=True)
-
-
-@router.post("/{venue_id}/pay-periods/{start}/reopen", response_model=PayPeriodDetail)
-async def reopen_pay_period(
-    venue_id: UUID,
-    start: date,
-    body: PayPeriodReopenBody,
-    current_user: User = Depends(require_manager_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """Unlock an approved pay period (with a reason) so its times can be fixed. Approve it again afterwards."""
-    venue = await verify_venue_manager_access(venue_id, current_user, db)
-    s, e = pp.check_period_start(venue, start)
-    reason = (body.reason or "").strip()
-    if len(reason) < 3:
-        raise HTTPException(status_code=400, detail="Say why you're reopening it.")
-    appr = await pp.approval_for(db, venue.id, s)
-    if appr is None:
-        raise HTTPException(status_code=400, detail="This pay period isn't approved.")
-    try:
-        appr.status = "reopened"
-        appr.reopened_by_user_id = current_user.id
-        appr.reopened_at = datetime.now(timezone.utc)
-        appr.reopen_reason = reason[:500]
-        await db.commit()
-    except Exception as ex:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not reopen the pay period: {ex}")
-    await activity.for_venue("pay_period_reopened", venue_id, current_user.id,
-                             f"Reopened pay period {pp.period_label(s, e)}: “{reason[:200]}”")
-    return await _summary(db, venue, s, e, _today(venue), detail=True)
-```
-
----
-
-## A11. `backend/src/main.py` (EDITS)
-**Only** the router import and registration. Nothing else in `main.py` changes.
-
-**Edit 1.** Find:
-```python
-from src.routers.profile import router as profile_router   # Phase 31 + 32
-from src.routers.cover import router as cover_router       # Phase 34
-from src.services.notification_worker import notification_worker_loop
-from src.version import APP_VERSION                          # Phase 34.5
-```
-Replace with:
-```python
-from src.routers.profile import router as profile_router   # Phase 31 + 32
-from src.routers.cover import router as cover_router       # Phase 34
-from src.routers.pay_periods import router as pay_periods_router   # Phase 35
-from src.services.notification_worker import notification_worker_loop
-from src.version import APP_VERSION                          # Phase 34.5
-```
-
-**Edit 2.** Find:
-```python
-app.include_router(profile_router)   # Phase 31 + 32
-app.include_router(cover_router)     # Phase 34
-
-
-```
-Replace with:
-```python
-app.include_router(profile_router)   # Phase 31 + 32
-app.include_router(cover_router)     # Phase 34
-app.include_router(pay_periods_router)   # Phase 35
-
-
-```
-
----
-
-## A12. `backend/src/services/clock.py` (EDIT)
-Clock-in is refused for payroll-tracked bookings.
-
-**Edit 1.** Find:
-```python
-    if req is None:
-        raise HTTPException(status_code=400, detail="You're not booked on this shift.")
-
-    open_entry = await db.scalar(
-```
-Replace with:
-```python
-    if req is None:
-        raise HTTPException(status_code=400, detail="You're not booked on this shift.")
-
-    # Phase 35: the venue's own payroll system tracks this person's time
-    from src.services.time_tracking import mode_for, PAYROLL
-    if await mode_for(db, req, shift) == PAYROLL:
-        raise HTTPException(
-            status_code=400,
-            detail=f"At {venue.name} your time is tracked by the venue's own payroll system, so you don't clock in "
-                   "in ShiftBoard. Use the venue's time clock.",
-        )
-
-    open_entry = await db.scalar(
-```
-
----
-
-## A13. `backend/src/services/notification_worker.py` (EDITS)
-New `scan_tracking` (first in each tick); the late scan skips payroll-tracked people.
-
-**Edit 1.** Find:
-```python
-  5c. cover requests: close stale ones, warn 12 h / 3 h before start if nobody took it (Phase 34)
-  5d. waitlists: give opened spots to the next person in line, expire old offers (Phase 34)
-  6. send due email / SMS from the outbox
-
-```
-Replace with:
-```python
-  5c. cover requests: close stale ones, warn 12 h / 3 h before start if nobody took it (Phase 34)
-  5d. waitlists: give opened spots to the next person in line, expire old offers (Phase 34)
-  0.  Phase 35: bookings whose shift started get their time-tracking mode written (payroll | shiftboard),
-      so late alerts, reliability and pay use what applied at the start even if settings change later
-  6. send due email / SMS from the outbox
-
-```
-
-**Edit 2.** Find:
-```python
-    sent = 0
-    rows = await _booked_rows(db, now - timedelta(hours=24), now - LATE_AFTER, BOOKED_NOT_STARTED)
-    for r, s, ev, venue, loc in rows:
-        if _as_utc(s.end_time) <= now:
-            continue
-        has_entry = await db.scalar(
-            select(func.count(TimeEntry.id)).where(TimeEntry.shift_id == s.id, TimeEntry.worker_id == r.worker_id)
-```
-Replace with:
-```python
-    sent = 0
-    rows = await _booked_rows(db, now - timedelta(hours=24), now - LATE_AFTER, BOOKED_NOT_STARTED)
-    from src.services.time_tracking import modes_for_requests, PAYROLL      # Phase 35
-    modes = await modes_for_requests(db, [(r, s) for r, s, *_ in rows])
-    for r, s, ev, venue, loc in rows:
-        if _as_utc(s.end_time) <= now:
-            continue
-        if modes.get(r.id) == PAYROLL:
-            continue                           # Phase 35: the venue's own payroll tracks their time
-        has_entry = await db.scalar(
-            select(func.count(TimeEntry.id)).where(TimeEntry.shift_id == s.id, TimeEntry.worker_id == r.worker_id)
-```
-
-**Edit 3.** Find:
-```python
-
-
-async def scan_cover(db: AsyncSession, now: datetime) -> int:
-    """Phase 34: close stale cover posts, then warn the worker + managers 12 h / 3 h before the start."""
-```
-Replace with:
-```python
-
-
-async def scan_tracking(db: AsyncSession, now: datetime) -> int:
-    """Phase 35: write the time-tracking mode on bookings whose shift has started."""
-    from src.services.time_tracking import freeze_started
-    return await freeze_started(db, now)
-
-
-async def scan_cover(db: AsyncSession, now: datetime) -> int:
-    """Phase 34: close stale cover posts, then warn the worker + managers 12 h / 3 h before the start."""
-```
-
-**Edit 4.** Find:
-```python
-    async with AsyncSessionLocal() as db:
-        await auto_close_open_entries(db)
-    for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
-                      ("unfilled", scan_unfilled), ("certs", scan_expiring_certs), ("cover", scan_cover)):
-        try:
-```
-Replace with:
-```python
-    async with AsyncSessionLocal() as db:
-        await auto_close_open_entries(db)
-    for label, fn in (("tracking", scan_tracking), ("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
-                      ("unfilled", scan_unfilled), ("certs", scan_expiring_certs), ("cover", scan_cover)):
-        try:
-```
-
----
-
-## A14. `backend/src/services/reliability.py` (EDITS)
-
-**Edit 1.** Find:
-```python
-    Returns score=None when the worker has zero commitments.
-    Shifts that have not ended yet are ignored. Drops with >= 72h notice are excused.
-    """
-    if not worker_ids:
-```
-Replace with:
-```python
-    Returns score=None when the worker has zero commitments.
-    Shifts that have not ended yet are ignored. Drops with >= 72h notice are excused.
-    Phase 35: a shift whose time the venue's own payroll tracks has no ShiftBoard clock-in; it counts as worked
-    and on time unless a manager marked a no-show.
-    """
-    if not worker_ids:
-```
-
-**Edit 2.** Find:
-```python
-            Shift.start_time,
-            Shift.end_time,
-        )
-        .join(Shift, ShiftRequest.shift_id == Shift.id)
-```
-Replace with:
-```python
-            Shift.start_time,
-            Shift.end_time,
-            ShiftRequest.time_tracking,          # Phase 35
-            Shift.venue_id,
-        )
-        .join(Shift, ShiftRequest.shift_id == Shift.id)
-```
-
-**Edit 3.** Find:
-```python
-    first_clock_in = {(w, s): _aware(t) for w, s, t in te_rows}
-
-    for worker_id, shift_id, req_status, dropped_at, check_in_time, start_time, end_time in rows:
-        st = stats.get(worker_id)
-        if st is None:
-```
-Replace with:
-```python
-    first_clock_in = {(w, s): _aware(t) for w, s, t in te_rows}
-
-    # Phase 35: time-tracking mode for finished shifts with no clock-in (written at the start; else current settings)
-    from src.services.time_tracking import live_modes, PAYROLL, MODES
-    live = await live_modes(db, [(r[8], r[0]) for r in rows if r[7] not in MODES])
-
-    for worker_id, shift_id, req_status, dropped_at, check_in_time, start_time, end_time, tracking, venue_id in rows:
-        st = stats.get(worker_id)
-        if st is None:
-```
-
-**Edit 4.** Find:
-```python
-
-        clock_in = first_clock_in.get((worker_id, shift_id)) or _aware(check_in_time)
-        if clock_in is None:
-            st["no_show"] += 1
-        else:
-```
-Replace with:
-```python
-
-        clock_in = first_clock_in.get((worker_id, shift_id)) or _aware(check_in_time)
-        mode = tracking if tracking in MODES else live.get((venue_id, worker_id))
-        if clock_in is None and mode == PAYROLL:
-            st["completed"] += 1                 # Phase 35: worked, tracked by the venue's payroll
-            st["on_time"] += 1
-        elif clock_in is None:
-            st["no_show"] += 1
-        else:
-```
-
----
-
-## A15. `backend/src/services/tonight.py` (EDITS)
-The `payroll` clock state on the Today board.
-
-**Edit 1.** Find:
-```python
-             missed   - shift ended, never clocked in, not marked no-show yet
-             no_show  - marked no-show
-  alerts : what needs the manager right now, most urgent first
-  week   : today + the next 6 days at a glance (drafts included, flagged)
-```
-Replace with:
-```python
-             missed   - shift ended, never clocked in, not marked no-show yet
-             no_show  - marked no-show
-             payroll  - Phase 35: the venue's own payroll tracks their time (no ShiftBoard clock-in expected)
-  alerts : what needs the manager right now, most urgent first
-  week   : today + the next 6 days at a glance (drafts included, flagged)
-```
-
-**Edit 2.** Find:
-```python
-
-
-def clock_state(req_status: str, entries: list, shift: Shift, venue: Venue, now: datetime):
-    """Returns (state, late_minutes, first_in, last_out)."""
-    if req_status == "no_show":
-        return "no_show", 0, None, None
-    start, end = as_utc(shift.start_time), as_utc(shift.end_time)
-    if entries:
-```
-Replace with:
-```python
-
-
-def clock_state(req_status: str, entries: list, shift: Shift, venue: Venue, now: datetime, payroll: bool = False):
-    """Returns (state, late_minutes, first_in, last_out)."""
-    if req_status == "no_show":
-        return "no_show", 0, None, None
-    if payroll and not entries:
-        return "payroll", 0, None, None          # Phase 35
-    start, end = as_utc(shift.start_time), as_utc(shift.end_time)
-    if entries:
-```
-
-**Edit 3.** Find:
-```python
-            entries[(e.shift_id, e.worker_id)].append(e)
-
-    def info_seen(req, s):
-        ev = events.get(s.event_id)
-```
-Replace with:
-```python
-            entries[(e.shift_id, e.worker_id)].append(e)
-
-    # Phase 35: who clocks in with the venue's own payroll system
-    from src.services.time_tracking import modes_for_requests, PAYROLL
-    by_shift = {s.id: s for s in shifts}
-    tracking = await modes_for_requests(db, [(req, by_shift[sid]) for sid, lst in reqs.items() for req, _u in lst])
-
-    def info_seen(req, s):
-        ev = events.get(s.event_id)
-```
-
-**Edit 4.** Find:
-```python
-            st = (req.status or "").lower()
-            es = entries.get((s.id, u.id), [])
-            state, late, first_in, last_out = clock_state(st, es, s, venue, now)
-            seen = info_seen(req, s) if st in BOOKED_STATUSES else None
-            first_entry = min(es, key=lambda e: as_utc(e.clock_in_time)) if es else None
-```
-Replace with:
-```python
-            st = (req.status or "").lower()
-            es = entries.get((s.id, u.id), [])
-            state, late, first_in, last_out = clock_state(st, es, s, venue, now, tracking.get(req.id) == PAYROLL)
-            seen = info_seen(req, s) if st in BOOKED_STATUSES else None
-            first_entry = min(es, key=lambda e: as_utc(e.clock_in_time)) if es else None
-```
-
-**Edit 5.** Find:
-```python
-        te.missed = sum(1 for p in ps if p.clock_state == "missed")
-        te.no_show = sum(1 for p in ps if p.clock_state == "no_show")
-        te.unread = sum(1 for p in ps if p.info_seen is False and p.clock_state in ("upcoming", "due", "late"))
-        te.open_spots = sum(pos.open_spots for pos in te.positions)
-        if te.unread and te.state != "ended":
-```
-Replace with:
-```python
-        te.missed = sum(1 for p in ps if p.clock_state == "missed")
-        te.no_show = sum(1 for p in ps if p.clock_state == "no_show")
-        te.unread = sum(1 for p in ps if p.info_seen is False and (
-            p.clock_state in ("upcoming", "due", "late") or (p.clock_state == "payroll" and te.state != "ended")))
-        te.open_spots = sum(pos.open_spots for pos in te.positions)
-        if te.unread and te.state != "ended":
-```
-
----
-
-## A16. `backend/src/services/worker_calendar.py` (EDITS)
-
-**Edit 1.** Find:
-```python
-    if not rows:
-        return WorkerCalendarResponse(range_start=range_start, range_end=range_end, unread_count=0, items=[])
-
-    shifts = [s for _, s in rows]
-```
-Replace with:
-```python
-    if not rows:
-        return WorkerCalendarResponse(range_start=range_start, range_end=range_end, unread_count=0, items=[])
-    from src.services.time_tracking import modes_for_requests                     # Phase 35
-    tracking = await modes_for_requests(db, rows)
-
-    shifts = [s for _, s in rows]
-```
-
-**Edit 2.** Find:
-```python
-            geofence_on=geofence_on(event, venue),
-            clock_in_opens_at=clock_in_opens_at(s, venue),
-            time_entry_id=open_entries.get(s.id),
-            hourly_rate=float(s.hourly_rate) if (show_pay and s.hourly_rate is not None) else None,
-```
-Replace with:
-```python
-            geofence_on=geofence_on(event, venue),
-            clock_in_opens_at=clock_in_opens_at(s, venue),
-            time_tracking=tracking.get(req.id, "shiftboard"),                    # Phase 35
-            time_entry_id=open_entries.get(s.id),
-            hourly_rate=float(s.hourly_rate) if (show_pay and s.hourly_rate is not None) else None,
-```
-
----
-
-## A17. `backend/src/services/earnings.py` (EDITS)
-
-**Edit 1.** Find:
-```python
-            )
-        )).all()
-    up_hours = up_pay = 0.0
-    for req, shift in upcoming_rows:
-```
-Replace with:
-```python
-            )
-        )).all()
-    # Phase 35: shifts a venue's own payroll tracks aren't ShiftBoard hours: leave them out, and say so
-    from src.services.time_tracking import modes_for_requests, PAYROLL
-    period_rows = (await db.execute(
-        select(ShiftRequest, Shift, Venue)
-        .join(Shift, Shift.id == ShiftRequest.shift_id).join(Venue, Venue.id == Shift.venue_id)
-        .where(ShiftRequest.worker_id == user.id, func.lower(ShiftRequest.status).in_(BOOKED + ("completed",)),
-               Shift.start_time >= lo, Shift.start_time < hi, func.upper(Shift.status) != "CANCELLED")
-    )).all()
-    modes = await modes_for_requests(db, [(r, s) for r, s, _v in period_rows])
-    payroll_rows = [(r, s, v) for r, s, v in period_rows if modes.get(r.id) == PAYROLL]
-    payroll_ids = {r.id for r, _s, _v in payroll_rows}
-    upcoming_rows = [(r, s) for r, s in upcoming_rows if r.id not in payroll_ids]
-
-    up_hours = up_pay = 0.0
-    for req, shift in upcoming_rows:
-```
-
-**Edit 2.** Find:
-```python
-        shifts=list(reversed(shifts)),                # newest first
-        upcoming=EarningsUpcoming(shifts=len(upcoming_rows), hours=round(up_hours, 2), est_pay=round(up_pay, 2)),
-    )
-
-```
-Replace with:
-```python
-        shifts=list(reversed(shifts)),                # newest first
-        upcoming=EarningsUpcoming(shifts=len(upcoming_rows), hours=round(up_hours, 2), est_pay=round(up_pay, 2)),
-        payroll_shifts=len(payroll_rows),                                              # Phase 35
-        payroll_venues=sorted({v.name for _r, _s, v in payroll_rows}),
-    )
-
-```
-
----
-
-## A18. `backend/src/services/timesheets.py` (EDITS)
-
-**Edit 1.** Find:
-```python
-            )).scalars().all())
-
-    people = []
-    for req, worker in rows:
-```
-Replace with:
-```python
-            )).scalars().all())
-
-    # Phase 35: time tracking, company and overtime
-    from src.services.time_tracking import modes_for_requests
-    from src.services.pay_periods import overtime_for, local_date
-    from src.services.fit import tz_of
-    from src.models import VenueWhitelist
-    tracking = await modes_for_requests(db, [(req, by_id[req.shift_id]) for req, _w in rows])
-    companies = dict((await db.execute(
-        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
-            VenueWhitelist.venue_id == venue.id, VenueWhitelist.worker_id.in_([w.id for _r, w in rows] or [None]))
-    )).all()) if rows else {}
-    all_entries = [e for es in entries_map.values() for e in es]
-    ot = {}
-    if all_entries:
-        vtz = tz_of(venue.timezone)
-        days = [local_date(e.clock_in_time, vtz) for e in all_entries]
-        ot = await overtime_for(db, venue, {e.worker_id for e in all_entries}, min(days), max(days))
-
-    people = []
-    for req, worker in rows:
-```
-
-**Edit 2.** Find:
-```python
-            total_hours=round(total, 2),
-            est_pay=round(total * rate, 2),
-        ))
-
-```
-Replace with:
-```python
-            total_hours=round(total, 2),
-            est_pay=round(total * rate, 2),
-            time_tracking=tracking.get(req.id, "shiftboard"),                      # Phase 35
-            works_through=companies.get(worker.id),
-            overtime_hours=round(sum(ot.get(e.id, 0.0) for e in es), 2),
-        ))
-
-```
-
----
-
-## A19. `backend/src/services/activity.py` (EDITS)
-
-**Edit 1.** Find:
-```python
-    "team_account": "team",
-    "team_status": "team",
-    "invites_sent": "team",
-    "team_joined": "team",
-```
-Replace with:
-```python
-    "team_account": "team",
-    "team_status": "team",
-    "team_tracking": "team",             # Phase 35: time tracking / staffing company changed
-    "invites_sent": "team",
-    "team_joined": "team",
-```
-
-**Edit 2.** Find:
-```python
-    "template_deleted": "changes",
-    "venue_settings": "changes",
-    "not_clocked_in": "alerts",
-    "no_show": "alerts",                # Phase 30
-```
-Replace with:
-```python
-    "template_deleted": "changes",
-    "venue_settings": "changes",
-    "pay_period_approved": "changes",    # Phase 35
-    "pay_period_reopened": "changes",
-    "not_clocked_in": "alerts",
-    "no_show": "alerts",                # Phase 30
-```
-
----
-
-# PART B: Frontend
-
-## B1. `frontend/src/components/VenueSettingsModal.jsx` (EDITS)
-The Time & pay periods tab (a `TimePayTab` component at the end of the file), its form fields and the save payload.
-
-**Edit 1.** Find:
-```jsx
-import React, { useState, useEffect } from 'react';
-import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff, Clock } from 'lucide-react';
-import api from '../api/client';
-import ModalShell from './ModalShell';
-```
-Replace with:
-```jsx
-import React, { useState, useEffect } from 'react';
-import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff, Clock, Timer, CalendarRange } from 'lucide-react';
-import api from '../api/client';
-import ModalShell from './ModalShell';
-```
-
-**Edit 2.** Find:
-```jsx
-];
-
-const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
-```
-Replace with:
-```jsx
-];
-
-// Phase 35: time tracking, overtime and pay periods
-const TRACKING = [
-  { id: 'shiftboard', title: 'Clock in with ShiftBoard', body: 'Your team clocks in and out here. Their hours show on time sheets, exports and pay periods.' },
-  { id: 'payroll', title: "Your venue's payroll tracks their time", body: "Team members use your own time clock or payroll system. ShiftBoard shows no clock-in button and sends no \"not clocked in\" alerts for them." },
-];
-const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];   // 0 = Monday
-const PAY_PERIODS = [
-  { id: 'weekly', label: 'Weekly' },
-  { id: 'biweekly', label: 'Every two weeks' },
-  { id: 'semimonthly', label: 'Twice a month (1st and 16th)' },
-  { id: 'monthly', label: 'Monthly' },
-];
-
-const fieldCls = 'px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';   // Phase 35: no width
-const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
-```
-
-**Edit 3.** Find:
-```jsx
-    description: venue?.description || '',
-    manager_email: '',
-  };
-}
-```
-Replace with:
-```jsx
-    description: venue?.description || '',
-    manager_email: '',
-    // Phase 35
-    team_time_tracking: venue?.team_time_tracking || 'shiftboard',
-    ot_weekly_on: venue ? venue.ot_weekly_hours != null : true,
-    ot_weekly_hours: String(venue?.ot_weekly_hours ?? 40),
-    ot_daily_on: venue?.ot_daily_hours != null,
-    ot_daily_hours: String(venue?.ot_daily_hours ?? 8),
-    work_week_start: String(venue?.work_week_start ?? 0),
-    pay_period: venue?.pay_period || 'weekly',
-    pay_period_anchor: venue?.pay_period_anchor || '',
-    pay_period_approval: venue?.pay_period_approval ?? true,
-  };
-}
-```
-
-**Edit 4.** Find:
-```jsx
-      description: form.description,
-    };
-    if (lat !== null) {
-      payload.lat = lat;
-```
-Replace with:
-```jsx
-      description: form.description,
-    };
-    // Phase 35: time & pay
-    const otWeekly = parseFloat(form.ot_weekly_hours);
-    const otDaily = parseFloat(form.ot_daily_hours);
-    if (form.ot_weekly_on && (Number.isNaN(otWeekly) || otWeekly < 1 || otWeekly > 168)) {
-      setTab('timepay');
-      return setError('Weekly overtime must start between 1 and 168 hours.');
-    }
-    if (form.ot_daily_on && (Number.isNaN(otDaily) || otDaily < 1 || otDaily > 24)) {
-      setTab('timepay');
-      return setError('Daily overtime must start between 1 and 24 hours.');
-    }
-    payload.team_time_tracking = form.team_time_tracking;
-    payload.ot_weekly_hours = form.ot_weekly_on ? otWeekly : null;
-    payload.ot_daily_hours = form.ot_daily_on ? otDaily : null;
-    payload.work_week_start = parseInt(form.work_week_start, 10) || 0;
-    payload.pay_period = form.pay_period;
-    if (form.pay_period === 'biweekly' && form.pay_period_anchor) payload.pay_period_anchor = form.pay_period_anchor;
-    payload.pay_period_approval = !!form.pay_period_approval;
-    if (lat !== null) {
-      payload.lat = lat;
-```
-
-**Edit 5.** Find:
-```jsx
-      {[
-        { id: 'details', label: 'Details' },
-        { id: 'positions', label: 'Positions & pay' },
-        { id: 'locations', label: 'Locations' },
-```
-Replace with:
-```jsx
-      {[
-        { id: 'details', label: 'Details' },
-        { id: 'timepay', label: 'Time & pay periods' },   // Phase 35
-        { id: 'positions', label: 'Positions & pay' },
-        { id: 'locations', label: 'Locations' },
-```
-
-**Edit 6.** Find:
-```jsx
-    <>
-      <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-        {tab === 'details' ? 'Cancel' : 'Done'}
-      </button>
-      {tab === 'details' && (
-        <button type="button" onClick={handleSave} disabled={saving}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
-```
-Replace with:
-```jsx
-    <>
-      <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-        {tab === 'details' || tab === 'timepay' ? 'Cancel' : 'Done'}
-      </button>
-      {(tab === 'details' || tab === 'timepay') && (
-        <button type="button" onClick={handleSave} disabled={saving}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
-```
-
-**Edit 7.** Find:
-```jsx
-          </div>
-        </div>
-      ) : tab === 'locations' ? (
-        <VenueLocationsPanel venue={venue} onError={setError} />
-```
-Replace with:
-```jsx
-          </div>
-        </div>
-      ) : tab === 'timepay' ? (
-        <TimePayTab form={form} setForm={setForm} set={set} />
-      ) : tab === 'locations' ? (
-        <VenueLocationsPanel venue={venue} onError={setError} />
-```
-
-**Edit 8.** Find:
-```jsx
-    </ModalShell>
-  );
-}
-```
-Replace with:
-```jsx
-    </ModalShell>
-  );
-}
-
-// Phase 35: how time is tracked, overtime rules and pay periods. Saved with "Save changes" like Details.
-function TimePayTab({ form, setForm, set }) {
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <div className="space-y-4">
-        <div className={cardCls}>
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Timer className="w-4 h-4 text-emerald-400" /> How your team's time is tracked
-          </div>
-          <div className="grid gap-2">
-            {TRACKING.map((t) => (
-              <label key={t.id}
-                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${form.team_time_tracking === t.id ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'}`}>
-                <input type="radio" name="team_time_tracking" value={t.id} checked={form.team_time_tracking === t.id}
-                  onChange={set('team_time_tracking')} className="mt-1 text-emerald-500" />
-                <span>
-                  <span className="block text-sm font-semibold text-white">{t.title}</span>
-                  <span className="block text-xs text-slate-400">{t.body}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <p className="text-[11px] text-slate-500 flex items-start gap-1.5">
-            <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            <span>
-              This is for people on your team. People booked from outside your team, and team members who work through
-              a staffing company, always clock in with ShiftBoard. You can change any one person under Team → Edit.
-              A shift keeps the setting it had when it started, so changing this later doesn't rewrite past hours.
-            </span>
-          </p>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <div className={cardCls}>
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Clock className="w-4 h-4 text-emerald-400" /> Overtime flags
-          </div>
-          <p className="text-[11px] text-slate-500">
-            ShiftBoard marks hours past these limits as overtime on time sheets, pay periods and the hours download.
-            It doesn't change the pay it shows. Only hours clocked in ShiftBoard count.
-          </p>
-          <label className="flex items-center gap-3 flex-wrap">
-            <input type="checkbox" checked={!!form.ot_weekly_on} onChange={(e) => setForm({ ...form, ot_weekly_on: e.target.checked })}
-              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
-            <span className="text-sm text-white">Over</span>
-            <input type="number" min="1" max="168" step="0.5" aria-label="Weekly overtime hours" disabled={!form.ot_weekly_on}
-              value={form.ot_weekly_hours} onChange={set('ot_weekly_hours')} className={`${fieldCls} w-20 disabled:opacity-40`} />
-            <span className="text-sm text-white">hours in a work week</span>
-          </label>
-          <label className="flex items-center gap-3 flex-wrap">
-            <input type="checkbox" checked={!!form.ot_daily_on} onChange={(e) => setForm({ ...form, ot_daily_on: e.target.checked })}
-              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
-            <span className="text-sm text-white">Over</span>
-            <input type="number" min="1" max="24" step="0.5" aria-label="Daily overtime hours" disabled={!form.ot_daily_on}
-              value={form.ot_daily_hours} onChange={set('ot_daily_hours')} className={`${fieldCls} w-20 disabled:opacity-40`} />
-            <span className="text-sm text-white">hours in a day</span>
-          </label>
-          <div>
-            <label className={labelCls} htmlFor="work-week-start">Work week starts on</label>
-            <select id="work-week-start" value={form.work_week_start} onChange={set('work_week_start')} className={`${fieldCls} w-44`}>
-              {WEEKDAYS.map((d, i) => <option key={d} value={String(i)}>{d}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div className={cardCls}>
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <CalendarRange className="w-4 h-4 text-emerald-400" /> Pay periods
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls} htmlFor="pay-period">How often you pay</label>
-              <select id="pay-period" value={form.pay_period} onChange={set('pay_period')} className={inputCls}>
-                {PAY_PERIODS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-              </select>
-            </div>
-            {form.pay_period === 'biweekly' && (
-              <div>
-                <label className={labelCls} htmlFor="pay-anchor">First day of any pay period</label>
-                <input id="pay-anchor" type="date" value={form.pay_period_anchor} onChange={set('pay_period_anchor')} className={inputCls} />
-                <p className="text-[11px] text-slate-500 mt-1">Blank = starts this work week.</p>
-              </div>
-            )}
-          </div>
-          <p className="text-[11px] text-slate-500">Weekly periods start on the work-week day above.</p>
-          <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-slate-800">
-            <input type="checkbox" checked={!!form.pay_period_approval}
-              onChange={(e) => setForm({ ...form, pay_period_approval: e.target.checked })}
-              className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
-            <span>
-              <span className="block text-sm font-semibold text-white">Approve and lock each pay period</span>
-              <span className="block text-xs text-slate-400">
-                After a period ends, a manager approves it on the Pay periods screen. Approved periods are locked: nobody can
-                change their times or pay rates until a manager reopens them with a reason.
-              </span>
-            </span>
-          </label>
-        </div>
-      </div>
-    </div>
-  );
-}
-```
-
----
-
-## B2. `frontend/src/components/TeamModal.jsx` (EDITS)
-Time tracking + company in the member editor, chips on rows, company suggestions and search.
-
-**Edit 1.** Find:
-```jsx
-  Users, UserPlus, Link2, Copy, Download, RefreshCw, Mail, Phone, Upload, ShieldCheck, Trash2, Ban,
-  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus, BadgeCheck,
-} from 'lucide-react';
-import api from '../api/client';
-```
-Replace with:
-```jsx
-  Users, UserPlus, Link2, Copy, Download, RefreshCw, Mail, Phone, Upload, ShieldCheck, Trash2, Ban,
-  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus, BadgeCheck,
-  Building2, Timer,
-} from 'lucide-react';
-import api from '../api/client';
-```
-
-**Edit 2.** Find:
-```jsx
-  worked: 'Worked here',
-};
-const INVITE_CHIP = {
-  pending: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
-```
-Replace with:
-```jsx
-  worked: 'Worked here',
-};
-// Phase 35: how this person's time is tracked at this venue
-const TRACKING_OPTIONS = [
-  ['venue', 'Use the venue setting'],
-  ['payroll', "Venue's payroll (no clock-in here)"],
-  ['shiftboard', 'Clock in with ShiftBoard'],
-];
-
-const INVITE_CHIP = {
-  pending: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
-```
-
-**Edit 3.** Find:
-```jsx
-];
-
-function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUpdated, onMessage }) {
-  const [editing, setEditing] = useState(false);
-  const [positions, setPositions] = useState(m.positions || []);
-  const [notes, setNotes] = useState(m.notes || '');
-  const [confirm, setConfirm] = useState(null); // 'blocked' | 'removed'
-  const [busy, setBusy] = useState(false);
-```
-Replace with:
-```jsx
-];
-
-function MemberRow({ m, venueId, timeZone, positionOptions, companies = [], open, onToggle, onUpdated, onMessage }) {
-  const [editing, setEditing] = useState(false);
-  const [positions, setPositions] = useState(m.positions || []);
-  const [notes, setNotes] = useState(m.notes || '');
-  const [tracking, setTracking] = useState(m.time_tracking || 'venue');      // Phase 35
-  const [company, setCompany] = useState(m.works_through || '');            // Phase 35
-  const [confirm, setConfirm] = useState(null); // 'blocked' | 'removed'
-  const [busy, setBusy] = useState(false);
-```
-
-**Edit 4.** Find:
-```jsx
-              </span>
-            ))}
-            {m.cert_attention > 0 && (
-              <span className="text-[10px] text-sky-300" title="Open the row to check and verify">• {m.cert_attention} to verify</span>
-```
-Replace with:
-```jsx
-              </span>
-            ))}
-            {/* Phase 35: time tracking + staffing company */}
-            {m.status === 'active' && m.effective_time_tracking === 'payroll' && (
-              <span title="Their time is tracked by the venue's own payroll. They don't clock in here."
-                className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-300 border border-violet-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
-                <Timer className="w-2.5 h-2.5" /> Venue payroll
-              </span>
-            )}
-            {m.works_through && (
-              <span title="Works through this company" className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
-                <Building2 className="w-2.5 h-2.5" /> {m.works_through}
-              </span>
-            )}
-            {m.cert_attention > 0 && (
-              <span className="text-[10px] text-sky-300" title="Open the row to check and verify">• {m.cert_attention} to verify</span>
-```
-
-**Edit 5.** Find:
-```jsx
-            {!editing && (
-              <button type="button" className={btnGhost} onClick={() => setEditing(true)}>
-                <Pencil className="w-3.5 h-3.5" /> Positions & note
-              </button>
-            )}
-```
-Replace with:
-```jsx
-            {!editing && (
-              <button type="button" className={btnGhost} onClick={() => setEditing(true)}>
-                <Pencil className="w-3.5 h-3.5" /> Edit
-              </button>
-            )}
-```
-
-**Edit 6.** Find:
-```jsx
-                  placeholder="e.g. Great with VIP tables. Prefers weekends." />
-              </div>
-              <div className="flex gap-2">
-                <button type="button" className={btnPrimary} disabled={busy} onClick={() => patch({ positions, notes })}>
-                  {busy ? 'Saving…' : 'Save'}
-                </button>
-                <button type="button" className={btnGhost} onClick={() => { setEditing(false); setPositions(m.positions || []); setNotes(m.notes || ''); }}>
-                  Cancel
-                </button>
-```
-Replace with:
-```jsx
-                  placeholder="e.g. Great with VIP tables. Prefers weekends." />
-              </div>
-              {/* Phase 35: time tracking + staffing company */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1" htmlFor={`tt-${m.worker_id}`}>How their time is tracked</label>
-                  <select id={`tt-${m.worker_id}`} value={tracking} onChange={(e) => setTracking(e.target.value)} className={inputCls}>
-                    {TRACKING_OPTIONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1" htmlFor={`wt-${m.worker_id}`}>Works through (staffing company)</label>
-                  <input id={`wt-${m.worker_id}`} value={company} onChange={(e) => setCompany(e.target.value)} maxLength={120}
-                    list={`companies-${venueId}`} className={inputCls} placeholder="Blank = your own staff" />
-                  <datalist id={`companies-${venueId}`}>
-                    {companies.map((c) => <option key={c} value={c} />)}
-                  </datalist>
-                </div>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                "Use the venue setting" follows Venue settings → Time & pay periods. People who work through a staffing company
-                clock in with ShiftBoard unless you pick otherwise here. Shifts that already started keep the setting they had.
-              </p>
-              <div className="flex gap-2">
-                <button type="button" className={btnPrimary} disabled={busy}
-                  onClick={() => patch({ positions, notes, time_tracking: tracking, works_through: company.trim() })}>
-                  {busy ? 'Saving…' : 'Save'}
-                </button>
-                <button type="button" className={btnGhost} onClick={() => {
-                  setEditing(false); setPositions(m.positions || []); setNotes(m.notes || '');
-                  setTracking(m.time_tracking || 'venue'); setCompany(m.works_through || '');
-                }}>
-                  Cancel
-                </button>
-```
-
-**Edit 7.** Find:
-```jsx
-    if (!term) return members;
-    return members.filter((m) =>
-      `${m.first_name} ${m.last_name} ${m.email || ''} ${m.phone || ''} ${(m.positions || []).join(' ')}`.toLowerCase().includes(term)
-    );
-  }, [members, q]);
-
-  const updated = (member) => {
-```
-Replace with:
-```jsx
-    if (!term) return members;
-    return members.filter((m) =>
-      `${m.first_name} ${m.last_name} ${m.email || ''} ${m.phone || ''} ${(m.positions || []).join(' ')} ${m.works_through || ''}`.toLowerCase().includes(term)
-    );
-  }, [members, q]);
-  // Phase 35: company names already used on this team (suggested when editing someone)
-  const companies = useMemo(
-    () => [...new Set(members.map((m) => m.works_through).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [members]
-  );
-
-  const updated = (member) => {
-```
-
-**Edit 8.** Find:
-```jsx
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter your team by name, phone or position" className={`${inputCls} pl-9`} />
-        </div>
-        <div className="flex bg-slate-800 border border-slate-700 rounded-xl p-0.5 overflow-x-auto">
-```
-Replace with:
-```jsx
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter your team by name, phone, position or company" className={`${inputCls} pl-9`} />
-        </div>
-        <div className="flex bg-slate-800 border border-slate-700 rounded-xl p-0.5 overflow-x-auto">
-```
-
-**Edit 9.** Find:
-```jsx
-              timeZone={timeZone}
-              positionOptions={positionOptions}
-              open={openId === m.worker_id}
-              onToggle={() => setOpenId(openId === m.worker_id ? null : m.worker_id)}
-```
-Replace with:
-```jsx
-              timeZone={timeZone}
-              positionOptions={positionOptions}
-              companies={companies}
-              open={openId === m.worker_id}
-              onToggle={() => setOpenId(openId === m.worker_id ? null : m.worker_id)}
-```
-
----
-
-## B3. NEW FILE `frontend/src/components/manager/PayPeriodsModal.jsx`
-
-```jsx
-import React, { useCallback, useEffect, useState } from 'react';
-import {
-  CalendarRange, Lock, Unlock, Download, Check, AlertTriangle, Clock, Settings, ChevronRight, Timer, Building2,
-} from 'lucide-react';
-import api from '../../api/client';
-import ModalShell from '../ModalShell';
-import { downloadFile } from '../../utils/download';
-import { fmtShortDate, fmtTime } from '../../utils/venueTime';
-
-/**
- * Phase 35: Pay periods. The current period and the ones before it, with hours, overtime and pay per person.
- * After a period ends a manager approves it, which locks its times and pay rates until someone reopens it (with a reason).
- * Props: venueId, venueName, onClose(), onOpenSettings() (Venue settings → Time & pay periods), onChanged()
- */
-const STATE_CHIP = {
-  current: ['In progress', 'bg-sky-500/10 text-sky-300 border-sky-500/30'],
-  ready: ['Ready to approve', 'bg-amber-500/15 text-amber-200 border-amber-500/40'],
-  approved: ['Approved · locked', 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'],
-  not_required: ['Ended', 'bg-slate-800 text-slate-300 border-slate-700'],
-  empty: ['No hours', 'bg-slate-900 text-slate-500 border-slate-800'],
-};
-const PERIOD_TEXT = {
-  weekly: 'Weekly', biweekly: 'Every two weeks', semimonthly: 'Twice a month', monthly: 'Monthly',
-};
-const money = (n) => `$${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const hrs = (n) => `${Number(n || 0).toFixed(2)} h`;
-const btnGhost = 'px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-40';
-
-function StateChip({ state }) {
-  const [label, cls] = STATE_CHIP[state] || STATE_CHIP.not_required;
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border inline-flex items-center gap-1 ${cls}`}>
-      {state === 'approved' && <Lock className="w-3 h-3" />} {label}
-    </span>
-  );
-}
-
-export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSettings, onChanged }) {
-  const [list, setList] = useState(null);
-  const [selected, setSelected] = useState(null);     // start_date
-  const [company, setCompany] = useState('');
-  const [detail, setDetail] = useState(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [confirmApprove, setConfirmApprove] = useState(false);
-  const [reopening, setReopening] = useState(false);
-  const [reason, setReason] = useState('');
-  const tz = list?.timezone;
-
-  const loadList = useCallback(async (keepSelected) => {
-    try {
-      const res = await api.get(`/venues/${venueId}/pay-periods`, { params: { count: 8 } });
-      setList(res.data);
-      const periods = res.data.periods || [];
-      if (!keepSelected) {
-        // Open the most recent period that needs approving, else the last finished one, else the current one
-        const pick = periods.find((p) => p.state === 'ready') || periods[1] || periods[0];
-        setSelected(pick ? pick.start_date : null);
-      }
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not load pay periods.');
-    }
-  }, [venueId]);
-
-  const loadDetail = useCallback(async () => {
-    if (!selected) return;
-    setLoadingDetail(true);
-    try {
-      const res = await api.get(`/venues/${venueId}/pay-periods/${selected}`, { params: company ? { company } : {} });
-      setDetail(res.data);
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not load that pay period.');
-    } finally {
-      setLoadingDetail(false);
-    }
-  }, [venueId, selected, company]);
-
-  useEffect(() => { loadList(false); }, [loadList]);
-  useEffect(() => {
-    setConfirmApprove(false);
-    setReopening(false);
-    setReason('');
-    loadDetail();
-  }, [loadDetail]);
-
-  const act = async (fn, okText) => {
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      await fn();
-      setNotice(okText);
-      setConfirmApprove(false);
-      setReopening(false);
-      setReason('');
-      await Promise.all([loadList(true), loadDetail()]);
-      onChanged && onChanged();
-    } catch (err) {
-      setError(err.response?.data?.detail || 'That did not save. Try again.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const approve = () => act(() => api.post(`/venues/${venueId}/pay-periods/${selected}/approve`),
-    'Approved and locked. Times and pay rates in this period can no longer be changed.');
-  const reopen = () => {
-    if (reason.trim().length < 3) return setError("Say why you're reopening it.");
-    return act(() => api.post(`/venues/${venueId}/pay-periods/${selected}/reopen`, { reason: reason.trim() }),
-      'Reopened. Fix the times, then approve it again.');
-  };
-  const download = async () => {
-    if (!detail) return;
-    try {
-      const params = { start: detail.start_date, end: detail.end_date };
-      if (company) params.company = company;
-      const safe = company ? `-${company.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}` : '';
-      await downloadFile(`/venues/${venueId}/payroll/export`, params, `hours-${detail.start_date}${safe}.csv`);
-    } catch (err) {
-      setError(err.response?.data?.detail || "Couldn't download the hours. Try again.");
-    }
-  };
-
-  const periods = list?.periods || [];
-
-  return (
-    <ModalShell
-      title="Pay periods"
-      subtitle={list ? `${venueName || 'This venue'} · ${PERIOD_TEXT[list.pay_period] || list.pay_period} · ${list.overtime_text}` : venueName}
-      icon={<CalendarRange className="w-5 h-5 text-emerald-400" />}
-      onClose={onClose}
-      maxWidth="max-w-6xl"
-      footer={(
-        <>
-          {onOpenSettings && (
-            <button type="button" onClick={onOpenSettings} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm text-slate-300 mr-auto inline-flex items-center gap-1.5">
-              <Settings className="w-4 h-4" /> Pay period & overtime settings
-            </button>
-          )}
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm text-slate-300">Done</button>
-        </>
-      )}
-    >
-      {error && <div className="mb-3 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm">{error}</div>}
-      {notice && <div className="mb-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-200 text-sm">{notice}</div>}
-      {!list ? (
-        <p className="text-sm text-slate-500 text-center py-10">Loading…</p>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[18rem_1fr] gap-4">
-          {/* Periods */}
-          <div className="space-y-2">
-            {!list.approval_on && (
-              <p className="text-[11px] text-slate-400 p-2 rounded-lg border border-slate-800 bg-slate-950">
-                Approving pay periods is off. Turn it on in Settings → Time & pay periods to lock finished periods.
-              </p>
-            )}
-            {periods.map((p) => (
-              <button key={p.start_date} type="button" onClick={() => { setSelected(p.start_date); setNotice(''); setError(''); }}
-                className={`w-full text-left p-3 rounded-xl border transition ${selected === p.start_date ? 'border-emerald-500/60 bg-emerald-500/5' : 'border-slate-800 bg-slate-950 hover:border-slate-600'}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-bold text-white">{p.label}</span>
-                  <ChevronRight className="w-4 h-4 text-slate-500" />
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                  <StateChip state={p.state} />
-                  {p.open_entries > 0 && p.state !== 'approved' && (
-                    <span className="text-[10px] text-amber-300 inline-flex items-center gap-0.5"><AlertTriangle className="w-3 h-3" /> {p.open_entries} open</span>
-                  )}
-                </div>
-                <div className="mt-1 text-[11px] text-slate-400">
-                  {p.people} {p.people === 1 ? 'person' : 'people'} · {hrs(p.total_hours)}
-                  {p.overtime_hours > 0 && <span className="text-orange-300"> · OT {hrs(p.overtime_hours)}</span>}
-                  {' · '}{money(p.total_pay)}
-                </div>
-              </button>
-            ))}
-          </div>
-
-          {/* One period */}
-          <div className="min-w-0">
-            {!detail ? (
-              <p className="text-sm text-slate-500 text-center py-10">{loadingDetail ? 'Loading…' : 'Pick a pay period.'}</p>
-            ) : (
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-lg font-bold text-white">{detail.label}</h3>
-                      <StateChip state={detail.state} />
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {list.companies.length > 0 && (
-                        <select aria-label="Company" value={company} onChange={(e) => setCompany(e.target.value)}
-                          className="px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white">
-                          <option value="">Everyone</option>
-                          {list.companies.map((c) => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                      )}
-                      <button type="button" onClick={download} className={btnGhost}><Download className="w-3.5 h-3.5" /> Download</button>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {[
-                      ['People', detail.people],
-                      ['Hours', hrs(detail.total_hours)],
-                      ['Overtime', hrs(detail.overtime_hours)],
-                      ['Pay before tips', money(detail.total_pay)],
-                    ].map(([k, v]) => (
-                      <div key={k} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
-                        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">{k}</div>
-                        <div className={`text-base font-bold ${k === 'Overtime' && detail.overtime_hours > 0 ? 'text-orange-300' : 'text-white'}`}>{v}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {company && <p className="text-[11px] text-sky-300">Showing only people who work through {company}.</p>}
-
-                  {/* Approve / reopen */}
-                  {detail.state === 'approved' ? (
-                    <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 space-y-2">
-                      <p className="text-xs text-emerald-100 flex items-start gap-1.5">
-                        <Lock className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                        <span>
-                          Approved{detail.approved_by ? ` by ${detail.approved_by}` : ''}{detail.approved_at ? ` on ${fmtShortDate(detail.approved_at, tz)} at ${fmtTime(detail.approved_at, tz)}` : ''}.
-                          Times and pay rates in this period are locked.
-                        </span>
-                      </p>
-                      {!reopening ? (
-                        <button type="button" onClick={() => setReopening(true)} className={btnGhost}><Unlock className="w-3.5 h-3.5" /> Reopen to fix something</button>
-                      ) : (
-                        <div className="space-y-2">
-                          <input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} autoFocus
-                            placeholder="Why? e.g. Bo's Monday clock-out was wrong"
-                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white" />
-                          <div className="flex gap-2">
-                            <button type="button" onClick={reopen} disabled={busy}
-                              className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
-                              <Unlock className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Reopen'}
-                            </button>
-                            <button type="button" onClick={() => { setReopening(false); setReason(''); }} className={btnGhost}>Cancel</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : detail.state === 'ready' ? (
-                    <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/5 space-y-2">
-                      {detail.blocked_reason ? (
-                        <p className="text-xs text-amber-100 flex items-start gap-1.5"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" /> {detail.blocked_reason}</p>
-                      ) : !confirmApprove ? (
-                        <div className="flex flex-wrap items-center gap-3">
-                        <button type="button" onClick={() => setConfirmApprove(true)}
-                          className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
-                          <Check className="w-4 h-4" /> Approve and lock
-                        </button>
-                        <span className="text-xs text-amber-100/80">Check the hours below first. After approving, times and pay rates in this period are locked.</span>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-amber-100 flex-1 min-w-[14rem]">
-                            Lock {detail.label}? {hrs(detail.total_hours)} and {money(detail.total_pay)} are saved with the approval, and nobody can change
-                            times or pay rates in it until it's reopened.
-                          </span>
-                          <button type="button" onClick={approve} disabled={busy}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50">
-                            {busy ? 'Saving…' : 'Approve and lock'}
-                          </button>
-                          <button type="button" onClick={() => setConfirmApprove(false)} className={btnGhost}>Cancel</button>
-                        </div>
-                      )}
-                      {company && !detail.blocked_reason && <p className="text-[11px] text-slate-400">Approving locks the whole period for everyone, not just {company}.</p>}
-                    </div>
-                  ) : detail.blocked_reason ? (
-                    <p className="text-xs text-slate-400 flex items-start gap-1.5"><Clock className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" /> {detail.blocked_reason}</p>
-                  ) : null}
-                  {detail.last_reopened_at && (
-                    <p className="text-[11px] text-slate-500">
-                      Last reopened {fmtShortDate(detail.last_reopened_at, tz)}: “{detail.last_reopen_reason}”
-                    </p>
-                  )}
-                </div>
-
-                {/* People */}
-                <div className="rounded-xl border border-slate-800 overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-950 text-slate-400">
-                      <tr>
-                        <th className="text-left font-semibold px-3 py-2">Person</th>
-                        <th className="text-right font-semibold px-2 py-2">Shifts</th>
-                        <th className="text-right font-semibold px-2 py-2">Regular</th>
-                        <th className="text-right font-semibold px-2 py-2">Overtime</th>
-                        <th className="text-right font-semibold px-2 py-2">Total</th>
-                        <th className="text-right font-semibold px-3 py-2">Pay</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800">
-                      {detail.rows.length === 0 && (
-                        <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">No ShiftBoard clock-ins in this period.</td></tr>
-                      )}
-                      {detail.rows.map((r) => (
-                        <tr key={r.worker_id} className="bg-slate-900/40">
-                          <td className="px-3 py-2">
-                            <div className="font-semibold text-white">{r.name}</div>
-                            <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                              {r.works_through && (
-                                <span className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
-                                  <Building2 className="w-2.5 h-2.5" /> {r.works_through}
-                                </span>
-                              )}
-                              {r.open_entries > 0 && <span className="text-[10px] text-amber-300">{r.open_entries} still open</span>}
-                              {r.edited_entries > 0 && <span className="text-[10px] text-amber-200/80">{r.edited_entries} edited</span>}
-                              {r.auto_closed > 0 && <span className="text-[10px] text-rose-300">{r.auto_closed} auto-closed</span>}
-                              {r.outside_area > 0 && <span className="text-[10px] text-amber-300">{r.outside_area} outside the area</span>}
-                            </div>
-                          </td>
-                          <td className="px-2 py-2 text-right text-slate-300">{r.shifts}</td>
-                          <td className="px-2 py-2 text-right text-slate-300">{r.regular_hours.toFixed(2)}</td>
-                          <td className={`px-2 py-2 text-right ${r.overtime_hours > 0 ? 'text-orange-300 font-bold' : 'text-slate-500'}`}>{r.overtime_hours.toFixed(2)}</td>
-                          <td className="px-2 py-2 text-right text-white font-semibold">{r.hours.toFixed(2)}</td>
-                          <td className="px-3 py-2 text-right text-emerald-400 font-semibold">{money(r.pay)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  Pay is hours × each person's rate, before tips. Overtime is flagged, not paid extra here: your payroll adds any premium.
-                </p>
-
-                {detail.payroll_rows.length > 0 && (
-                  <div className="p-3 rounded-xl border border-violet-500/30 bg-violet-500/5 space-y-2">
-                    <div className="text-xs font-bold text-violet-200 inline-flex items-center gap-1.5">
-                      <Timer className="w-3.5 h-3.5" /> Tracked by your venue's payroll ({detail.payroll_shifts} shift{detail.payroll_shifts === 1 ? '' : 's'})
-                    </div>
-                    <p className="text-[11px] text-violet-100/70">These people clock in with your own system, so their hours aren't counted above. Scheduled hours are shown to check against it.</p>
-                    <div className="divide-y divide-violet-500/20">
-                      {detail.payroll_rows.map((r) => (
-                        <div key={r.worker_id} className="py-1.5 flex items-center justify-between text-xs">
-                          <span className="text-white font-semibold">{r.name}</span>
-                          <span className="text-violet-200">{r.shifts} shift{r.shifts === 1 ? '' : 's'} · {hrs(r.scheduled_hours)} scheduled</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </ModalShell>
-  );
-}
-```
-
----
-
-## B4. `frontend/src/pages/VenueManagerDashboard.jsx` (EDITS)
-The **Pay periods** header button (after Download hours) and the modal. Its settings button opens Venue settings on the Time & pay periods tab.
-
-**Edit 1.** Find:
-```jsx
-import api from '../api/client';
-import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, X, LayoutTemplate,
-} from 'lucide-react';
-import PostedShiftsBoard from '../components/PostedShiftsBoard';
-```
-Replace with:
-```jsx
-import api from '../api/client';
-import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, X, LayoutTemplate, CalendarRange,
-} from 'lucide-react';
-import PostedShiftsBoard from '../components/PostedShiftsBoard';
-```
-
-**Edit 2.** Find:
-```jsx
-import ReviewModal from '../components/ReviewModal';
-import DownloadHoursModal from '../components/manager/DownloadHoursModal';   // Phase 33.1
-import ActivityFeed from '../components/ActivityFeed';
-import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
-```
-Replace with:
-```jsx
-import ReviewModal from '../components/ReviewModal';
-import DownloadHoursModal from '../components/manager/DownloadHoursModal';   // Phase 33.1
-import PayPeriodsModal from '../components/manager/PayPeriodsModal';         // Phase 35
-import ActivityFeed from '../components/ActivityFeed';
-import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
-```
-
-**Edit 3.** Find:
-```jsx
-  const [actionLoading, setActionLoading] = useState(null);
-  const [showDownload, setShowDownload] = useState(false);   // Phase 33.1: Download hours (pick a date range)
-  const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
-  const [notification, setNotification] = useState(null);
-```
-Replace with:
-```jsx
-  const [actionLoading, setActionLoading] = useState(null);
-  const [showDownload, setShowDownload] = useState(false);   // Phase 33.1: Download hours (pick a date range)
-  const [showPayPeriods, setShowPayPeriods] = useState(false);   // Phase 35: approve / lock pay periods
-  const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
-  const [notification, setNotification] = useState(null);
-```
-
-**Edit 4.** Find:
-```jsx
-              <Download className="w-4 h-4 text-emerald-400" /> Download hours
-            </button>
-            {currentVenueId && (
-              <Link to={`/venues/${currentVenueId}`} className={headerBtn}>
-```
-Replace with:
-```jsx
-              <Download className="w-4 h-4 text-emerald-400" /> Download hours
-            </button>
-            <button type="button" onClick={() => setShowPayPeriods(true)} disabled={!currentVenueId} className={headerBtn}>
-              <CalendarRange className="w-4 h-4 text-violet-300" /> Pay periods
-            </button>
-            {currentVenueId && (
-              <Link to={`/venues/${currentVenueId}`} className={headerBtn}>
-```
-
-**Edit 5.** Find:
-```jsx
-      )}
-
-      {review && currentVenueId && (
-        <ReviewModal
-```
-Replace with:
-```jsx
-      )}
-
-      {showPayPeriods && currentVenueId && (
-        <PayPeriodsModal
-          venueId={currentVenueId}
-          venueName={venueDetails?.name}
-          onClose={() => setShowPayPeriods(false)}
-          onOpenSettings={venueDetails ? () => { setShowPayPeriods(false); setSettingsTab('timepay'); setShowVenueSettings(true); } : null}
-        />
-      )}
-
-      {review && currentVenueId && (
-        <ReviewModal
-```
-
----
-
-## B5. `frontend/src/components/manager/DownloadHoursModal.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
-import React, { useState } from 'react';
-import { Download, CalendarRange } from 'lucide-react';
-import ModalShell from '../ModalShell';
-import { downloadFile, rangePresets } from '../../utils/download';
-```
-Replace with:
-```jsx
-import React, { useEffect, useState } from 'react';
-import { Download, CalendarRange } from 'lucide-react';
-import api from '../../api/client';
-import ModalShell from '../ModalShell';
-import { downloadFile, rangePresets } from '../../utils/download';
-```
-
-**Edit 2.** Find:
-```jsx
- * hours and pay before tips. Times and dates are in the venue's own time zone.
- * Props: venueId, venueName, onClose(), onDone(message), onError(message)
- */
-export default function DownloadHoursModal({ venueId, venueName, onClose, onDone, onError }) {
-  const presets = rangePresets();
-  const [pick, setPick] = useState('last_week');
-  const [custom, setCustom] = useState({ start: presets[1].start, end: presets[1].end });
-  const [busy, setBusy] = useState(false);
-
-  const range = pick === 'custom' ? custom : presets.find((p) => p.id === pick);
-```
-Replace with:
-```jsx
- * hours and pay before tips. Times and dates are in the venue's own time zone.
- * Props: venueId, venueName, onClose(), onDone(message), onError(message)
- * Phase 35: optional staffing-company filter; the file also has Regular hours, Overtime hours and Works through.
- */
-export default function DownloadHoursModal({ venueId, venueName, onClose, onDone, onError }) {
-  const presets = rangePresets();
-  const [pick, setPick] = useState('last_week');
-  const [custom, setCustom] = useState({ start: presets[1].start, end: presets[1].end });
-  const [busy, setBusy] = useState(false);
-  const [companies, setCompanies] = useState([]);   // Phase 35
-  const [company, setCompany] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    api.get(`/venues/${venueId}/pay-periods`, { params: { count: 1 } })
-      .then((res) => active && setCompanies(res.data?.companies || []))
-      .catch(() => active && setCompanies([]));
-    return () => { active = false; };
-  }, [venueId]);
-
-  const range = pick === 'custom' ? custom : presets.find((p) => p.id === pick);
-```
-
-**Edit 3.** Find:
-```jsx
-      if (range.start) params.start = range.start;
-      if (range.end) params.end = range.end;
-      await downloadFile(`/venues/${venueId}/payroll/export`, params, 'hours-and-pay.csv');
-      onDone('Hours downloaded. Open it in Excel, Numbers or Google Sheets.');
-      onClose();
-```
-Replace with:
-```jsx
-      if (range.start) params.start = range.start;
-      if (range.end) params.end = range.end;
-      if (company) params.company = company;                                       // Phase 35
-      const safe = company ? `-${company.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}` : '';
-      await downloadFile(`/venues/${venueId}/payroll/export`, params, `hours-and-pay${safe}.csv`);
-      onDone('Hours downloaded. Open it in Excel, Numbers or Google Sheets.');
-      onClose();
-```
-
-**Edit 4.** Find:
-```jsx
-        )}
-        {invalid && <p className="text-xs text-rose-300">Pick an end date on or after the start date.</p>}
-        <p className="text-xs text-slate-400">
-          {range.start ? `${dayText(range.start)} – ${dayText(range.end)}` : 'All clock-ins at this venue'}. Weeks start on Monday. Times are in
-          the venue's time zone. Tips aren't included yet.
-        </p>
-      </div>
-```
-Replace with:
-```jsx
-        )}
-        {invalid && <p className="text-xs text-rose-300">Pick an end date on or after the start date.</p>}
-        {companies.length > 0 && (
-          <label className="block text-xs font-semibold text-slate-300">Who
-            <select value={company} onChange={(e) => setCompany(e.target.value)}
-              className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white">
-              <option value="">Everyone</option>
-              {companies.map((c) => <option key={c} value={c}>Only people who work through {c}</option>)}
-            </select>
-          </label>
-        )}
-        <p className="text-xs text-slate-400">
-          {range.start ? `${dayText(range.start)} – ${dayText(range.end)}` : 'All clock-ins at this venue'}. Weeks start on Monday. Times are in
-          the venue's time zone. Overtime follows your Time & pay settings. People your venue's own payroll tracks don't clock in
-          here, so they aren't in this file. Tips aren't included yet.
-        </p>
-      </div>
-```
-
----
-
-## B6. `frontend/src/components/manager/TodayEventCard.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
-  missed: { label: 'Never clocked in', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/30' },
-  no_show: { label: 'No-show', cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30 line-through' },
-};
-
-```
-Replace with:
-```jsx
-  missed: { label: 'Never clocked in', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/30' },
-  no_show: { label: 'No-show', cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30 line-through' },
-  payroll: { label: 'Venue payroll', cls: 'bg-violet-500/10 text-violet-300 border-violet-500/30' },   // Phase 35: no clock-in here
-};
-
-```
-
-**Edit 2.** Find:
-```jsx
-                  if (p.clock_state === 'done') sub = `${fmtTime(p.clock_in_time, timeZone)} – ${fmtTime(p.clock_out_time, timeZone)}`;
-                  if (p.clock_state === 'missed') sub = 'Shift ended with no clock-in';
-                  const canClockIn = ['due', 'late'].includes(p.clock_state);
-                  const canNoShow = ['late', 'missed'].includes(p.clock_state);
-                  return (
-                    <li key={p.request_id}
-```
-Replace with:
-```jsx
-                  if (p.clock_state === 'done') sub = `${fmtTime(p.clock_in_time, timeZone)} – ${fmtTime(p.clock_out_time, timeZone)}`;
-                  if (p.clock_state === 'missed') sub = 'Shift ended with no clock-in';
-                  if (p.clock_state === 'payroll') sub = "Clocks in with your venue's own system";   // Phase 35
-                  const started = event.state === 'live' || event.state === 'ended';
-                  const canClockIn = ['due', 'late'].includes(p.clock_state);
-                  const canNoShow = ['late', 'missed'].includes(p.clock_state) || (p.clock_state === 'payroll' && started);
-                  return (
-                    <li key={p.request_id}
-```
-
----
-
-## B7. `frontend/src/components/TimesheetModal.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
-                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-bold uppercase">{p.role_type}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${st.cls}`}>{st.label}</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
-```
-Replace with:
-```jsx
-                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-bold uppercase">{p.role_type}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${st.cls}`}>{st.label}</span>
-                    {/* Phase 35 */}
-                    {p.time_tracking === 'payroll' && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-violet-500/10 text-violet-300 border-violet-500/30">Venue payroll</span>
-                    )}
-                    {p.works_through && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-sky-500/10 text-sky-300 border-sky-500/30">{p.works_through}</span>
-                    )}
-                    {p.overtime_hours > 0 && (
-                      <span title="Hours past the venue's overtime limits (Venue settings → Time & pay periods)"
-                        className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-orange-500/10 text-orange-300 border-orange-500/40">
-                        OT {p.overtime_hours.toFixed(2)} h
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
-```
-
-**Edit 2.** Find:
-```jsx
-                )}
-
-                {!formHere && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-```
-Replace with:
-```jsx
-                )}
-
-                {p.time_tracking === 'payroll' && p.entries.length === 0 && (
-                  <p className="mt-2 text-[11px] text-violet-200/80">
-                    Their hours are tracked in your venue's own payroll, so there's nothing to clock here. Times you add still count in ShiftBoard.
-                  </p>
-                )}
-                {!formHere && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-```
-
----
-
-## B8. `frontend/src/components/EventRosterModal.jsx` (EDIT)
-
-**Edit 1.** Find:
-```jsx
-                                </div>
-                              )}
-                              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
-                                {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
-```
-Replace with:
-```jsx
-                                </div>
-                              )}
-                              {/* Phase 35: time tracking + staffing company */}
-                              {(p.time_tracking === 'payroll' || p.works_through) && (
-                                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                  {p.time_tracking === 'payroll' && (
-                                    <span title="Their time is tracked by your venue's own payroll. They don't clock in here."
-                                      className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-500/10 text-violet-300 border border-violet-500/30">Venue payroll</span>
-                                  )}
-                                  {p.works_through && (
-                                    <span title="Works through this company" className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-300 border border-sky-500/30">{p.works_through}</span>
-                                  )}
-                                </div>
-                              )}
-                              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
-                                {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
-```
-
----
-
-## B9. `frontend/src/components/worker/MyShiftCard.jsx` (EDITS)
-
-**Edit 1.** Find:
-```jsx
- *        onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw, onAddCalendar, onDirections, onAskBack
- * Phase 34: cover (my live cover request for this booking, from GET /api/cover/mine, or null), onAskCover, onCancelCover
- */
-export default function MyShiftCard({
-```
-Replace with:
-```jsx
- *        onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw, onAddCalendar, onDirections, onAskBack
- * Phase 34: cover (my live cover request for this booking, from GET /api/cover/mine, or null), onAskCover, onCancelCover
- * Phase 35: calItem.time_tracking === 'payroll' means the venue's own payroll tracks this shift: no clock-in button here.
- */
-export default function MyShiftCard({
-```
-
-**Edit 2.** Find:
-```jsx
-  const canAskBack = isDropped && startMs > now && !shiftCancelled && onAskBack;
-  const canCover = isBooked && !isCheckedIn && startMs > now;                         // Phase 34
-  const { month, day, weekday } = dateParts(shift.start_time, tz);
-
-```
-Replace with:
-```jsx
-  const canAskBack = isDropped && startMs > now && !shiftCancelled && onAskBack;
-  const canCover = isBooked && !isCheckedIn && startMs > now;                         // Phase 34
-  const payroll = calItem?.time_tracking === 'payroll' && !isCheckedIn;             // Phase 35: the venue's own payroll tracks this shift
-  const { month, day, weekday } = dateParts(shift.start_time, tz);
-
-```
-
-**Edit 3.** Find:
-```jsx
-        <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : 'Clock out'}
-      </button>
-    );
-  } else if (isBooked && needsAck && (ended || tooEarly)) {
-```
-Replace with:
-```jsx
-        <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : 'Clock out'}
-      </button>
-    );
-  } else if (isBooked && payroll && needsAck && !ended) {
-    // Phase 35: no clock-in here, so reading the notes is the only action
-    primary = (
-      <button type="button" onClick={onDetails} className={`${btn} bg-amber-500 hover:bg-amber-400 text-slate-950`}>
-        <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the shift notes'}
-      </button>
-    );
-  } else if (isBooked && payroll && !ended) {
-    primary = (
-      <span className={`${btn} bg-violet-500/10 text-violet-200 border border-violet-500/30 font-semibold`}
-        title="This venue tracks your hours with its own time clock or payroll system. Clock in there, not in ShiftBoard.">
-        <Timer className="w-4 h-4" /> Clock in with the venue's system
-      </span>
-    );
-  } else if (isBooked && payroll && ended) {
-    primary = (
-      <span className="text-xs text-emerald-400 font-semibold inline-flex items-center gap-1">
-        <Check className="w-4 h-4" /> Worked · tracked by venue payroll
-      </span>
-    );
-  } else if (isBooked && needsAck && (ended || tooEarly)) {
-```
-
-**Edit 4.** Find:
-```jsx
-              </span>
-            )}
-            {(isBooked || isCheckedIn) && SOURCE_LABELS[req.approval_source] && (
-              <span className="text-[10px] text-slate-500">{SOURCE_LABELS[req.approval_source]}</span>
-```
-Replace with:
-```jsx
-              </span>
-            )}
-            {payroll && (isBooked || isCompleted) && (
-              <span title="Your hours here are tracked by the venue's own payroll, not ShiftBoard"
-                className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-violet-500/10 text-violet-200 border-violet-500/30">
-                Venue payroll
-              </span>
-            )}
-            {(isBooked || isCheckedIn) && SOURCE_LABELS[req.approval_source] && (
-              <span className="text-[10px] text-slate-500">{SOURCE_LABELS[req.approval_source]}</span>
-```
-
----
-
-## B10. `frontend/src/components/ShiftDetailsModal.jsx` (EDIT)
-
-**Edit 1.** Find:
-```jsx
-            {item.booked && !off && (
-              <div className="pl-6 text-[11px] text-slate-400 space-y-0.5">
-                {item.clock_in_opens_at && <div>Clock-in opens at {fmtTime(item.clock_in_opens_at, tz)}.</div>}
-                {item.geofence_on && <div>You'll need to be at this location with phone location on to clock in.</div>}
-              </div>
-            )}
-```
-Replace with:
-```jsx
-            {item.booked && !off && (
-              <div className="pl-6 text-[11px] text-slate-400 space-y-0.5">
-                {item.time_tracking === 'payroll' ? (
-                  // Phase 35: the venue's own payroll tracks this shift
-                  <div className="text-violet-200">{item.venue?.name || 'This venue'} tracks your hours with its own time clock or payroll. Clock in there, not in ShiftBoard.</div>
-                ) : (
-                  <>
-                    {item.clock_in_opens_at && <div>Clock-in opens at {fmtTime(item.clock_in_opens_at, tz)}.</div>}
-                    {item.geofence_on && <div>You'll need to be at this location with phone location on to clock in.</div>}
-                  </>
-                )}
-              </div>
-            )}
-```
-
----
-
-## B11. `frontend/src/pages/EarningsPage.jsx` (EDIT)
-
-**Edit 1.** Find:
-```jsx
-            )}
-
-            {data.venues.length > 1 && (
-              <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-```
-Replace with:
-```jsx
-            )}
-
-            {/* Phase 35: shifts a venue's own payroll tracks aren't counted here */}
-            {data.payroll_shifts > 0 && (
-              <div className="p-3 rounded-xl border border-violet-500/30 bg-violet-500/5 text-violet-200 text-xs flex items-start gap-2">
-                <Timer className="w-4 h-4 flex-shrink-0" />
-                <span>
-                  {data.payroll_shifts} shift{data.payroll_shifts === 1 ? '' : 's'} in this period {data.payroll_shifts === 1 ? 'is' : 'are'} tracked
-                  by {data.payroll_venues.length ? data.payroll_venues.join(', ') : 'the venue'}'s own payroll, so {data.payroll_shifts === 1 ? "it isn't" : "they aren't"} counted here.
-                  Check your pay stub from them.
-                </span>
-              </div>
-            )}
-
-            {data.venues.length > 1 && (
-              <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-```
-
----
-
-## B12. `frontend/src/components/worker/EarningsCard.jsx` (EDIT)
-
-**Edit 1.** Find:
-```jsx
-            {data.in_progress > 0 ? 'Clocked in now · ' : ''}
-            {up.shifts > 0 ? `${up.shifts} more booked (~${money(up.est_pay)})` : 'Before tips'}
-          </div>
-        </div>
-```
-Replace with:
-```jsx
-            {data.in_progress > 0 ? 'Clocked in now · ' : ''}
-            {up.shifts > 0 ? `${up.shifts} more booked (~${money(up.est_pay)})` : 'Before tips'}
-            {data.payroll_shifts > 0 ? ` · ${data.payroll_shifts} on venue payroll` : ''}
-          </div>
-        </div>
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    print(f"wrote {path}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--apply", action="store_true", help="write the three files and rename the old ones")
+    ap.add_argument("--undo", action="store_true", help="restore the files renamed by --apply")
+    ap.add_argument("--source", help="read the root settings from this file instead of .env "
+                                     "(it is renamed to <file>.pre-0.35.2.bak on --apply)")
+    args = ap.parse_args()
+    global SOURCES
+    source = Path(args.source) if args.source else ROOT_ENV
+    if args.source:
+        if not source.exists():
+            sys.exit(f"{source} doesn't exist. Nothing changed.")
+        SOURCES = [(f"{source}", source)] + SOURCES[1:]
+    if not Path("docker-compose.yml").exists():
+        sys.exit("Run this from the repository root (the folder with docker-compose.yml).")
+
+    if args.undo:
+        restored = 0
+        extra = [p.with_name(p.name[:-len(SUFFIX)]) for p in Path(".").glob("*" + SUFFIX)
+                 if p.name != ROOT_ENV.name + SUFFIX and ".undone" not in p.name]
+        for p in [ROOT_ENV] + RETIRE + extra:
+            bak = p.with_name(p.name + SUFFIX)
+            if bak.exists():
+                os.replace(bak, p)
+                print(f"restored {p}")
+                restored += 1
+        if restored:
+            for p in (STACK, INTEGRATIONS):
+                if p.exists():
+                    os.replace(p, p.with_name(p.name + ".undone" + SUFFIX))
+                    print(f"moved {p} aside -> {p}.undone{SUFFIX}")
+        print("Nothing to undo." if not restored else "Done. Recreate the containers after restoring the matching code.")
+        return
+
+    existing = [str(p) for p in [ROOT_ENV] + RETIRE if p.with_name(p.name + SUFFIX).exists()]
+    existing += [str(p) for p in (STACK, INTEGRATIONS) if p.exists()]
+    if existing:
+        sys.exit("Already split: " + ", ".join(existing) + " exist(s). Nothing changed. "
+                 "Use --undo first to start over.")
+    if not any(p.exists() for _, p in SOURCES):
+        sys.exit("No settings files found (.env, backend/.env, .secrets/.secrets.env). Copy the three "
+                 ".template files instead (.env.template, .secrets/stack.env.template, .secrets/integrations.env.template).")
+
+    merged, origin, notes, problems, placeholders = plan()
+    names = {"env": ".env", "stack": str(STACK), "integrations": str(INTEGRATIONS)}
+    for which, name in names.items():
+        keys = [k for k in merged if destination(k) == which]
+        print(f"{name}: {len(keys)} settings" + (f": {', '.join(sorted(keys))}" if keys else ""))
+    for label in [l for l, _ in SOURCES] + ["built-in default"]:
+        keys = sorted(k for k, o in origin.items() if o == label)
+        if keys:
+            print(f"  values from {label}: {', '.join(keys)}")
+    for n in notes + problems:
+        print(("! " if n.startswith("WARNING") or "CHECK" in n else "- ") + n)
+    moved = sorted(k for k in merged if destination(k) == "integrations" and k not in INTEGRATION_KEYS and k not in UNUSED)
+    if moved:
+        print("! " + ", ".join(moved) + ": not a known setting but looks secret, so it goes in "
+              ".secrets/integrations.env (backend only). CHECK IT.")
+
+    blocking = sorted(k for k in placeholders if k in ("POSTGRES_PASSWORD", "SECRET_KEY", "REDIS_PASSWORD")
+                      and is_blank(merged.get(k)))
+    if blocking:
+        print(f"\n! {', '.join(blocking)} only exist as template placeholders in {source}. It looks like a copy of "
+              ".env.template, not your real settings. Nothing changed. If your real settings are in another file, "
+              "run again with --source <that file>.")
+        sys.exit(1)
+    if not args.apply:
+        print("\nDry run: nothing changed. Run again with --apply to write the files and rename the old ones.")
+        return
+
+    contents = {w: render(merged, w) for w in names}
+    for p in dict.fromkeys([source, ROOT_ENV]):
+        if p.exists():
+            os.replace(p, p.with_name(p.name + SUFFIX))
+            print(f"renamed {p} -> {p}{SUFFIX}")
+    for p in RETIRE:
+        if p.exists():
+            os.replace(p, p.with_name(p.name + SUFFIX))
+            print(f"renamed {p} -> {p}{SUFFIX}")
+    write(ROOT_ENV, contents["env"])
+    write(STACK, contents["stack"])
+    write(INTEGRATIONS, contents["integrations"])
+    print("\nDone. Check with:  docker compose config --quiet   (prints nothing when it's fine)\n"
+          "Then recreate the containers (keeps your data):  docker compose up -d --build --force-recreate")
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 ---
@@ -3404,7 +1058,7 @@ Replace with:
 ```json
   "name": "shiftboard-frontend",
   "private": true,
-  "version": "0.34.6",
+  "version": "0.35.1",
   "type": "module",
   "scripts": {
 ```
@@ -3412,7 +1066,7 @@ Replace with:
 ```json
   "name": "shiftboard-frontend",
   "private": true,
-  "version": "0.35.0",
+  "version": "0.35.2",
   "type": "module",
   "scripts": {
 ```
@@ -3425,179 +1079,213 @@ Replace with:
 ```python
 container is still running an old build.
 """
-APP_VERSION = "0.34.6"
+APP_VERSION = "0.35.1"
 ```
 Replace with:
 ```python
 container is still running an old build.
 """
-APP_VERSION = "0.35.0"
+APP_VERSION = "0.35.2"
 ```
 
 ---
 
 ## V3. `CHANGELOG.md` (EDIT)
-The new section goes above `[0.34.6]`.
+The new section goes above `[0.35.1]`.
 
 **Edit 1.** Find:
 ```markdown
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
-## [0.34.6] - 2026-09-28 - Phase 34.6: Venue website
+## [0.35.1] - 2026-09-28 - Phase 35.1: One settings file
 ```
 Replace with:
 ```markdown
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
-## [0.35.0] - 2026-09-28 - Phase 35: Venue payroll, staffing companies, overtime and pay periods
-
-### Added
-- **Who clocks in where.** Venue settings → **Time & pay periods** → "How your team's time is tracked": team members either clock in with ShiftBoard or are tracked by the venue's own payroll / time clock (`venues.team_time_tracking`).
-- **Per person** (Team → Edit): "Use the venue setting", "Venue's payroll" or "Clock in with ShiftBoard" (`venue_whitelists.time_tracking`), plus **Works through** a staffing company (`venue_whitelists.works_through`). Staffing-company people and anyone from outside the team clock in with ShiftBoard by default.
-- Bookings record their tracking mode when the shift starts (`shift_requests.time_tracking`, written by the background worker), so settings changes never rewrite past hours.
-- **Overtime flags**: weekly limit (default 40 h), optional daily limit, and the work-week start day. Shown on time sheets, pay periods and the hours download (new trailing columns **Regular hours**, **Overtime hours**, **Works through**; existing columns keep their order).
-- **Pay periods**: weekly, every two weeks (with a start date), twice a month (1st and 16th) or monthly. A new **Pay periods** screen on the manager dashboard lists each period with people, hours, overtime and pay, a per-person breakdown, a company filter, and a download.
-- **Approve and lock** (on by default, `venues.pay_period_approval`): a finished period with no open clock-ins can be approved, which saves a snapshot of its totals (`pay_period_approvals`). While it's approved, adding, editing or deleting times and changing pay rates in it is refused (409). Reopening needs a reason; both are in the activity log.
-- API: `GET /api/venues/{id}/pay-periods`, `GET /api/venues/{id}/pay-periods/{start}?company=`, `POST .../{start}/approve`, `POST .../{start}/reopen`. The payroll export takes `company=`.
-- Hours download: filter by staffing company.
+## [0.35.2] - 2026-09-28 - Phase 35.1.1: Secrets out of .env
 
 ### Changed
-- Payroll-tracked people: no clock-in button ("Clock in with the venue's system"), clock-in is refused by the server with a plain message, no "not clocked in" alerts, a **Venue payroll** state on the Today board (a no-show can still be marked after the start), and a chip on the roster, time sheet and team list.
-- Reliability counts a finished payroll-tracked shift as worked and on time unless it's marked a no-show.
-- Hours & pay leaves payroll-tracked shifts out of the totals and says how many there were.
+- **Settings are split into three files:**
+  - `.env`: ordinary settings, no secrets
+  - `.secrets/stack.env`: `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN`
+  - `.secrets/integrations.env`: SMTP / Resend, Twilio, `VAPID_PRIVATE_KEY`, R2 keys
+- **Who reads what:** `database`, `redis` and `cloudflared` read only `stack.env`, so they never see integration keys. The backend reads all three; the frontend reads nothing.
+- **No secret goes through `${...}` in `docker-compose.yml` any more**, which is what forced secrets into `.env` in 0.35.1:
+  - Postgres reads `POSTGRES_PASSWORD` from its env file.
+  - Redis gets its password in its own start command, and refuses to start without one.
+  - cloudflared reads `TUNNEL_TOKEN` by itself (renamed from `CLOUDFLARE_TUNNEL_TOKEN`).
+- The backend builds `REDIS_URL` from `REDIS_PASSWORD` (URL-encoded) unless `REDIS_URL` is set (`backend/src/config.py`). It already built the database address from `POSTGRES_*`. Compose no longer passes `DATABASE_URL` / `REDIS_URL` / `SUPER_ADMIN_*`.
+- `scripts/consolidate_env.py` now sorts settings into the three files, from either the 0.35.0 or the 0.35.1 layout. Unknown settings that look secret go to `integrations.env`. Backups are named `*.pre-0.35.2.bak`, and `--undo` restores them.
+- Templates: `.env.template` has no secrets; new `.secrets/stack.env.template` and `.secrets/integrations.env.template`.
+- `.gitignore`: also ignores `*.bak`.
 
-## [0.34.6] - 2026-09-28 - Phase 34.6: Venue website
+### Removed
+- `.secrets/.secrets.env.template` (replaced by the two new templates).
+
+## [0.35.1] - 2026-09-28 - Phase 35.1: One settings file
 ```
 
 ---
 
 ## V4. `README.md` (EDITS)
-For managers and the background worker (architecture and settings changed).
+Infrastructure row, Running → step 1, and the Configuration section.
 
 **Edit 1.** Find:
 ```markdown
-  * remove someone, mark a no-show
-* **Team**: members, positions, notes, blocking, invites (email / link / QR / CSV), ratings and reviews.
-* **Time sheets**: fix clock-in / clock-out times (every edit is logged). Download hours and pay as CSV in the venue's time zone.
-* **Reliability scoring** (`services/reliability.py`):
-  * The score is `100 × (on-time + ½ × late) ÷ (worked + no-shows + late drops)`, across the whole platform.
-  * Late means clocking in more than 10 minutes after the start.
-  * Drops with 72 hours' notice or more are excused.
-  * Managers see it as a badge next to each person.
-* **Activity log** of every booking, change and approval. **Venue settings**:
-  * address, clock-in area, clock-in rules
-  * approval policy, public cover
-  * positions & pay, locations, templates
+| **Backend** | Python 3.11, FastAPI, SQLAlchemy 2 (async, `asyncpg`), Pydantic v2, passlib[bcrypt], python-jose, firebase-admin, pywebpush / py-vapid, redis |
+| **Data** | PostgreSQL 16 (schema in `database/init.sql`), Redis 7 |
+| **Infrastructure** | Docker Compose (`database`, `redis`, `backend`, `frontend`, `cloudflared`). All settings come from the root `.env` (git-ignored). `.secrets/` (git-ignored) holds the Firebase files and is mounted read-only into the backend. |
+
+The frontend container runs the Vite dev server with hot reload. Vite proxies `/api` to `backend:8000`, and the Cloudflare tunnel points at the frontend.
 ```
 Replace with:
 ```markdown
-  * remove someone, mark a no-show
-* **Team**: members, positions, notes, blocking, invites (email / link / QR / CSV), ratings and reviews.
-* **Time sheets**: fix clock-in / clock-out times (every edit is logged). Download hours and pay as CSV in the venue's time zone, for everyone or one staffing company.
-* **Time tracking: ShiftBoard or venue payroll** (Phase 35, `services/time_tracking.py`):
-  * Each venue chooses how **team members'** time is tracked: they clock in with ShiftBoard, or the venue's own payroll / time clock tracks them.
-  * Each team member can be set differently, and can be marked as working through a **staffing company** (overhire / agency). People from a staffing company, and anyone booked from outside the team, clock in with ShiftBoard unless a manager says otherwise.
-  * First match wins: the person's own setting → works through a company (ShiftBoard) → on the team and the venue uses payroll (payroll) → ShiftBoard.
-  * Payroll-tracked people get no clock-in button and no "not clocked in" alerts. The shift counts as worked for reliability unless a manager marks a no-show. Their hours aren't in time sheets, exports or Hours & pay; pay periods list them separately with scheduled hours.
-  * When a shift starts, the background worker writes the mode on the booking (`shift_requests.time_tracking`), so later settings changes never rewrite past hours.
-* **Overtime flags and pay periods** (Phase 35, `services/pay_periods.py`, `routers/pay_periods.py`):
-  * Per venue: weekly overtime limit (default 40 h), optional daily limit, the day the work week starts, and the pay period (weekly, every two weeks, twice a month, monthly).
-  * Overtime is flagged and counted (time sheets, pay periods, the hours download). ShiftBoard doesn't add an overtime premium to pay.
-  * **Pay periods** screen: totals per person and per period. When approving is on, a finished period is **approved and locked**: nobody can add, edit or delete times or change pay rates in it until a manager reopens it with a reason. Approvals keep a snapshot of the totals and are logged.
-* **Reliability scoring** (`services/reliability.py`):
-  * The score is `100 × (on-time + ½ × late) ÷ (worked + no-shows + late drops)`, across the whole platform.
-  * Late means clocking in more than 10 minutes after the start.
-  * Drops with 72 hours' notice or more are excused.
-  * Managers see it as a badge next to each person.
-* **Activity log** of every booking, change and approval. **Venue settings**:
-  * address, website, clock-in area, clock-in rules
-  * time tracking, overtime and pay periods (Time & pay periods tab)
-  * approval policy, public cover
-  * positions & pay, locations, templates
+| **Backend** | Python 3.11, FastAPI, SQLAlchemy 2 (async, `asyncpg`), Pydantic v2, passlib[bcrypt], python-jose, firebase-admin, pywebpush / py-vapid, redis |
+| **Data** | PostgreSQL 16 (schema in `database/init.sql`), Redis 7 |
+| **Infrastructure** | Docker Compose (`database`, `redis`, `backend`, `frontend`, `cloudflared`). Settings: `.env` (no secrets), `.secrets/stack.env` and `.secrets/integrations.env` (all git-ignored). `.secrets/` also holds the Firebase files and is mounted read-only into the backend. |
+
+The frontend container runs the Vite dev server with hot reload. Vite proxies `/api` to `backend:8000`, and the Cloudflare tunnel points at the frontend.
 ```
 
 **Edit 2.** Find:
 ```markdown
-* Runs inside the backend container: `backend/src/main.py` starts `notification_worker_loop()` from the FastAPI lifespan with `asyncio.create_task()`.
-* Every minute:
-  * auto clock-out
-  * 24 h / 2 h reminders
+
+```bash
+# 1. Settings: ONE file (copy the template, then fill in real values)
+cp .env.template .env
+cp .secrets/firebase-web-config.js.template .secrets/firebase-web-config.js   # for real Firebase sign-in
+
 ```
 Replace with:
 ```markdown
-* Runs inside the backend container: `backend/src/main.py` starts `notification_worker_loop()` from the FastAPI lifespan with `asyncio.create_task()`.
-* Every minute:
-  * record how each started shift's time is tracked (ShiftBoard or venue payroll)
-  * auto clock-out
-  * 24 h / 2 h reminders
+
+```bash
+# 1. Settings: three files (copy the templates, then fill in real values)
+cp .env.template .env
+cp .secrets/stack.env.template .secrets/stack.env
+cp .secrets/integrations.env.template .secrets/integrations.env
+cp .secrets/firebase-web-config.js.template .secrets/firebase-web-config.js   # for real Firebase sign-in
+
+```
+
+**Edit 3.** Find:
+```markdown
+
+## 7. Configuration
+**One file:** since 0.35.1 every setting lives in the root **`.env`** (git-ignored). `.env.template` lists and explains every setting.
+* Docker Compose reads only that file. The backend gets all of it; `database`, `redis` and `cloudflared` get just the values they need through `${...}` in `docker-compose.yml`.
+* `DATABASE_URL`, `REDIS_URL` and `POSTGRES_HOST` are built by `docker-compose.yml`. `POSTGRES_PORT` / `REDIS_PORT` are only the ports on your computer; containers always use 5432 / 6379.
+* After changing `.env`: `docker compose up -d --force-recreate` (keeps your data).
+* **Two files stay in `.secrets/`** because they aren't `KEY=VALUE` text: `firebase-web-config.js` (Firebase web config, sent to the browser by the backend) and `firebase_service_account.json` (FCM push).
+* **The frontend needs no settings.** It reads no `VITE_` variables: it calls `/api` on its own address (Vite forwards it to the backend) and gets the Firebase web config from the backend at runtime.
+* **Other templates:** `backend/.env.template` is for running the API outside Docker (local `uvicorn`); `.secrets/.secrets.env.template` is a secrets-only example for bare-metal servers. Docker never reads `backend/.env`, `frontend/.env` or `.secrets/.secrets.env`.
+* **Upgrading from 0.35.0 or older** (settings spread over `.env`, `backend/.env`, `frontend/.env`, `.secrets/.secrets.env`): run `python scripts/consolidate_env.py` (dry run, prints setting names only), then `--apply`. It writes the new `.env` with the values the app was really using and renames the old files to `*.pre-0.35.1.bak`. `--undo` puts them back.
+
+The main settings:
+
+| Area | Settings |
+| :--- | :--- |
+| Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
+| Sign-in | `SECRET_KEY` (signs every login; must be set), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS` |
+| Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
+| Links | `APP_BASE_URL`: the public address used in emails, texts and invites |
+```
+Replace with:
+```markdown
+
+## 7. Configuration
+**Three files** (since 0.35.2), all git-ignored, each with a `.template` that explains every setting:
+
+| File | Holds | Read by |
+| :--- | :--- | :--- |
+| `.env` | ordinary settings, **no secrets**: ports, names, providers, addresses, switches | `backend` (and `${...}` in `docker-compose.yml`) |
+| `.secrets/stack.env` | stack secrets: `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN` | `database`, `redis`, `cloudflared`, `backend` |
+| `.secrets/integrations.env` | outside-service keys: SMTP / Resend, Twilio, `VAPID_PRIVATE_KEY`, R2 keys | `backend` only |
+
+* So the database, Redis and the tunnel never see email, text or storage keys; the frontend gets nothing.
+* **Secrets are never written as `${...}` in `docker-compose.yml`** (Compose would only look for them in `.env`). Each container reads them from its `env_file`; Redis reads its password in its own start command.
+* The backend builds the database and Redis addresses itself (`backend/src/config.py`). `POSTGRES_PORT` / `REDIS_PORT` are only the ports on your computer; containers always use 5432 / 6379.
+* After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
+* **Two files stay in `.secrets/`** because they aren't `KEY=VALUE` text: `firebase-web-config.js` (Firebase web config, sent to the browser by the backend) and `firebase_service_account.json` (FCM push).
+* **The frontend needs no settings.** It reads no `VITE_` variables: it calls `/api` on its own address (Vite forwards it to the backend) and gets the Firebase web config from the backend at runtime.
+* **Other templates:** `backend/.env.template` is for running the API outside Docker (local `uvicorn`). Docker never reads `backend/.env`, `frontend/.env` or `.secrets/.secrets.env`.
+* **Upgrading from 0.35.1 or older:** run `python scripts/consolidate_env.py` (dry run, prints setting names only), then `--apply`. It sorts your settings into the three files, keeps the values the app was really using, and renames the old files to `*.pre-0.35.2.bak`. `--undo` puts them back.
+
+The main settings:
+
+| Area | Settings |
+| :--- | :--- |
+| Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
+| Sign-in | `SECRET_KEY` (signs every login; must be set; in `stack.env`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS` |
+| Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
+| Links | `APP_BASE_URL`: the public address used in emails, texts and invites |
+```
+
+**Edit 4.** Find:
+```markdown
+| Background worker | `NOTIFICATIONS_WORKER_ENABLED` (default `true`), `NOTIFICATIONS_DIGEST_HOUR` |
+| Files | `R2_*` (Cloudflare R2; reserved, not used by the app yet) |
+| Tunnel | `CLOUDFLARE_TUNNEL_TOKEN` |
+
+Admin → System shows what's configured, what's missing and whether the background worker is running.
+```
+Replace with:
+```markdown
+| Background worker | `NOTIFICATIONS_WORKER_ENABLED` (default `true`), `NOTIFICATIONS_DIGEST_HOUR` |
+| Files | `R2_*` (Cloudflare R2; reserved, not used by the app yet) |
+| Tunnel | `TUNNEL_TOKEN` (in `stack.env`; was `CLOUDFLARE_TUNNEL_TOKEN`) |
+
+Admin → System shows what's configured, what's missing and whether the background worker is running.
 ```
 
 ---
 
-# PART C: Rebuild & verification
+# PART S: Split Andrew's settings into the three files (run AFTER Parts A–V)
 
-**Schema change (new columns with defaults, a new column on bookings, and a new table).** Pick ONE:
+From the repository root. **Never open any real settings file.** If `python` isn't available, run each `python ...` command as `docker run --rm -v "${PWD}:/work" -w /work python:3.11-slim python ...` instead.
 
-**Option 1: fresh database (wipes all data):**
+1. **Is `.env` just a copy of the template?** Run:
+   ```bash
+   git diff --no-index --quiet .env .env.template
+   ```
+   It prints nothing. Exit code **0** = identical (a template copy); **1** = different. Also note whether `.env.old.env` exists (a directory listing only; don't open it).
+2. **Dry run:**
+   * If step 1 gave **0** and `.env.old.env` exists: `python scripts/consolidate_env.py --source .env.old.env`
+   * Otherwise: `python scripts/consolidate_env.py`
+
+   **Copy the output into your report to Andrew, word for word** (names only). If it ends with *"only exist as template placeholders … Nothing changed"*, or anything else is unclear, **STOP here** and report. Don't guess at a source file.
+3. **Apply:** the same command plus `--apply`. It writes `.env`, `.secrets/stack.env` and `.secrets/integrations.env`, and renames what it replaced to `*.pre-0.35.2.bak`.
+4. **Check:** `docker compose config --quiet` must print **nothing** and exit 0. If not: `python scripts/consolidate_env.py --undo` and report the error text (never file contents).
+5. **Check git:** `git status --short` must list no `.env`, `.bak`, `stack.env`, `integrations.env` or other `.secrets/` file except templates.
+6. **Stop.** Don't start, stop, restart or rebuild anything.
+
+---
+
+# PART R: For Andrew: rebuild & checklist
+
+**Read the script's `!` lines first.** In particular:
+* ***SECRET_KEY is not set*** means logins were signed with the built-in public key. Put a long random `SECRET_KEY` in `.secrets/stack.env`; everyone is signed out once.
+* ***REDIS_PASSWORD … built-in default*** means Redis was using the default password from the code. Change it in `.secrets/stack.env` whenever you like: nothing stores it, so a recreate is all it takes.
+* ***CHECK IT*** lines mean a value Docker didn't use before will be used now.
+
+**Rebuild (keeps your data, no `-v`):**
 ```bash
-docker compose down -v
-docker compose up -d --build
+docker compose up -d --build --force-recreate
 ```
-
-**Option 2: keep your data.** Run once, then rebuild without `-v`. It's safe to run twice. Existing venues get the defaults (team clocks in with ShiftBoard, overtime over 40 h a week, weekly pay periods starting Monday, approve-and-lock on), so nothing changes for anyone until a manager changes the settings.
-```bash
-docker compose exec -T database psql -U shiftboard_user -d shiftboard <<'SQL'
-BEGIN;
-ALTER TABLE venues ADD COLUMN IF NOT EXISTS team_time_tracking VARCHAR(20) NOT NULL DEFAULT 'shiftboard';
-ALTER TABLE venues ADD COLUMN IF NOT EXISTS ot_weekly_hours NUMERIC(5, 2) DEFAULT 40;
-ALTER TABLE venues ADD COLUMN IF NOT EXISTS ot_daily_hours NUMERIC(5, 2);
-ALTER TABLE venues ADD COLUMN IF NOT EXISTS work_week_start SMALLINT NOT NULL DEFAULT 0;
-ALTER TABLE venues ADD COLUMN IF NOT EXISTS pay_period VARCHAR(20) NOT NULL DEFAULT 'weekly';
-ALTER TABLE venues ADD COLUMN IF NOT EXISTS pay_period_anchor DATE;
-ALTER TABLE venues ADD COLUMN IF NOT EXISTS pay_period_approval BOOLEAN NOT NULL DEFAULT TRUE;
-ALTER TABLE venue_whitelists ADD COLUMN IF NOT EXISTS time_tracking VARCHAR(20);
-ALTER TABLE venue_whitelists ADD COLUMN IF NOT EXISTS works_through VARCHAR(120);
-ALTER TABLE shift_requests ADD COLUMN IF NOT EXISTS time_tracking VARCHAR(20);
-CREATE TABLE IF NOT EXISTS pay_period_approvals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'approved',
-    people INT NOT NULL DEFAULT 0,
-    total_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
-    overtime_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
-    total_pay NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    approved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reopened_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    reopened_at TIMESTAMPTZ,
-    reopen_reason TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_pay_period_approvals_venue ON pay_period_approvals(venue_id, start_date);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_pay_period_approved ON pay_period_approvals(venue_id, start_date) WHERE status = 'approved';
-COMMIT;
-SQL
-docker compose up -d --build
-```
-(The database service is called `database` in `docker-compose.yml`. If your database user or name differ in `.env`, use those.)
-
-Then `docker compose restart frontend` so Vite picks up version 0.35.0.
 
 ### Checklist
-1. Admin → System → Version says *Web app 0.35.0 · Server 0.35.0*.
-2. Manager → **Settings → Time & pay periods**: pick *Your venue's payroll tracks their time*, keep *Over 40 hours in a work week*, save. Reopen: it stuck.
-3. **Team** → open someone → **Edit**: set *Works through* to a company and save. The row shows the company chip. Open a second person: they show **Venue payroll**.
-4. Assign the payroll person and the company person to a shift that starts soon. On the payroll person's phone, **My shifts** shows *Clock in with the venue's system* and no Clock in button. The company person can clock in as usual.
-5. After the start, the **Today** board shows the payroll person as **Venue payroll** (no "not clocked in" alert).
-6. **Pay periods**: last week shows its hours and any overtime. Click **Approve and lock** and confirm. Then open that week's time sheet and try to edit a time: you get *"… is approved and locked. Reopen it on the Pay periods screen …"*. Reopen with a reason; the edit now works.
-7. **Download hours**: the file ends with *Regular hours*, *Overtime hours*, *Works through*. Pick a company in *Who* to get only their people.
+1. `docker compose ps`: all five services are up and healthy (Redis's healthcheck now reads the password from its own environment).
+2. `docker compose exec database env | findstr TWILIO` (PowerShell) or `| grep TWILIO` prints **nothing**. Same for `redis`.
+3. Admin → System: *Web app 0.35.2 · Server 0.35.2*. The database, Redis, email, texts and push look the same as before.
+4. Sign in with a password and with Google. The public address loads, so the tunnel is working with `TUNNEL_TOKEN`.
+5. To go back: `python scripts/consolidate_env.py --undo`, check out the 0.35.1 code, and rebuild.
+6. After a few days, delete the `*.bak` files and `.env.old.env` (keep them until you're sure).
 
 ---
 
 **"CRITICAL SYSTEM DIRECTIVE: Starting immediately, upon the successful completion of any future phase or feature implementation, you must autonomously bump the version number in `frontend/package.json`, append a bulleted summary of changes to `CHANGELOG.md`, and update `README.md` if the architecture changed. Do not ask for permission to do this."**
 
-(For this phase, Part V already does all three for 0.35.0. Apply it as written and don't bump again.)
+(For this phase, Part V already does all three for 0.35.2. Apply it as written and don't bump again.)

@@ -4,6 +4,47 @@ All notable changes to ShiftBoard. The format follows [Keep a Changelog](https:/
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.35.2] - 2026-09-28 - Phase 35.1.1: Secrets out of .env
+
+### Changed
+- **Settings are split into three files:**
+  - `.env`: ordinary settings, no secrets
+  - `.secrets/stack.env`: `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN`
+  - `.secrets/integrations.env`: SMTP / Resend, Twilio, `VAPID_PRIVATE_KEY`, R2 keys
+- **Who reads what:** `database`, `redis` and `cloudflared` read only `stack.env`, so they never see integration keys. The backend reads all three; the frontend reads nothing.
+- **No secret goes through `${...}` in `docker-compose.yml` any more**, which is what forced secrets into `.env` in 0.35.1:
+  - Postgres reads `POSTGRES_PASSWORD` from its env file.
+  - Redis gets its password in its own start command, and refuses to start without one.
+  - cloudflared reads `TUNNEL_TOKEN` by itself (renamed from `CLOUDFLARE_TUNNEL_TOKEN`).
+- The backend builds `REDIS_URL` from `REDIS_PASSWORD` (URL-encoded) unless `REDIS_URL` is set (`backend/src/config.py`). It already built the database address from `POSTGRES_*`. Compose no longer passes `DATABASE_URL` / `REDIS_URL` / `SUPER_ADMIN_*`.
+- `scripts/consolidate_env.py` now sorts settings into the three files, from either the 0.35.0 or the 0.35.1 layout. Unknown settings that look secret go to `integrations.env`. Backups are named `*.pre-0.35.2.bak`, and `--undo` restores them.
+- Templates: `.env.template` has no secrets; new `.secrets/stack.env.template` and `.secrets/integrations.env.template`.
+- `.gitignore`: also ignores `*.bak`.
+
+### Removed
+- `.secrets/.secrets.env.template` (replaced by the two new templates).
+
+## [0.35.1] - 2026-09-28 - Phase 35.1: One settings file
+
+### Changed
+- **All settings now live in the root `.env`.** `docker-compose.yml` reads only that file: the backend gets all of it (`env_file`, required); `database`, `redis` and `cloudflared` get only the values they need through `${...}`. `backend/.env`, `frontend/.env` and `.secrets/.secrets.env` are no longer read by Docker.
+- The backend always reaches PostgreSQL on port 5432 inside the Docker network. `POSTGRES_PORT` is now only the port published on your computer (before, changing it also broke the backend's connection).
+- The frontend service no longer gets any environment variables (it never used them).
+- Rebuilt every template as accurate documentation of what the app actually reads:
+  - `.env.template`: every setting, grouped and explained. `SECRET_KEY` is documented as the login signing key.
+  - `backend/.env.template`: only for running the API outside Docker.
+  - `frontend/.env.template`: explains that the web app needs no settings.
+  - `.secrets/.secrets.env.template`: a secrets-only example for bare-metal servers.
+- `.gitignore`: also ignores `.env.local` and `.env.*` (including the `*.pre-0.35.1.bak` backups) in any folder. Templates stay tracked.
+- README: the Configuration and Running sections describe the one-file setup.
+
+### Added
+- `scripts/consolidate_env.py`: merges the old settings files into the new `.env` once, keeping the values the app was really using, and prints setting names only (never values). Dry run by default; `--apply` writes `.env` and renames the old files to `*.pre-0.35.1.bak`; `--undo` restores them. It warns when `SECRET_KEY` isn't set.
+
+### Removed
+- `frontend/nginx.conf` (unused: the frontend runs the Vite dev server).
+- The obsolete `version:` line in `docker-compose.yml`.
+
 ## [0.35.0] - 2026-09-28 - Phase 35: Venue payroll, staffing companies, overtime and pay periods
 
 ### Added

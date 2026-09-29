@@ -195,7 +195,7 @@ flowchart LR
 | **Frontend** | React 18, Vite 5, Tailwind CSS 3, React Router 6, Axios, jwt-decode, react-big-calendar, date-fns, lucide-react, Firebase JS SDK (sign-in / messaging) |
 | **Backend** | Python 3.11, FastAPI, SQLAlchemy 2 (async, `asyncpg`), Pydantic v2, passlib[bcrypt], python-jose, firebase-admin, pywebpush / py-vapid, redis |
 | **Data** | PostgreSQL 16 (schema in `database/init.sql`), Redis 7 |
-| **Infrastructure** | Docker Compose (`database`, `redis`, `backend`, `frontend`, `cloudflared`). Secrets live in `.secrets/` (git-ignored) and are mounted read-only. |
+| **Infrastructure** | Docker Compose (`database`, `redis`, `backend`, `frontend`, `cloudflared`). Settings: `.env` (no secrets), `.secrets/stack.env` and `.secrets/integrations.env` (all git-ignored). `.secrets/` also holds the Firebase files and is mounted read-only into the backend. |
 
 The frontend container runs the Vite dev server with hot reload. Vite proxies `/api` to `backend:8000`, and the Cloudflare tunnel points at the frontend.
 
@@ -238,11 +238,11 @@ API docs are live at `/docs` (Swagger) and `/redoc` on the backend.
 **You need:** Docker Desktop (Compose v2) and git.
 
 ```bash
-# 1. Settings (copy the templates, then fill in real values)
+# 1. Settings: three files (copy the templates, then fill in real values)
 cp .env.template .env
-cp .secrets/.secrets.env.template .secrets/.secrets.env
-cp backend/.env.template backend/.env        # optional
-cp frontend/.env.template frontend/.env      # optional
+cp .secrets/stack.env.template .secrets/stack.env
+cp .secrets/integrations.env.template .secrets/integrations.env
+cp .secrets/firebase-web-config.js.template .secrets/firebase-web-config.js   # for real Firebase sign-in
 
 # 2. Build and start (first time, or after a schema change)
 docker compose down -v
@@ -282,20 +282,37 @@ docker compose down -v && docker compose up -d --build                          
 ---
 
 ## 7. Configuration
-Real values go in `.secrets/.secrets.env` (git-ignored). The templates list every setting. The main ones:
+**Three files** (since 0.35.2), all git-ignored, each with a `.template` that explains every setting:
+
+| File | Holds | Read by |
+| :--- | :--- | :--- |
+| `.env` | ordinary settings, **no secrets**: ports, names, providers, addresses, switches | `backend` (and `${...}` in `docker-compose.yml`) |
+| `.secrets/stack.env` | stack secrets: `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN` | `database`, `redis`, `cloudflared`, `backend` |
+| `.secrets/integrations.env` | outside-service keys: SMTP / Resend, Twilio, `VAPID_PRIVATE_KEY`, R2 keys | `backend` only |
+
+* So the database, Redis and the tunnel never see email, text or storage keys; the frontend gets nothing.
+* **Secrets are never written as `${...}` in `docker-compose.yml`** (Compose would only look for them in `.env`). Each container reads them from its `env_file`; Redis reads its password in its own start command.
+* The backend builds the database and Redis addresses itself (`backend/src/config.py`). `POSTGRES_PORT` / `REDIS_PORT` are only the ports on your computer; containers always use 5432 / 6379.
+* After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
+* **Two files stay in `.secrets/`** because they aren't `KEY=VALUE` text: `firebase-web-config.js` (Firebase web config, sent to the browser by the backend) and `firebase_service_account.json` (FCM push).
+* **The frontend needs no settings.** It reads no `VITE_` variables: it calls `/api` on its own address (Vite forwards it to the backend) and gets the Firebase web config from the backend at runtime.
+* **Other templates:** `backend/.env.template` is for running the API outside Docker (local `uvicorn`). Docker never reads `backend/.env`, `frontend/.env` or `.secrets/.secrets.env`.
+* **Upgrading from 0.35.1 or older:** run `python scripts/consolidate_env.py` (dry run, prints setting names only), then `--apply`. It sorts your settings into the three files, keeps the values the app was really using, and renames the old files to `*.pre-0.35.2.bak`. `--undo` puts them back.
+
+The main settings:
 
 | Area | Settings |
 | :--- | :--- |
 | Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
-| Sign-in | `SECRET_KEY` / `JWT_SECRET_KEY`, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS` |
-| Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_PROJECT_ID`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
+| Sign-in | `SECRET_KEY` (signs every login; must be set; in `stack.env`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS` |
+| Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
 | Links | `APP_BASE_URL`: the public address used in emails, texts and invites |
 | Email | `EMAIL_PROVIDER` (`console` \| `smtp` \| `resend`), `EMAIL_FROM`, `SMTP_*`, `RESEND_API_KEY` |
 | Texts | `SMS_PROVIDER` (`off` \| `console` \| `twilio`), `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
 | Push | `VAPID_PRIVATE_KEY` (optional; otherwise generated and stored in the database) |
 | Background worker | `NOTIFICATIONS_WORKER_ENABLED` (default `true`), `NOTIFICATIONS_DIGEST_HOUR` |
-| Files | `R2_*` (Cloudflare R2, optional) |
-| Tunnel | `CLOUDFLARE_TUNNEL_TOKEN` |
+| Files | `R2_*` (Cloudflare R2; reserved, not used by the app yet) |
+| Tunnel | `TUNNEL_TOKEN` (in `stack.env`; was `CLOUDFLARE_TUNNEL_TOKEN`) |
 
 Admin → System shows what's configured, what's missing and whether the background worker is running.
 

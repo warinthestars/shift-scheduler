@@ -2,12 +2,17 @@
 # !!! DO NOT change ".secrets/*" to ".secrets/" !!!
 # Ignoring the folder itself makes git skip it entirely, and the !-rules below
 # can no longer re-include the *.template files (they silently become untracked).
+# Phase 35.1.1: real settings live in .env, .secrets/stack.env and .secrets/integrations.env.
+# ".env.*" also covers .env.local and the *.pre-0.35.x.bak backups made by
+# scripts/consolidate_env.py, in any folder. Templates (*.template) stay tracked.
 .env
+.env.local
+.env.*
 *.env
+*.bak
 !.env.template
 .secrets/*
 !.secrets/*.template
-!.secrets/.secrets.env.template
 *.pem
 *.key
 # Phase 33.0.1: Firebase service-account keys, wherever they get saved

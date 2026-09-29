@@ -3,7 +3,7 @@ Phase 33.0.1: Firebase Cloud Messaging (FCM) for phone / browser notifications.
 
 Used when all of these are in place (otherwise ShiftBoard keeps using its own Web Push, services/webpush.py):
   * the service-account key file   .secrets/firebase_service_account.json   (FIREBASE_CREDENTIALS_PATH)
-  * FIREBASE_VAPID_KEY in .secrets/.secrets.env  (Firebase console -> Project settings -> Cloud Messaging ->
+  * FIREBASE_VAPID_KEY in the root .env  (Firebase console -> Project settings -> Cloud Messaging ->
     Web Push certificates -> the "Key pair" value)
   * messagingSenderId and appId in .secrets/firebase-web-config.js (already there when sign-in with Firebase works)
 
@@ -41,7 +41,7 @@ def missing() -> List[str]:
     if not os.path.isfile(settings.FIREBASE_CREDENTIALS_PATH):
         out.append("service account key (.secrets/firebase_service_account.json)")
     if not vapid_key():
-        out.append("FIREBASE_VAPID_KEY in .secrets/.secrets.env")
+        out.append("FIREBASE_VAPID_KEY in .env")
     cfg = web_config() or {}
     if not cfg.get("messagingSenderId") or not cfg.get("appId"):
         out.append("messagingSenderId and appId in .secrets/firebase-web-config.js")

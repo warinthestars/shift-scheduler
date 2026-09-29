@@ -121,7 +121,7 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
               {sys.always_admin_count} listed in ALWAYS_ADMIN_EMAILS{sys.always_admin_count ? '' : ' (add one so you can never be locked out)'}
             </Row>
           </div>
-          <p className="text-[11px] text-slate-500 mt-2">Change these in the backend's secrets file and restart the backend container.</p>
+          <p className="text-[11px] text-slate-500 mt-2">Change these in .env (secrets in .secrets/stack.env or .secrets/integrations.env), then recreate the containers: docker compose up -d --force-recreate (keeps your data).</p>
         </section>
 
         <section className={`${card} p-4`}>
