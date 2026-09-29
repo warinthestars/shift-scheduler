@@ -78,6 +78,7 @@ const btn = 'px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center g
  * Props: req, calItem (calendar item for booked shifts), clockedIn, busy ('clock' | 'withdraw' | null),
  *        onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw, onAddCalendar, onDirections, onAskBack
  * Phase 34: cover (my live cover request for this booking, from GET /api/cover/mine, or null), onAskCover, onCancelCover
+ * Phase 35: calItem.time_tracking === 'payroll' means the venue's own payroll tracks this shift: no clock-in button here.
  */
 export default function MyShiftCard({
   req, calItem, clockedIn = false, busy = null, onDetails, onClockIn, onClockOut, onBoard, onHandOff, onDrop, onWithdraw,
@@ -103,6 +104,7 @@ export default function MyShiftCard({
   const shiftCancelled = String(shift.status || '').toUpperCase() === 'CANCELLED';
   const canAskBack = isDropped && startMs > now && !shiftCancelled && onAskBack;
   const canCover = isBooked && !isCheckedIn && startMs > now;                         // Phase 34
+  const payroll = calItem?.time_tracking === 'payroll' && !isCheckedIn;             // Phase 35: the venue's own payroll tracks this shift
   const { month, day, weekday } = dateParts(shift.start_time, tz);
 
   const chip = isCheckedIn
@@ -124,6 +126,26 @@ export default function MyShiftCard({
       <button type="button" onClick={onClockOut} disabled={busy === 'clock'} className={`${btn} bg-rose-600 hover:bg-rose-500 text-white`}>
         <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : 'Clock out'}
       </button>
+    );
+  } else if (isBooked && payroll && needsAck && !ended) {
+    // Phase 35: no clock-in here, so reading the notes is the only action
+    primary = (
+      <button type="button" onClick={onDetails} className={`${btn} bg-amber-500 hover:bg-amber-400 text-slate-950`}>
+        <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the shift notes'}
+      </button>
+    );
+  } else if (isBooked && payroll && !ended) {
+    primary = (
+      <span className={`${btn} bg-violet-500/10 text-violet-200 border border-violet-500/30 font-semibold`}
+        title="This venue tracks your hours with its own time clock or payroll system. Clock in there, not in ShiftBoard.">
+        <Timer className="w-4 h-4" /> Clock in with the venue's system
+      </span>
+    );
+  } else if (isBooked && payroll && ended) {
+    primary = (
+      <span className="text-xs text-emerald-400 font-semibold inline-flex items-center gap-1">
+        <Check className="w-4 h-4" /> Worked · tracked by venue payroll
+      </span>
     );
   } else if (isBooked && needsAck && (ended || tooEarly)) {
     primary = (
@@ -220,6 +242,12 @@ export default function MyShiftCard({
                 {cover.status === 'pending_approval'
                   ? `${cover.taker_first_name || 'Someone'} wants to cover · waiting for the manager`
                   : `Asking for cover · ${cover.audience === 'public' ? 'team + public board' : 'team only'}`}
+              </span>
+            )}
+            {payroll && (isBooked || isCompleted) && (
+              <span title="Your hours here are tracked by the venue's own payroll, not ShiftBoard"
+                className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-violet-500/10 text-violet-200 border-violet-500/30">
+                Venue payroll
               </span>
             )}
             {(isBooked || isCheckedIn) && SOURCE_LABELS[req.approval_source] && (

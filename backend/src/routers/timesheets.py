@@ -19,6 +19,8 @@ from src.services import activity
 from src.services.timesheets import (
     ASSIGNED_STATUSES, as_utc, fmt_range, validate_times, require_reason, audit,
 )
+from src.services.pay_periods import assert_unlocked          # Phase 35: approved pay periods are locked
+from src.models import Venue
 
 router = APIRouter(prefix="/api", tags=["Time Sheets"])
 
@@ -59,6 +61,14 @@ async def _load_entry(db: AsyncSession, entry_id: UUID, user: User):
     if not await can_manage_venue(db, user, shift.venue_id):
         raise HTTPException(status_code=403, detail="You don't manage this venue.")
     return entry, req, shift
+
+
+async def _locked_check(db: AsyncSession, shift: Shift, *moments) -> None:
+    """Phase 35: refuse (409) when any of these times is inside an approved pay period at this venue."""
+    venue = await db.scalar(select(Venue).where(Venue.id == shift.venue_id))
+    if venue is not None:
+        await assert_unlocked(db, venue, *moments)
+
 
 
 @router.post("/requests/{request_id}/remove")
@@ -151,6 +161,9 @@ async def set_pay_rate(
     req, shift = await _load_request(db, request_id, current_user)
     if body.pay_rate is not None and body.pay_rate <= 0:
         raise HTTPException(status_code=400, detail="Pay must be more than $0.")
+    ins = (await db.execute(select(TimeEntry.clock_in_time).where(
+        TimeEntry.shift_id == req.shift_id, TimeEntry.worker_id == req.worker_id))).scalars().all()
+    await _locked_check(db, shift, *ins)                                  # Phase 35
     try:
         old = f"{float(req.pay_rate):.2f}" if req.pay_rate is not None else f"default {float(shift.hourly_rate):.2f}"
         req.pay_rate = body.pay_rate
@@ -176,6 +189,7 @@ async def add_time_entry(
     if st not in ASSIGNED_STATUSES + ("no_show",):
         raise HTTPException(status_code=400, detail="Time can only be added for people booked on this shift.")
     cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
+    await _locked_check(db, shift, cin)                                   # Phase 35
     reclaim = st == "no_show" and await _no_show_released_spot(db, req.id)   # Phase 30
     try:
         entry = TimeEntry(
@@ -219,6 +233,7 @@ async def edit_time_entry(
     entry, req, shift = await _load_entry(db, entry_id, current_user)
     reason = require_reason(body.reason)
     cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
+    await _locked_check(db, shift, entry.clock_in_time, cin)              # Phase 35: old and new day
     try:
         old = fmt_range(entry.clock_in_time, entry.clock_out_time)
         # Phase 27: a time the manager typed in is a manager override
@@ -249,6 +264,7 @@ async def delete_time_entry(
 ):
     entry, req, shift = await _load_entry(db, entry_id, current_user)
     reason = require_reason(body.reason)
+    await _locked_check(db, shift, entry.clock_in_time)                   # Phase 35
     try:
         audit(db, req.id, entry.id, current_user.id, "delete", fmt_range(entry.clock_in_time, entry.clock_out_time), None, reason)
         await db.execute(delete(TimeEntry).where(TimeEntry.id == entry.id))

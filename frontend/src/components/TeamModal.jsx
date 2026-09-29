@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Users, UserPlus, Link2, Copy, Download, RefreshCw, Mail, Phone, Upload, ShieldCheck, Trash2, Ban,
   RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus, BadgeCheck,
+  Building2, Timer,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
@@ -31,6 +32,13 @@ const SOURCE_LABEL = {
   admin: 'Added by an admin',
   worked: 'Worked here',
 };
+// Phase 35: how this person's time is tracked at this venue
+const TRACKING_OPTIONS = [
+  ['venue', 'Use the venue setting'],
+  ['payroll', "Venue's payroll (no clock-in here)"],
+  ['shiftboard', 'Clock in with ShiftBoard'],
+];
+
 const INVITE_CHIP = {
   pending: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
   accepted: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
@@ -189,10 +197,12 @@ const FILTERS = [
   ['all', 'Everyone'],
 ];
 
-function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUpdated, onMessage }) {
+function MemberRow({ m, venueId, timeZone, positionOptions, companies = [], open, onToggle, onUpdated, onMessage }) {
   const [editing, setEditing] = useState(false);
   const [positions, setPositions] = useState(m.positions || []);
   const [notes, setNotes] = useState(m.notes || '');
+  const [tracking, setTracking] = useState(m.time_tracking || 'venue');      // Phase 35
+  const [company, setCompany] = useState(m.works_through || '');            // Phase 35
   const [confirm, setConfirm] = useState(null); // 'blocked' | 'removed'
   const [busy, setBusy] = useState(false);
   const [profileKey, setProfileKey] = useState(0);
@@ -242,6 +252,18 @@ function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUp
                 <BadgeCheck className="w-2.5 h-2.5" /> {certShort(k)}
               </span>
             ))}
+            {/* Phase 35: time tracking + staffing company */}
+            {m.status === 'active' && m.effective_time_tracking === 'payroll' && (
+              <span title="Their time is tracked by the venue's own payroll. They don't clock in here."
+                className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-300 border border-violet-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
+                <Timer className="w-2.5 h-2.5" /> Venue payroll
+              </span>
+            )}
+            {m.works_through && (
+              <span title="Works through this company" className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
+                <Building2 className="w-2.5 h-2.5" /> {m.works_through}
+              </span>
+            )}
             {m.cert_attention > 0 && (
               <span className="text-[10px] text-sky-300" title="Open the row to check and verify">• {m.cert_attention} to verify</span>
             )}
@@ -267,7 +289,7 @@ function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUp
             {m.email && <a href={`mailto:${m.email}`} className={btnGhost}><Mail className="w-3.5 h-3.5" /> Email</a>}
             {!editing && (
               <button type="button" className={btnGhost} onClick={() => setEditing(true)}>
-                <Pencil className="w-3.5 h-3.5" /> Positions & note
+                <Pencil className="w-3.5 h-3.5" /> Edit
               </button>
             )}
             <span className="flex-1" />
@@ -319,11 +341,36 @@ function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUp
                 <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={2000} className={inputCls}
                   placeholder="e.g. Great with VIP tables. Prefers weekends." />
               </div>
+              {/* Phase 35: time tracking + staffing company */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1" htmlFor={`tt-${m.worker_id}`}>How their time is tracked</label>
+                  <select id={`tt-${m.worker_id}`} value={tracking} onChange={(e) => setTracking(e.target.value)} className={inputCls}>
+                    {TRACKING_OPTIONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1" htmlFor={`wt-${m.worker_id}`}>Works through (staffing company)</label>
+                  <input id={`wt-${m.worker_id}`} value={company} onChange={(e) => setCompany(e.target.value)} maxLength={120}
+                    list={`companies-${venueId}`} className={inputCls} placeholder="Blank = your own staff" />
+                  <datalist id={`companies-${venueId}`}>
+                    {companies.map((c) => <option key={c} value={c} />)}
+                  </datalist>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                "Use the venue setting" follows Venue settings → Time & pay periods. People who work through a staffing company
+                clock in with ShiftBoard unless you pick otherwise here. Shifts that already started keep the setting they had.
+              </p>
               <div className="flex gap-2">
-                <button type="button" className={btnPrimary} disabled={busy} onClick={() => patch({ positions, notes })}>
+                <button type="button" className={btnPrimary} disabled={busy}
+                  onClick={() => patch({ positions, notes, time_tracking: tracking, works_through: company.trim() })}>
                   {busy ? 'Saving…' : 'Save'}
                 </button>
-                <button type="button" className={btnGhost} onClick={() => { setEditing(false); setPositions(m.positions || []); setNotes(m.notes || ''); }}>
+                <button type="button" className={btnGhost} onClick={() => {
+                  setEditing(false); setPositions(m.positions || []); setNotes(m.notes || '');
+                  setTracking(m.time_tracking || 'venue'); setCompany(m.works_through || '');
+                }}>
                   Cancel
                 </button>
               </div>
@@ -550,9 +597,14 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
     const term = q.trim().toLowerCase();
     if (!term) return members;
     return members.filter((m) =>
-      `${m.first_name} ${m.last_name} ${m.email || ''} ${m.phone || ''} ${(m.positions || []).join(' ')}`.toLowerCase().includes(term)
+      `${m.first_name} ${m.last_name} ${m.email || ''} ${m.phone || ''} ${(m.positions || []).join(' ')} ${m.works_through || ''}`.toLowerCase().includes(term)
     );
   }, [members, q]);
+  // Phase 35: company names already used on this team (suggested when editing someone)
+  const companies = useMemo(
+    () => [...new Set(members.map((m) => m.works_through).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [members]
+  );
 
   const updated = (member) => {
     setMembers((prev) =>
@@ -568,7 +620,7 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter your team by name, phone or position" className={`${inputCls} pl-9`} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter your team by name, phone, position or company" className={`${inputCls} pl-9`} />
         </div>
         <div className="flex bg-slate-800 border border-slate-700 rounded-xl p-0.5 overflow-x-auto">
           {FILTERS.map(([id, label]) => (
@@ -621,6 +673,7 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
               venueId={venueId}
               timeZone={timeZone}
               positionOptions={positionOptions}
+              companies={companies}
               open={openId === m.worker_id}
               onToggle={() => setOpenId(openId === m.worker_id ? null : m.worker_id)}
               onUpdated={updated}

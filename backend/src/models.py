@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, Numeric,
     DateTime, ForeignKey, ARRAY, CheckConstraint, UniqueConstraint,   # Phase 34.5: no SQLAlchemy Enum (no native PG ENUMs)
-    Date, SmallInteger, LargeBinary,
+    Date, SmallInteger, LargeBinary, Index,                           # Phase 35: Index
 )
 from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
 from sqlalchemy.orm import relationship
@@ -130,6 +130,13 @@ class Venue(Base):
     clock_in_early_minutes = Column(Integer, nullable=False, default=30)       # Phase 27
     auto_clock_out_hours = Column(Integer, nullable=False, default=2)          # Phase 27
     allow_public_cover = Column(Boolean, nullable=False, default=True)         # Phase 34
+    team_time_tracking = Column(String(20), nullable=False, default="shiftboard")   # Phase 35: shiftboard | payroll
+    ot_weekly_hours = Column(Numeric(5, 2), nullable=True, default=40)             # Phase 35: None = off
+    ot_daily_hours = Column(Numeric(5, 2), nullable=True)                          # Phase 35: None = off
+    work_week_start = Column(SmallInteger, nullable=False, default=0)              # Phase 35: 0 = Monday
+    pay_period = Column(String(20), nullable=False, default="weekly")              # Phase 35
+    pay_period_anchor = Column(Date, nullable=True)                                # Phase 35: biweekly
+    pay_period_approval = Column(Boolean, nullable=False, default=True)            # Phase 35
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -188,6 +195,8 @@ class VenueWhitelist(Base):
     status = Column(String(20), nullable=False, default="active")            # Phase 29: active | removed | blocked
     positions = Column(ARRAY(String), nullable=False, default=list)          # Phase 29
     source = Column(String(20), nullable=False, default="manager")           # Phase 29: manager | invite | import | admin
+    time_tracking = Column(String(20), nullable=True)                        # Phase 35: payroll | shiftboard | None = venue setting
+    works_through = Column(String(120), nullable=True)                       # Phase 35: staffing company / agency
     added_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -389,6 +398,7 @@ class ShiftRequest(Base):
     outside_department = Column(Boolean, nullable=False, default=False)  # Phase 32.2: outside their departments (needs a manager)
     pay_rate = Column(Numeric(10, 2), nullable=True)
     info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
+    time_tracking = Column(String(20), nullable=True)                       # Phase 35: written when the shift starts
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -737,3 +747,26 @@ class WaitlistEntry(Base):
     closed_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PayPeriodApproval(Base):
+    """Phase 35: a pay period a manager approved. While status == 'approved' its times are locked."""
+    __tablename__ = "pay_period_approvals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    status = Column(String(20), nullable=False, default="approved")           # approved | reopened
+    people = Column(Integer, nullable=False, default=0)
+    total_hours = Column(Numeric(10, 2), nullable=False, default=0)
+    overtime_hours = Column(Numeric(10, 2), nullable=False, default=0)
+    total_pay = Column(Numeric(12, 2), nullable=False, default=0)
+    approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    reopened_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reopened_at = Column(DateTime(timezone=True), nullable=True)
+    reopen_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_pay_period_approvals_venue", "venue_id", "start_date"),)

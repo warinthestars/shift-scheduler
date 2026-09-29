@@ -26,6 +26,8 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
     score = 100 * (on_time + 0.5 * late) / (completed + no_show + late_drop)
     Returns score=None when the worker has zero commitments.
     Shifts that have not ended yet are ignored. Drops with >= 72h notice are excused.
+    Phase 35: a shift whose time the venue's own payroll tracks has no ShiftBoard clock-in; it counts as worked
+    and on time unless a manager marked a no-show.
     """
     if not worker_ids:
         return {}
@@ -45,6 +47,8 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
             ShiftRequest.check_in_time,
             Shift.start_time,
             Shift.end_time,
+            ShiftRequest.time_tracking,          # Phase 35
+            Shift.venue_id,
         )
         .join(Shift, ShiftRequest.shift_id == Shift.id)
         .where(
@@ -64,7 +68,11 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
     )).all()
     first_clock_in = {(w, s): _aware(t) for w, s, t in te_rows}
 
-    for worker_id, shift_id, req_status, dropped_at, check_in_time, start_time, end_time in rows:
+    # Phase 35: time-tracking mode for finished shifts with no clock-in (written at the start; else current settings)
+    from src.services.time_tracking import live_modes, PAYROLL, MODES
+    live = await live_modes(db, [(r[8], r[0]) for r in rows if r[7] not in MODES])
+
+    for worker_id, shift_id, req_status, dropped_at, check_in_time, start_time, end_time, tracking, venue_id in rows:
         st = stats.get(worker_id)
         if st is None:
             continue
@@ -86,7 +94,11 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
             continue  # shift not finished yet
 
         clock_in = first_clock_in.get((worker_id, shift_id)) or _aware(check_in_time)
-        if clock_in is None:
+        mode = tracking if tracking in MODES else live.get((venue_id, worker_id))
+        if clock_in is None and mode == PAYROLL:
+            st["completed"] += 1                 # Phase 35: worked, tracked by the venue's payroll
+            st["on_time"] += 1
+        elif clock_in is None:
             st["no_show"] += 1
         else:
             st["completed"] += 1

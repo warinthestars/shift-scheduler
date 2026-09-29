@@ -104,6 +104,15 @@ async def clock_in(db: AsyncSession, user: User, shift_id, body: Optional[ClockB
     if req is None:
         raise HTTPException(status_code=400, detail="You're not booked on this shift.")
 
+    # Phase 35: the venue's own payroll system tracks this person's time
+    from src.services.time_tracking import mode_for, PAYROLL
+    if await mode_for(db, req, shift) == PAYROLL:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At {venue.name} your time is tracked by the venue's own payroll system, so you don't clock in "
+                   "in ShiftBoard. Use the venue's time clock.",
+        )
+
     open_entry = await db.scalar(
         select(TimeEntry).where(
             TimeEntry.shift_id == shift.id,

@@ -13,6 +13,7 @@ const STATE = {
   done: { label: 'Done', cls: 'bg-slate-800 text-slate-300 border-slate-700' },
   missed: { label: 'Never clocked in', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/30' },
   no_show: { label: 'No-show', cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30 line-through' },
+  payroll: { label: 'Venue payroll', cls: 'bg-violet-500/10 text-violet-300 border-violet-500/30' },   // Phase 35: no clock-in here
 };
 
 function minutesText(m) {
@@ -131,8 +132,10 @@ export default function TodayEventCard({
                   if (p.clock_state === 'in') sub = `Since ${fmtTime(p.clock_in_time, timeZone)}${p.late_minutes ? ` · ${p.late_minutes} min late` : ''}`;
                   if (p.clock_state === 'done') sub = `${fmtTime(p.clock_in_time, timeZone)} – ${fmtTime(p.clock_out_time, timeZone)}`;
                   if (p.clock_state === 'missed') sub = 'Shift ended with no clock-in';
+                  if (p.clock_state === 'payroll') sub = "Clocks in with your venue's own system";   // Phase 35
+                  const started = event.state === 'live' || event.state === 'ended';
                   const canClockIn = ['due', 'late'].includes(p.clock_state);
-                  const canNoShow = ['late', 'missed'].includes(p.clock_state);
+                  const canNoShow = ['late', 'missed'].includes(p.clock_state) || (p.clock_state === 'payroll' && started);
                   return (
                     <li key={p.request_id}
                       className={`flex flex-col sm:flex-row sm:items-center gap-2 p-2 rounded-xl ${

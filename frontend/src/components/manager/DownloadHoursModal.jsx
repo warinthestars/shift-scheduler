@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Download, CalendarRange } from 'lucide-react';
+import api from '../../api/client';
 import ModalShell from '../ModalShell';
 import { downloadFile, rangePresets } from '../../utils/download';
 import { dayText } from '../../utils/earnings';
@@ -8,12 +9,23 @@ import { dayText } from '../../utils/earnings';
  * Phase 33.1: "Download hours" for managers. Pick a range, get a spreadsheet (.csv) of every clock-in with
  * hours and pay before tips. Times and dates are in the venue's own time zone.
  * Props: venueId, venueName, onClose(), onDone(message), onError(message)
+ * Phase 35: optional staffing-company filter; the file also has Regular hours, Overtime hours and Works through.
  */
 export default function DownloadHoursModal({ venueId, venueName, onClose, onDone, onError }) {
   const presets = rangePresets();
   const [pick, setPick] = useState('last_week');
   const [custom, setCustom] = useState({ start: presets[1].start, end: presets[1].end });
   const [busy, setBusy] = useState(false);
+  const [companies, setCompanies] = useState([]);   // Phase 35
+  const [company, setCompany] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    api.get(`/venues/${venueId}/pay-periods`, { params: { count: 1 } })
+      .then((res) => active && setCompanies(res.data?.companies || []))
+      .catch(() => active && setCompanies([]));
+    return () => { active = false; };
+  }, [venueId]);
 
   const range = pick === 'custom' ? custom : presets.find((p) => p.id === pick);
   const invalid = pick === 'custom' && (!custom.start || !custom.end || custom.end < custom.start);
@@ -24,7 +36,9 @@ export default function DownloadHoursModal({ venueId, venueName, onClose, onDone
       const params = {};
       if (range.start) params.start = range.start;
       if (range.end) params.end = range.end;
-      await downloadFile(`/venues/${venueId}/payroll/export`, params, 'hours-and-pay.csv');
+      if (company) params.company = company;                                       // Phase 35
+      const safe = company ? `-${company.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}` : '';
+      await downloadFile(`/venues/${venueId}/payroll/export`, params, `hours-and-pay${safe}.csv`);
       onDone('Hours downloaded. Open it in Excel, Numbers or Google Sheets.');
       onClose();
     } catch (err) {
@@ -76,9 +90,19 @@ export default function DownloadHoursModal({ venueId, venueName, onClose, onDone
           </div>
         )}
         {invalid && <p className="text-xs text-rose-300">Pick an end date on or after the start date.</p>}
+        {companies.length > 0 && (
+          <label className="block text-xs font-semibold text-slate-300">Who
+            <select value={company} onChange={(e) => setCompany(e.target.value)}
+              className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white">
+              <option value="">Everyone</option>
+              {companies.map((c) => <option key={c} value={c}>Only people who work through {c}</option>)}
+            </select>
+          </label>
+        )}
         <p className="text-xs text-slate-400">
           {range.start ? `${dayText(range.start)} – ${dayText(range.end)}` : 'All clock-ins at this venue'}. Weeks start on Monday. Times are in
-          the venue's time zone. Tips aren't included yet.
+          the venue's time zone. Overtime follows your Time & pay settings. People your venue's own payroll tracks don't clock in
+          here, so they aren't in this file. Tips aren't included yet.
         </p>
       </div>
     </ModalShell>

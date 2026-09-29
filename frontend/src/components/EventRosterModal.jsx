@@ -205,6 +205,18 @@ export default function EventRosterModal({
                                   <AlertTriangle className="w-3 h-3" /> Has time off during this shift{p.time_off_reason ? ` · “${p.time_off_reason}”` : ''}
                                 </div>
                               )}
+                              {/* Phase 35: time tracking + staffing company */}
+                              {(p.time_tracking === 'payroll' || p.works_through) && (
+                                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                  {p.time_tracking === 'payroll' && (
+                                    <span title="Their time is tracked by your venue's own payroll. They don't clock in here."
+                                      className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-500/10 text-violet-300 border border-violet-500/30">Venue payroll</span>
+                                  )}
+                                  {p.works_through && (
+                                    <span title="Works through this company" className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-300 border border-sky-500/30">{p.works_through}</span>
+                                  )}
+                                </div>
+                              )}
                               <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
                                 {p.phone && <a href={`tel:${p.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{p.phone}</a>}
                                 {p.email && <a href={`mailto:${p.email}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Mail className="w-3 h-3" />{p.email}</a>}

@@ -100,6 +100,8 @@ async def build_worker_calendar(
     )).all()
     if not rows:
         return WorkerCalendarResponse(range_start=range_start, range_end=range_end, unread_count=0, items=[])
+    from src.services.time_tracking import modes_for_requests                     # Phase 35
+    tracking = await modes_for_requests(db, rows)
 
     shifts = [s for _, s in rows]
     event_ids = {s.event_id for s in shifts if s.event_id}
@@ -183,6 +185,7 @@ async def build_worker_calendar(
             location_staff_notes=loc_staff if booked else None,
             geofence_on=geofence_on(event, venue),
             clock_in_opens_at=clock_in_opens_at(s, venue),
+            time_tracking=tracking.get(req.id, "shiftboard"),                    # Phase 35
             time_entry_id=open_entries.get(s.id),
             hourly_rate=float(s.hourly_rate) if (show_pay and s.hourly_rate is not None) else None,
             hourly_rate_max=float(s.hourly_rate_max) if (show_pay and s.hourly_rate_max is not None) else None,

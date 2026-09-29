@@ -194,8 +194,15 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
             </div>
             {item.booked && !off && (
               <div className="pl-6 text-[11px] text-slate-400 space-y-0.5">
-                {item.clock_in_opens_at && <div>Clock-in opens at {fmtTime(item.clock_in_opens_at, tz)}.</div>}
-                {item.geofence_on && <div>You'll need to be at this location with phone location on to clock in.</div>}
+                {item.time_tracking === 'payroll' ? (
+                  // Phase 35: the venue's own payroll tracks this shift
+                  <div className="text-violet-200">{item.venue?.name || 'This venue'} tracks your hours with its own time clock or payroll. Clock in there, not in ShiftBoard.</div>
+                ) : (
+                  <>
+                    {item.clock_in_opens_at && <div>Clock-in opens at {fmtTime(item.clock_in_opens_at, tz)}.</div>}
+                    {item.geofence_on && <div>You'll need to be at this location with phone location on to clock in.</div>}
+                  </>
+                )}
               </div>
             )}
             <div className="flex flex-wrap gap-2 pl-6">

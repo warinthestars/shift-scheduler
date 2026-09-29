@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff, Clock } from 'lucide-react';
+import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff, Clock, Timer, CalendarRange } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import VenueLocationsPanel from './VenueLocationsPanel';
@@ -14,6 +14,20 @@ const POLICIES = [
   { id: 'everyone_auto', title: 'Book anyone instantly', body: 'Anyone who picks up a shift is confirmed right away.' },
 ];
 
+// Phase 35: time tracking, overtime and pay periods
+const TRACKING = [
+  { id: 'shiftboard', title: 'Clock in with ShiftBoard', body: 'Your team clocks in and out here. Their hours show on time sheets, exports and pay periods.' },
+  { id: 'payroll', title: "Your venue's payroll tracks their time", body: "Team members use your own time clock or payroll system. ShiftBoard shows no clock-in button and sends no \"not clocked in\" alerts for them." },
+];
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];   // 0 = Monday
+const PAY_PERIODS = [
+  { id: 'weekly', label: 'Weekly' },
+  { id: 'biweekly', label: 'Every two weeks' },
+  { id: 'semimonthly', label: 'Twice a month (1st and 16th)' },
+  { id: 'monthly', label: 'Monthly' },
+];
+
+const fieldCls = 'px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';   // Phase 35: no width
 const inputCls =
   'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
 const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
@@ -43,6 +57,16 @@ function emptyForm(venue) {
     default_shift_notes: venue?.default_shift_notes || '',
     description: venue?.description || '',
     manager_email: '',
+    // Phase 35
+    team_time_tracking: venue?.team_time_tracking || 'shiftboard',
+    ot_weekly_on: venue ? venue.ot_weekly_hours != null : true,
+    ot_weekly_hours: String(venue?.ot_weekly_hours ?? 40),
+    ot_daily_on: venue?.ot_daily_hours != null,
+    ot_daily_hours: String(venue?.ot_daily_hours ?? 8),
+    work_week_start: String(venue?.work_week_start ?? 0),
+    pay_period: venue?.pay_period || 'weekly',
+    pay_period_anchor: venue?.pay_period_anchor || '',
+    pay_period_approval: venue?.pay_period_approval ?? true,
   };
 }
 
@@ -282,6 +306,24 @@ export default function VenueSettingsModal({
       default_shift_notes: form.default_shift_notes,
       description: form.description,
     };
+    // Phase 35: time & pay
+    const otWeekly = parseFloat(form.ot_weekly_hours);
+    const otDaily = parseFloat(form.ot_daily_hours);
+    if (form.ot_weekly_on && (Number.isNaN(otWeekly) || otWeekly < 1 || otWeekly > 168)) {
+      setTab('timepay');
+      return setError('Weekly overtime must start between 1 and 168 hours.');
+    }
+    if (form.ot_daily_on && (Number.isNaN(otDaily) || otDaily < 1 || otDaily > 24)) {
+      setTab('timepay');
+      return setError('Daily overtime must start between 1 and 24 hours.');
+    }
+    payload.team_time_tracking = form.team_time_tracking;
+    payload.ot_weekly_hours = form.ot_weekly_on ? otWeekly : null;
+    payload.ot_daily_hours = form.ot_daily_on ? otDaily : null;
+    payload.work_week_start = parseInt(form.work_week_start, 10) || 0;
+    payload.pay_period = form.pay_period;
+    if (form.pay_period === 'biweekly' && form.pay_period_anchor) payload.pay_period_anchor = form.pay_period_anchor;
+    payload.pay_period_approval = !!form.pay_period_approval;
     if (lat !== null) {
       payload.lat = lat;
       payload.lng = lng;
@@ -328,6 +370,7 @@ export default function VenueSettingsModal({
     <div className="flex flex-wrap gap-2">
       {[
         { id: 'details', label: 'Details' },
+        { id: 'timepay', label: 'Time & pay periods' },   // Phase 35
         { id: 'positions', label: 'Positions & pay' },
         { id: 'locations', label: 'Locations' },
         { id: 'templates', label: 'Event templates' },   // Phase 29.3
@@ -343,9 +386,9 @@ export default function VenueSettingsModal({
   const footer = (
     <>
       <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">
-        {tab === 'details' ? 'Cancel' : 'Done'}
+        {tab === 'details' || tab === 'timepay' ? 'Cancel' : 'Done'}
       </button>
-      {tab === 'details' && (
+      {(tab === 'details' || tab === 'timepay') && (
         <button type="button" onClick={handleSave} disabled={saving}
           className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
           {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create venue'}
@@ -568,6 +611,8 @@ export default function VenueSettingsModal({
             </div>
           </div>
         </div>
+      ) : tab === 'timepay' ? (
+        <TimePayTab form={form} setForm={setForm} set={set} />
       ) : tab === 'locations' ? (
         <VenueLocationsPanel venue={venue} onError={setError} />
       ) : tab === 'templates' ? (
@@ -635,5 +680,109 @@ export default function VenueSettingsModal({
         </div>
       )}
     </ModalShell>
+  );
+}
+
+// Phase 35: how time is tracked, overtime rules and pay periods. Saved with "Save changes" like Details.
+function TimePayTab({ form, setForm, set }) {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="space-y-4">
+        <div className={cardCls}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <Timer className="w-4 h-4 text-emerald-400" /> How your team's time is tracked
+          </div>
+          <div className="grid gap-2">
+            {TRACKING.map((t) => (
+              <label key={t.id}
+                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${form.team_time_tracking === t.id ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'}`}>
+                <input type="radio" name="team_time_tracking" value={t.id} checked={form.team_time_tracking === t.id}
+                  onChange={set('team_time_tracking')} className="mt-1 text-emerald-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-white">{t.title}</span>
+                  <span className="block text-xs text-slate-400">{t.body}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <p className="text-[11px] text-slate-500 flex items-start gap-1.5">
+            <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            <span>
+              This is for people on your team. People booked from outside your team, and team members who work through
+              a staffing company, always clock in with ShiftBoard. You can change any one person under Team → Edit.
+              A shift keeps the setting it had when it started, so changing this later doesn't rewrite past hours.
+            </span>
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className={cardCls}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <Clock className="w-4 h-4 text-emerald-400" /> Overtime flags
+          </div>
+          <p className="text-[11px] text-slate-500">
+            ShiftBoard marks hours past these limits as overtime on time sheets, pay periods and the hours download.
+            It doesn't change the pay it shows. Only hours clocked in ShiftBoard count.
+          </p>
+          <label className="flex items-center gap-3 flex-wrap">
+            <input type="checkbox" checked={!!form.ot_weekly_on} onChange={(e) => setForm({ ...form, ot_weekly_on: e.target.checked })}
+              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+            <span className="text-sm text-white">Over</span>
+            <input type="number" min="1" max="168" step="0.5" aria-label="Weekly overtime hours" disabled={!form.ot_weekly_on}
+              value={form.ot_weekly_hours} onChange={set('ot_weekly_hours')} className={`${fieldCls} w-20 disabled:opacity-40`} />
+            <span className="text-sm text-white">hours in a work week</span>
+          </label>
+          <label className="flex items-center gap-3 flex-wrap">
+            <input type="checkbox" checked={!!form.ot_daily_on} onChange={(e) => setForm({ ...form, ot_daily_on: e.target.checked })}
+              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+            <span className="text-sm text-white">Over</span>
+            <input type="number" min="1" max="24" step="0.5" aria-label="Daily overtime hours" disabled={!form.ot_daily_on}
+              value={form.ot_daily_hours} onChange={set('ot_daily_hours')} className={`${fieldCls} w-20 disabled:opacity-40`} />
+            <span className="text-sm text-white">hours in a day</span>
+          </label>
+          <div>
+            <label className={labelCls} htmlFor="work-week-start">Work week starts on</label>
+            <select id="work-week-start" value={form.work_week_start} onChange={set('work_week_start')} className={`${fieldCls} w-44`}>
+              {WEEKDAYS.map((d, i) => <option key={d} value={String(i)}>{d}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className={cardCls}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <CalendarRange className="w-4 h-4 text-emerald-400" /> Pay periods
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls} htmlFor="pay-period">How often you pay</label>
+              <select id="pay-period" value={form.pay_period} onChange={set('pay_period')} className={inputCls}>
+                {PAY_PERIODS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </div>
+            {form.pay_period === 'biweekly' && (
+              <div>
+                <label className={labelCls} htmlFor="pay-anchor">First day of any pay period</label>
+                <input id="pay-anchor" type="date" value={form.pay_period_anchor} onChange={set('pay_period_anchor')} className={inputCls} />
+                <p className="text-[11px] text-slate-500 mt-1">Blank = starts this work week.</p>
+              </div>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-500">Weekly periods start on the work-week day above.</p>
+          <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-slate-800">
+            <input type="checkbox" checked={!!form.pay_period_approval}
+              onChange={(e) => setForm({ ...form, pay_period_approval: e.target.checked })}
+              className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+            <span>
+              <span className="block text-sm font-semibold text-white">Approve and lock each pay period</span>
+              <span className="block text-xs text-slate-400">
+                After a period ends, a manager approves it on the Pay periods screen. Approved periods are locked: nobody can
+                change their times or pay rates until a manager reopens them with a reason.
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>
   );
 }

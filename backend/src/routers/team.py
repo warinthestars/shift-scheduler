@@ -147,6 +147,10 @@ async def build_team(
             elif c.status == "unverified":
                 cert_wait[c.worker_id] = cert_wait.get(c.worker_id, 0) + 1
 
+    # Phase 35: time tracking (team members' venue default + this person's setting) and staffing company
+    from src.services.time_tracking import resolve
+    venue_mode = await db.scalar(select(Venue.team_time_tracking).where(Venue.id == venue_id))
+
     out = []
     for wid, u in users.items():
         row = rows.get(wid)
@@ -178,6 +182,9 @@ async def build_team(
             added_at=row.created_at if row is not None else None,
             certs=sorted(cert_ok.get(wid, [])),
             cert_attention=cert_wait.get(wid, 0),
+            time_tracking=row.time_tracking if row is not None else None,              # Phase 35
+            effective_time_tracking=resolve(venue_mode, row),
+            works_through=row.works_through if row is not None else None,
         ))
     out.sort(key=lambda m: ((m.first_name or "").lower(), (m.last_name or "").lower()))
     return out
@@ -341,6 +348,15 @@ async def update_member(
             row.positions = _clean_positions(data["positions"])
         if "notes" in data:
             row.notes = (data["notes"] or "").strip()[:2000] or None
+        # Phase 35: time tracking + staffing company (upcoming bookings follow; started ones keep what applied)
+        if "time_tracking" in data:
+            tt = (data["time_tracking"] or "venue").strip().lower()
+            if tt not in ("venue", "payroll", "shiftboard"):
+                raise HTTPException(status_code=400, detail="Choose how this person's time is tracked.")
+            row.time_tracking = None if tt == "venue" else tt
+        if "works_through" in data:
+            from src.services.time_tracking import clean_company
+            row.works_through = clean_company(data["works_through"])
 
         if new_status == "blocked":
             # Waiting requests at this venue are declined; open offers are withdrawn.
@@ -373,6 +389,15 @@ async def update_member(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not save: {e}")
 
+    if "time_tracking" in data or "works_through" in data:                          # Phase 35
+        bits = []
+        if "time_tracking" in data:
+            bits.append({"payroll": "time tracked by the venue's payroll", "shiftboard": "clocks in with ShiftBoard"}
+                        .get(row.time_tracking, "time tracking follows the venue setting"))
+        if "works_through" in data:
+            bits.append(f"works through {row.works_through}" if row.works_through else "no staffing company")
+        await activity.for_worker("team_tracking", venue_id, worker_id, current_user.id,
+                                  "{name}: " + ", ".join(bits).replace("{", "{{").replace("}", "}}"))
     if new_status is not None:
         await activity.for_worker(
             "team_status", venue_id, worker_id, current_user.id,

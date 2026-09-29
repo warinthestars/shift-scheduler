@@ -121,14 +121,25 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
   * book back someone who dropped
   * remove someone, mark a no-show
 * **Team**: members, positions, notes, blocking, invites (email / link / QR / CSV), ratings and reviews.
-* **Time sheets**: fix clock-in / clock-out times (every edit is logged). Download hours and pay as CSV in the venue's time zone.
+* **Time sheets**: fix clock-in / clock-out times (every edit is logged). Download hours and pay as CSV in the venue's time zone, for everyone or one staffing company.
+* **Time tracking: ShiftBoard or venue payroll** (Phase 35, `services/time_tracking.py`):
+  * Each venue chooses how **team members'** time is tracked: they clock in with ShiftBoard, or the venue's own payroll / time clock tracks them.
+  * Each team member can be set differently, and can be marked as working through a **staffing company** (overhire / agency). People from a staffing company, and anyone booked from outside the team, clock in with ShiftBoard unless a manager says otherwise.
+  * First match wins: the person's own setting → works through a company (ShiftBoard) → on the team and the venue uses payroll (payroll) → ShiftBoard.
+  * Payroll-tracked people get no clock-in button and no "not clocked in" alerts. The shift counts as worked for reliability unless a manager marks a no-show. Their hours aren't in time sheets, exports or Hours & pay; pay periods list them separately with scheduled hours.
+  * When a shift starts, the background worker writes the mode on the booking (`shift_requests.time_tracking`), so later settings changes never rewrite past hours.
+* **Overtime flags and pay periods** (Phase 35, `services/pay_periods.py`, `routers/pay_periods.py`):
+  * Per venue: weekly overtime limit (default 40 h), optional daily limit, the day the work week starts, and the pay period (weekly, every two weeks, twice a month, monthly).
+  * Overtime is flagged and counted (time sheets, pay periods, the hours download). ShiftBoard doesn't add an overtime premium to pay.
+  * **Pay periods** screen: totals per person and per period. When approving is on, a finished period is **approved and locked**: nobody can add, edit or delete times or change pay rates in it until a manager reopens it with a reason. Approvals keep a snapshot of the totals and are logged.
 * **Reliability scoring** (`services/reliability.py`):
   * The score is `100 × (on-time + ½ × late) ÷ (worked + no-shows + late drops)`, across the whole platform.
   * Late means clocking in more than 10 minutes after the start.
   * Drops with 72 hours' notice or more are excused.
   * Managers see it as a badge next to each person.
 * **Activity log** of every booking, change and approval. **Venue settings**:
-  * address, clock-in area, clock-in rules
+  * address, website, clock-in area, clock-in rules
+  * time tracking, overtime and pay periods (Time & pay periods tab)
   * approval policy, public cover
   * positions & pay, locations, templates
 
@@ -152,6 +163,7 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
 ### Background worker
 * Runs inside the backend container: `backend/src/main.py` starts `notification_worker_loop()` from the FastAPI lifespan with `asyncio.create_task()`.
 * Every minute:
+  * record how each started shift's time is tracked (ShiftBoard or venue payroll)
   * auto clock-out
   * 24 h / 2 h reminders
   * "not clocked in" alerts

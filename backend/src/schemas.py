@@ -178,6 +178,13 @@ class VenueBase(BaseModel):
     clock_in_early_minutes: int = 30        # Phase 27
     auto_clock_out_hours: int = 2           # Phase 27
     allow_public_cover: bool = True         # Phase 34
+    team_time_tracking: str = "shiftboard"  # Phase 35: shiftboard | payroll (team members' default)
+    ot_weekly_hours: Optional[float] = 40   # Phase 35: None = off
+    ot_daily_hours: Optional[float] = None  # Phase 35: None = off
+    work_week_start: int = 0                # Phase 35: 0 = Monday ... 6 = Sunday
+    pay_period: str = "weekly"              # Phase 35: weekly | biweekly | semimonthly | monthly
+    pay_period_anchor: Optional[date] = None  # Phase 35: biweekly only
+    pay_period_approval: bool = True        # Phase 35: approve and lock each pay period
 
 class VenueCreate(BaseModel):
     name: str
@@ -226,6 +233,13 @@ class VenueUpdateSettings(BaseModel):
     clock_in_early_minutes: Optional[int] = None      # Phase 27
     auto_clock_out_hours: Optional[int] = None        # Phase 27
     allow_public_cover: Optional[bool] = None         # Phase 34
+    team_time_tracking: Optional[str] = None          # Phase 35
+    ot_weekly_hours: Optional[float] = None           # Phase 35: send null to turn it off
+    ot_daily_hours: Optional[float] = None            # Phase 35: send null to turn it off
+    work_week_start: Optional[int] = None             # Phase 35
+    pay_period: Optional[str] = None                  # Phase 35
+    pay_period_anchor: Optional[date] = None          # Phase 35
+    pay_period_approval: Optional[bool] = None        # Phase 35
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -499,6 +513,9 @@ class RosterPerson(BaseModel):
     time_off_reason: Optional[str] = None        # Phase 32.1: the block's reason (managers see it)
     outside_department: bool = False             # Phase 32.2: their request is outside their departments
     cover: Optional[str] = None                  # Phase 34: open | pending_approval (they asked for cover)
+    time_tracking: Optional[str] = None          # Phase 35: shiftboard | payroll (booked people)
+    works_through: Optional[str] = None          # Phase 35: staffing company, from the team list
+
 
 
 class EventPosition(BaseModel):
@@ -884,6 +901,10 @@ class TimesheetPerson(BaseModel):
     entries: List[TimeEntryRow]
     total_hours: float
     est_pay: float
+    time_tracking: str = "shiftboard"        # Phase 35: payroll = the venue's own system tracks their time
+    works_through: Optional[str] = None      # Phase 35
+    overtime_hours: float = 0                # Phase 35: part of total_hours that is overtime (venue rules)
+
 
 
 class EventTimesheet(BaseModel):
@@ -1050,6 +1071,8 @@ class WorkerCalendarItem(BaseModel):
     clocked_in: bool = False
     cancelled: bool = False
     cancel_reason: Optional[str] = None
+    time_tracking: str = "shiftboard"             # Phase 35: payroll = clock in with the venue's own system
+
 
 
 class WorkerCalendarResponse(BaseModel):
@@ -1186,12 +1209,17 @@ class TeamMember(BaseModel):
     added_at: Optional[datetime] = None
     certs: List[str] = []                    # Phase 32: cert keys that are verified and in date
     cert_attention: int = 0                  # Phase 32: certificates waiting for a check (not verified yet)
+    time_tracking: Optional[str] = None      # Phase 35: this person's setting: payroll | shiftboard | None = venue setting
+    effective_time_tracking: str = "shiftboard"   # Phase 35: what applies to their next booking
+    works_through: Optional[str] = None      # Phase 35: staffing company / agency
 
 
 class TeamMemberUpdate(BaseModel):
     status: Optional[str] = None             # active | removed | blocked
     positions: Optional[List[str]] = None
     notes: Optional[str] = None
+    time_tracking: Optional[str] = None      # Phase 35: payroll | shiftboard | venue (or null) = use the venue setting
+    works_through: Optional[str] = Field(None, max_length=120)   # Phase 35: "" clears it
 
 
 class TeamMemberUpdateResult(BaseModel):
@@ -1749,7 +1777,7 @@ class TonightPerson(BaseModel):
     last_name: str = ""
     phone: Optional[str] = None
     request_status: str                          # approved | confirmed | checked_in | completed | no_show
-    clock_state: str                             # upcoming | due | late | in | done | missed | no_show
+    clock_state: str                             # upcoming | due | late | in | done | missed | no_show | payroll (Phase 35)
     clock_in_time: Optional[datetime] = None     # first clock-in
     clock_out_time: Optional[datetime] = None    # last clock-out (when done)
     late_minutes: int = 0                        # late: minutes past start right now; in/done: recorded lateness
@@ -2025,6 +2053,9 @@ class EarningsResponse(BaseModel):
     venues: List[EarningsVenue] = []
     shifts: List[EarningsShift] = []         # newest first
     upcoming: EarningsUpcoming = EarningsUpcoming()
+    payroll_shifts: int = 0                  # Phase 35: shifts in the period tracked by a venue's own payroll (not counted here)
+    payroll_venues: List[str] = []           # Phase 35
+
 
 
 
@@ -2113,6 +2144,70 @@ class WaitlistActionResult(BaseModel):
     message: str
     entry_id: Optional[UUID] = None
     request_id: Optional[UUID] = None
+
+
+# ------------------------------------------------------------------------------------------------
+# Phase 35: Pay periods
+# ------------------------------------------------------------------------------------------------
+class PayPeriodPerson(BaseModel):
+    worker_id: UUID
+    name: str
+    email: Optional[str] = None
+    works_through: Optional[str] = None
+    shifts: int = 0
+    hours: float = 0
+    regular_hours: float = 0
+    overtime_hours: float = 0
+    pay: float = 0                           # hours x rate (overtime premium not added; that's the payroll's job)
+    open_entries: int = 0                    # still clocked in / never clocked out
+    edited_entries: int = 0
+    outside_area: int = 0
+    auto_closed: int = 0
+
+
+class PayPeriodPayrollPerson(BaseModel):
+    worker_id: UUID
+    name: str
+    shifts: int = 0
+    scheduled_hours: float = 0               # from the posted times (their real hours are in the venue's payroll)
+
+
+class PayPeriodSummary(BaseModel):
+    start_date: date
+    end_date: date
+    label: str
+    state: str                               # current | ready | approved | not_required | empty (nobody worked)
+    can_approve: bool = False
+    blocked_reason: Optional[str] = None     # why it can't be approved yet
+    people: int = 0
+    total_hours: float = 0
+    overtime_hours: float = 0
+    total_pay: float = 0
+    open_entries: int = 0
+    payroll_people: int = 0
+    payroll_shifts: int = 0
+    approved_at: Optional[datetime] = None
+    approved_by: Optional[str] = None
+    last_reopened_at: Optional[datetime] = None
+    last_reopen_reason: Optional[str] = None
+
+
+class PayPeriodDetail(PayPeriodSummary):
+    rows: List[PayPeriodPerson] = []
+    payroll_rows: List[PayPeriodPayrollPerson] = []
+
+
+class PayPeriodList(BaseModel):
+    pay_period: str
+    approval_on: bool
+    overtime_text: str                       # "Over 40 h a week" / "Off"
+    timezone: str
+    companies: List[str] = []                # for the company filter
+    periods: List[PayPeriodSummary] = []
+
+
+class PayPeriodReopenBody(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
 
 
 WorkerProfile.model_rebuild()

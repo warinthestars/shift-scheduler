@@ -183,6 +183,19 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
                     <span className="text-sm font-semibold text-white">{p.name}</span>
                     <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-bold uppercase">{p.role_type}</span>
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${st.cls}`}>{st.label}</span>
+                    {/* Phase 35 */}
+                    {p.time_tracking === 'payroll' && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-violet-500/10 text-violet-300 border-violet-500/30">Venue payroll</span>
+                    )}
+                    {p.works_through && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-sky-500/10 text-sky-300 border-sky-500/30">{p.works_through}</span>
+                    )}
+                    {p.overtime_hours > 0 && (
+                      <span title="Hours past the venue's overtime limits (Venue settings → Time & pay periods)"
+                        className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-orange-500/10 text-orange-300 border-orange-500/40">
+                        OT {p.overtime_hours.toFixed(2)} h
+                      </span>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-3 text-xs">
                     <button type="button"
@@ -219,6 +232,11 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
                   </div>
                 )}
 
+                {p.time_tracking === 'payroll' && p.entries.length === 0 && (
+                  <p className="mt-2 text-[11px] text-violet-200/80">
+                    Their hours are tracked in your venue's own payroll, so there's nothing to clock here. Times you add still count in ShiftBoard.
+                  </p>
+                )}
                 {!formHere && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button type="button"

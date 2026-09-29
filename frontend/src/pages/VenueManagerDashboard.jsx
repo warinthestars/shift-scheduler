@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, X, LayoutTemplate,
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, X, LayoutTemplate, CalendarRange,
 } from 'lucide-react';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
@@ -16,6 +16,7 @@ import TimesheetModal from '../components/TimesheetModal';
 import TeamModal from '../components/TeamModal';
 import ReviewModal from '../components/ReviewModal';
 import DownloadHoursModal from '../components/manager/DownloadHoursModal';   // Phase 33.1
+import PayPeriodsModal from '../components/manager/PayPeriodsModal';         // Phase 35
 import ActivityFeed from '../components/ActivityFeed';
 import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
 import { WorkerProfileModal } from '../components/WorkerProfilePanel';
@@ -51,6 +52,7 @@ export default function VenueManagerDashboard() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
   const [showDownload, setShowDownload] = useState(false);   // Phase 33.1: Download hours (pick a date range)
+  const [showPayPeriods, setShowPayPeriods] = useState(false);   // Phase 35: approve / lock pay periods
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [notification, setNotification] = useState(null);
 
@@ -432,6 +434,9 @@ export default function VenueManagerDashboard() {
             <button type="button" onClick={() => setShowDownload(true)} disabled={!currentVenueId} className={headerBtn}>
               <Download className="w-4 h-4 text-emerald-400" /> Download hours
             </button>
+            <button type="button" onClick={() => setShowPayPeriods(true)} disabled={!currentVenueId} className={headerBtn}>
+              <CalendarRange className="w-4 h-4 text-violet-300" /> Pay periods
+            </button>
             {currentVenueId && (
               <Link to={`/venues/${currentVenueId}`} className={headerBtn}>
                 <Globe className="w-4 h-4 text-sky-400" /> Public page
@@ -610,6 +615,15 @@ export default function VenueManagerDashboard() {
           onClose={() => setShowDownload(false)}
           onDone={(message) => setNotification({ type: 'success', message })}
           onError={(message) => setNotification({ type: 'error', message })}
+        />
+      )}
+
+      {showPayPeriods && currentVenueId && (
+        <PayPeriodsModal
+          venueId={currentVenueId}
+          venueName={venueDetails?.name}
+          onClose={() => setShowPayPeriods(false)}
+          onOpenSettings={venueDetails ? () => { setShowPayPeriods(false); setSettingsTab('timepay'); setShowVenueSettings(true); } : null}
         />
       )}
 

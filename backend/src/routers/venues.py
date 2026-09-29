@@ -255,6 +255,11 @@ async def update_venue_settings(
     try:
         for field, value in data.items():
             setattr(venue, field, value)
+        # Phase 35: every-two-weeks pay with no start date yet -> a period starts this work week
+        if venue.pay_period == "biweekly" and venue.pay_period_anchor is None:
+            from src.services.pay_periods import week_start_for
+            from src.services.fit import tz_of
+            venue.pay_period_anchor = week_start_for(venue, datetime.now(timezone.utc).astimezone(tz_of(venue.timezone)).date())
         await db.commit()
         await db.refresh(venue)
     except HTTPException:
@@ -632,13 +637,14 @@ async def export_venue_payroll_csv(
     venue_id: UUID,
     start: Optional[date] = Query(None, description="Phase 33.1: first day (venue time), optional"),
     end: Optional[date] = Query(None, description="Phase 33.1: last day (venue time), optional"),
+    company: Optional[str] = Query(None, max_length=120, description="Phase 35: only people who work through this company"),
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Phase 19: Hour Tracking & Payroll CSV Export.
     Calculates hours worked for workers at this venue.
     Phase 27: adds work location, clock-in/out location check, late minutes and auto-closed flags.
+    Phase 35: optional company filter; last three columns: Regular hours, Overtime hours, Works through.
     """
     venue = await verify_venue_manager_access(venue_id, current_user, db)
     await auto_close_open_entries(db, venue_id=venue_id)
@@ -661,6 +667,20 @@ async def export_venue_payroll_csv(
     if hi is not None:
         query = query.where(TimeEntry.clock_in_time < hi)
     records = (await db.execute(query)).all()
+
+    # Phase 35: staffing company (from the team list) and overtime under the venue's rules
+    companies = dict((await db.execute(
+        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
+            VenueWhitelist.venue_id == venue_id, VenueWhitelist.works_through.isnot(None))
+    )).all())
+    if company:
+        want = company.strip().lower()
+        records = [r for r in records if (companies.get(r[1].id) or "").lower() == want]
+    ot = {}
+    if records:
+        from src.services.pay_periods import overtime_for, local_date
+        days = [local_date(r[0].clock_in_time, vtz) for r in records]
+        ot = await overtime_for(db, venue, {r[1].id for r in records}, min(days), max(days))
 
     entry_ids = [r[0].id for r in records]
     edited_ids = set()
@@ -697,6 +717,7 @@ async def export_venue_payroll_csv(
         f"Clock in ({_tz_label(vtz)})", f"Clock out ({_tz_label(vtz)})", "Hours",
         "Hourly rate", "Pay before tips", "Gets tips", "Tip pool", "Time changed by a manager",
         "Clock-in location", "Clock-out location", "Minutes late", "Clocked out automatically",
+        "Regular hours", "Overtime hours", "Works through",                        # Phase 35 (added at the end)
     ])
 
     for entry, worker, shift, req in records:
@@ -725,6 +746,8 @@ async def export_venue_payroll_csv(
             geo_text(entry.clock_out_geo_status, entry.clock_out_distance_m),
             clock_late_minutes(entry.clock_in_time, shift.start_time) or "",
             "Yes" if entry.auto_closed else "No",
+            f"{max(0.0, hours - ot.get(entry.id, 0.0)):.2f}", f"{ot.get(entry.id, 0.0):.2f}",   # Phase 35
+            companies.get(worker.id, ""),
         ])
 
     output.seek(0)
@@ -1045,6 +1068,18 @@ async def get_venue_events(
     for ps in assigned_by_shift.values():
         for person in ps:
             person.cover = cover_by_request.get(person.request_id)
+    # Phase 35: time tracking + staffing company on booked people
+    from src.services.time_tracking import modes_for_requests
+    shift_by_id = {s.id: s for s in shifts}
+    tracking = await modes_for_requests(db, [(r, shift_by_id[r.shift_id]) for r, _u in req_rows if r.shift_id in shift_by_id])
+    companies = dict((await db.execute(
+        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
+            VenueWhitelist.venue_id == venue_id, VenueWhitelist.works_through.isnot(None))
+    )).all())
+    for ps in list(assigned_by_shift.values()) + list(requested_by_shift.values()):
+        for person in ps:
+            person.time_tracking = tracking.get(person.request_id)
+            person.works_through = companies.get(person.worker_id)
     waitlist_by_shift = defaultdict(list)
     for e, wu in (await db.execute(
         select(WaitlistEntry, User).join(User, User.id == WaitlistEntry.worker_id)

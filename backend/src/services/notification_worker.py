@@ -10,6 +10,8 @@ Every minute:
   5b. workers: a certificate expires in 30 days, in 7 days, or today (once each; Phase 32)
   5c. cover requests: close stale ones, warn 12 h / 3 h before start if nobody took it (Phase 34)
   5d. waitlists: give opened spots to the next person in line, expire old offers (Phase 34)
+  0.  Phase 35: bookings whose shift started get their time-tracking mode written (payroll | shiftboard),
+      so late alerts, reliability and pay use what applied at the start even if settings change later
   6. send due email / SMS from the outbox
 
 Only one process runs a tick at a time (Redis lock). If Redis is unreachable the tick still runs;
@@ -111,9 +113,13 @@ async def scan_reminders(db: AsyncSession, now: datetime) -> int:
 async def scan_late(db: AsyncSession, now: datetime) -> int:
     sent = 0
     rows = await _booked_rows(db, now - timedelta(hours=24), now - LATE_AFTER, BOOKED_NOT_STARTED)
+    from src.services.time_tracking import modes_for_requests, PAYROLL      # Phase 35
+    modes = await modes_for_requests(db, [(r, s) for r, s, *_ in rows])
     for r, s, ev, venue, loc in rows:
         if _as_utc(s.end_time) <= now:
             continue
+        if modes.get(r.id) == PAYROLL:
+            continue                           # Phase 35: the venue's own payroll tracks their time
         has_entry = await db.scalar(
             select(func.count(TimeEntry.id)).where(TimeEntry.shift_id == s.id, TimeEntry.worker_id == r.worker_id)
         )
@@ -236,6 +242,12 @@ async def scan_expiring_certs(db: AsyncSession, now: datetime) -> int:
     return sent
 
 
+async def scan_tracking(db: AsyncSession, now: datetime) -> int:
+    """Phase 35: write the time-tracking mode on bookings whose shift has started."""
+    from src.services.time_tracking import freeze_started
+    return await freeze_started(db, now)
+
+
 async def scan_cover(db: AsyncSession, now: datetime) -> int:
     """Phase 34: close stale cover posts, then warn the worker + managers 12 h / 3 h before the start."""
     from src.services import cover, notify_cover
@@ -257,7 +269,7 @@ async def run_tick() -> None:
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
         await auto_close_open_entries(db)
-    for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
+    for label, fn in (("tracking", scan_tracking), ("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
                       ("unfilled", scan_unfilled), ("certs", scan_expiring_certs), ("cover", scan_cover)):
         try:
             async with AsyncSessionLocal() as db:

@@ -35,6 +35,7 @@ export default function EarningsCard({ refreshKey = 0 }) {
           <div className="text-[11px] text-slate-400 truncate">
             {data.in_progress > 0 ? 'Clocked in now · ' : ''}
             {up.shifts > 0 ? `${up.shifts} more booked (~${money(up.est_pay)})` : 'Before tips'}
+            {data.payroll_shifts > 0 ? ` · ${data.payroll_shifts} on venue payroll` : ''}
           </div>
         </div>
         <span className="text-xs font-semibold text-emerald-400 inline-flex items-center gap-0.5 flex-shrink-0">

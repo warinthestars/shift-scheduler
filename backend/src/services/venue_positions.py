@@ -24,7 +24,10 @@ NOT_NULL_VENUE_FIELDS = (
     "name", "address", "lat", "lng", "geofence_radius_meters", "timezone", "approval_policy",
     "geofence_enabled", "geofence_buffer_meters", "clock_in_early_minutes", "auto_clock_out_hours",   # Phase 27
     "allow_public_cover",                                                                            # Phase 34
+    "team_time_tracking", "work_week_start", "pay_period", "pay_period_approval",                    # Phase 35
 )
+VALID_TIME_TRACKING = ("shiftboard", "payroll")                                                      # Phase 35
+VALID_PAY_PERIODS = ("weekly", "biweekly", "semimonthly", "monthly")
 TEXT_VENUE_FIELDS = (
     "name", "address", "phone", "arrival_instructions", "dress_code",
     "default_shift_notes", "description", "logo_url", "timezone", "approval_policy",
@@ -115,6 +118,17 @@ def clean_venue_payload(data: dict) -> dict:
         raise HTTPException(status_code=400, detail="Early clock-in must be between 0 and 240 minutes.")
     if "auto_clock_out_hours" in data and not (1 <= int(data["auto_clock_out_hours"]) <= 12):
         raise HTTPException(status_code=400, detail="Auto clock-out must be between 1 and 12 hours after the shift ends.")
+    # Phase 35: time tracking, overtime, pay periods
+    if "team_time_tracking" in data and data["team_time_tracking"] not in VALID_TIME_TRACKING:
+        raise HTTPException(status_code=400, detail="Choose how your team's time is tracked.")
+    if data.get("ot_weekly_hours") is not None and not (1 <= float(data["ot_weekly_hours"]) <= 168):
+        raise HTTPException(status_code=400, detail="Weekly overtime must start between 1 and 168 hours.")
+    if data.get("ot_daily_hours") is not None and not (1 <= float(data["ot_daily_hours"]) <= 24):
+        raise HTTPException(status_code=400, detail="Daily overtime must start between 1 and 24 hours.")
+    if "work_week_start" in data and not (0 <= int(data["work_week_start"]) <= 6):
+        raise HTTPException(status_code=400, detail="Pick the day your work week starts.")
+    if "pay_period" in data and data["pay_period"] not in VALID_PAY_PERIODS:
+        raise HTTPException(status_code=400, detail="Choose how often you pay: weekly, every two weeks, twice a month or monthly.")
     if data.get("auto_approve_rating_threshold") is not None:
         t = float(data["auto_approve_rating_threshold"])
         if not (1.0 <= t <= 5.0):

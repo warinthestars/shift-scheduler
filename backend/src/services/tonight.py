@@ -11,6 +11,7 @@ build_tonight() returns, for one venue:
              done     - clocked out
              missed   - shift ended, never clocked in, not marked no-show yet
              no_show  - marked no-show
+             payroll  - Phase 35: the venue's own payroll tracks their time (no ShiftBoard clock-in expected)
   alerts : what needs the manager right now, most urgent first
   week   : today + the next 6 days at a glance (drafts included, flagged)
 """
@@ -59,10 +60,12 @@ def _key(s: Shift) -> str:
     return str(s.event_id) if s.event_id else f"{s.title}|{as_utc(s.start_time).isoformat()}|{as_utc(s.end_time).isoformat()}"
 
 
-def clock_state(req_status: str, entries: list, shift: Shift, venue: Venue, now: datetime):
+def clock_state(req_status: str, entries: list, shift: Shift, venue: Venue, now: datetime, payroll: bool = False):
     """Returns (state, late_minutes, first_in, last_out)."""
     if req_status == "no_show":
         return "no_show", 0, None, None
+    if payroll and not entries:
+        return "payroll", 0, None, None          # Phase 35
     start, end = as_utc(shift.start_time), as_utc(shift.end_time)
     if entries:
         first_in = min(as_utc(e.clock_in_time) for e in entries)
@@ -129,6 +132,11 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
         for e in (await db.execute(select(TimeEntry).where(TimeEntry.shift_id.in_(shift_ids)))).scalars().all():
             entries[(e.shift_id, e.worker_id)].append(e)
 
+    # Phase 35: who clocks in with the venue's own payroll system
+    from src.services.time_tracking import modes_for_requests, PAYROLL
+    by_shift = {s.id: s for s in shifts}
+    tracking = await modes_for_requests(db, [(req, by_shift[sid]) for sid, lst in reqs.items() for req, _u in lst])
+
     def info_seen(req, s):
         ev = events.get(s.event_id)
         loc = locations.get(ev.location_id) if ev is not None and ev.location_id else None
@@ -170,7 +178,7 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
         for req, u in reqs[s.id]:
             st = (req.status or "").lower()
             es = entries.get((s.id, u.id), [])
-            state, late, first_in, last_out = clock_state(st, es, s, venue, now)
+            state, late, first_in, last_out = clock_state(st, es, s, venue, now, tracking.get(req.id) == PAYROLL)
             seen = info_seen(req, s) if st in BOOKED_STATUSES else None
             first_entry = min(es, key=lambda e: as_utc(e.clock_in_time)) if es else None
             p = TonightPerson(
@@ -227,7 +235,8 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
         te.late = sum(1 for p in ps if p.clock_state == "late")
         te.missed = sum(1 for p in ps if p.clock_state == "missed")
         te.no_show = sum(1 for p in ps if p.clock_state == "no_show")
-        te.unread = sum(1 for p in ps if p.info_seen is False and p.clock_state in ("upcoming", "due", "late"))
+        te.unread = sum(1 for p in ps if p.info_seen is False and (
+            p.clock_state in ("upcoming", "due", "late") or (p.clock_state == "payroll" and te.state != "ended")))
         te.open_spots = sum(pos.open_spots for pos in te.positions)
         if te.unread and te.state != "ended":
             alerts.append(TonightAlert(

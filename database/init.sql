@@ -76,6 +76,13 @@ CREATE TABLE venues (
     clock_in_early_minutes INT NOT NULL DEFAULT 30,
     auto_clock_out_hours INT NOT NULL DEFAULT 2,
     allow_public_cover BOOLEAN NOT NULL DEFAULT TRUE,        -- Phase 34: workers may also post cover on the public board
+    team_time_tracking VARCHAR(20) NOT NULL DEFAULT 'shiftboard', -- Phase 35: shiftboard | payroll (team members' default)
+    ot_weekly_hours NUMERIC(5, 2) DEFAULT 40,                -- Phase 35: overtime after this many hours a work week (NULL = off)
+    ot_daily_hours NUMERIC(5, 2),                            -- Phase 35: overtime after this many hours a day (NULL = off)
+    work_week_start SMALLINT NOT NULL DEFAULT 0,             -- Phase 35: 0 = Monday ... 6 = Sunday
+    pay_period VARCHAR(20) NOT NULL DEFAULT 'weekly',        -- Phase 35: weekly | biweekly | semimonthly | monthly
+    pay_period_anchor DATE,                                  -- Phase 35: biweekly: the first day of any pay period
+    pay_period_approval BOOLEAN NOT NULL DEFAULT TRUE,       -- Phase 35: managers approve and lock each pay period
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -107,6 +114,8 @@ CREATE TABLE venue_whitelists (
     status VARCHAR(20) NOT NULL DEFAULT 'active',          -- Phase 29: active | removed | blocked
     positions TEXT[] NOT NULL DEFAULT '{}',                -- Phase 29: positions this person works here
     source VARCHAR(20) NOT NULL DEFAULT 'manager',         -- Phase 29: manager | invite | import | admin
+    time_tracking VARCHAR(20),                             -- Phase 35: payroll | shiftboard (NULL = the venue's setting)
+    works_through VARCHAR(120),                            -- Phase 35: staffing company / agency they come through
     added_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -255,6 +264,7 @@ CREATE TABLE shift_requests (
     outside_department BOOLEAN NOT NULL DEFAULT FALSE,        -- Phase 32.2: asked for a shift outside their departments
     pay_rate NUMERIC(10, 2),
     info_seen_at TIMESTAMPTZ,
+    time_tracking VARCHAR(20),                                -- Phase 35: payroll | shiftboard, written when the shift starts
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_shift_worker UNIQUE (shift_id, worker_id)
@@ -688,3 +698,27 @@ CREATE INDEX idx_waitlist_shift ON waitlist_entries(shift_id, created_at);
 CREATE INDEX idx_waitlist_worker ON waitlist_entries(worker_id);
 -- one live place per person per position
 CREATE UNIQUE INDEX uq_waitlist_live ON waitlist_entries(shift_id, worker_id) WHERE status IN ('waiting', 'offered');
+
+-- ==============================================================================
+-- Phase 35: Pay periods (approved = locked)
+-- ==============================================================================
+CREATE TABLE pay_period_approvals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    start_date DATE NOT NULL,                                 -- venue-local dates, inclusive
+    end_date DATE NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'approved',           -- approved (locked) | reopened
+    people INT NOT NULL DEFAULT 0,                            -- totals when it was approved
+    total_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    overtime_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    total_pay NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    approved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reopened_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    reopened_at TIMESTAMPTZ,
+    reopen_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_pay_period_approvals_venue ON pay_period_approvals(venue_id, start_date);
+-- one live approval per venue and period
+CREATE UNIQUE INDEX uq_pay_period_approved ON pay_period_approvals(venue_id, start_date) WHERE status = 'approved';

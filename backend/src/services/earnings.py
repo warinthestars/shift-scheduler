@@ -137,6 +137,19 @@ async def build_earnings(db: AsyncSession, user: User, period: str = "week",
                 func.upper(Shift.status) != "CANCELLED",
             )
         )).all()
+    # Phase 35: shifts a venue's own payroll tracks aren't ShiftBoard hours: leave them out, and say so
+    from src.services.time_tracking import modes_for_requests, PAYROLL
+    period_rows = (await db.execute(
+        select(ShiftRequest, Shift, Venue)
+        .join(Shift, Shift.id == ShiftRequest.shift_id).join(Venue, Venue.id == Shift.venue_id)
+        .where(ShiftRequest.worker_id == user.id, func.lower(ShiftRequest.status).in_(BOOKED + ("completed",)),
+               Shift.start_time >= lo, Shift.start_time < hi, func.upper(Shift.status) != "CANCELLED")
+    )).all()
+    modes = await modes_for_requests(db, [(r, s) for r, s, _v in period_rows])
+    payroll_rows = [(r, s, v) for r, s, v in period_rows if modes.get(r.id) == PAYROLL]
+    payroll_ids = {r.id for r, _s, _v in payroll_rows}
+    upcoming_rows = [(r, s) for r, s in upcoming_rows if r.id not in payroll_ids]
+
     up_hours = up_pay = 0.0
     for req, shift in upcoming_rows:
         h = max(0.0, (_utc(shift.end_time) - _utc(shift.start_time)).total_seconds() / 3600.0)
@@ -158,6 +171,8 @@ async def build_earnings(db: AsyncSession, user: User, period: str = "week",
         ),
         shifts=list(reversed(shifts)),                # newest first
         upcoming=EarningsUpcoming(shifts=len(upcoming_rows), hours=round(up_hours, 2), est_pay=round(up_pay, 2)),
+        payroll_shifts=len(payroll_rows),                                              # Phase 35
+        payroll_venues=sorted({v.name for _r, _s, v in payroll_rows}),
     )
 
 

@@ -118,6 +118,18 @@ export default function EarningsPage() {
               </div>
             )}
 
+            {/* Phase 35: shifts a venue's own payroll tracks aren't counted here */}
+            {data.payroll_shifts > 0 && (
+              <div className="p-3 rounded-xl border border-violet-500/30 bg-violet-500/5 text-violet-200 text-xs flex items-start gap-2">
+                <Timer className="w-4 h-4 flex-shrink-0" />
+                <span>
+                  {data.payroll_shifts} shift{data.payroll_shifts === 1 ? '' : 's'} in this period {data.payroll_shifts === 1 ? 'is' : 'are'} tracked
+                  by {data.payroll_venues.length ? data.payroll_venues.join(', ') : 'the venue'}'s own payroll, so {data.payroll_shifts === 1 ? "it isn't" : "they aren't"} counted here.
+                  Check your pay stub from them.
+                </span>
+              </div>
+            )}
+
             {data.venues.length > 1 && (
               <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">By venue</h2>

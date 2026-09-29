@@ -45,6 +45,7 @@ CATEGORY = {
     "team_added": "team",
     "team_account": "team",
     "team_status": "team",
+    "team_tracking": "team",             # Phase 35: time tracking / staffing company changed
     "invites_sent": "team",
     "team_joined": "team",
     "manager_added": "team",
@@ -61,6 +62,8 @@ CATEGORY = {
     "template_saved": "changes",
     "template_deleted": "changes",
     "venue_settings": "changes",
+    "pay_period_approved": "changes",    # Phase 35
+    "pay_period_reopened": "changes",
     "not_clocked_in": "alerts",
     "no_show": "alerts",                # Phase 30
     "manager_clock_in": "alerts",
