@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff, Clock, Timer, CalendarRange } from 'lucide-react';
+import { Building2, MapPin, Crosshair, ExternalLink, Plus, Trash2, Save, RotateCcw, Info, EyeOff, Clock, Timer, CalendarRange, Coins } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import VenueLocationsPanel from './VenueLocationsPanel';
@@ -67,6 +67,11 @@ function emptyForm(venue) {
     pay_period: venue?.pay_period || 'weekly',
     pay_period_anchor: venue?.pay_period_anchor || '',
     pay_period_approval: venue?.pay_period_approval ?? true,
+    // Phase 35.2: tips
+    tips_enabled: venue?.tips_enabled ?? true,
+    tip_pool_split: venue?.tip_pool_split || 'hours',
+    tip_pool_payroll: venue?.tip_pool_payroll ?? true,
+    tips_shown_to_workers: venue?.tips_shown_to_workers ?? true,
   };
 }
 
@@ -324,6 +329,10 @@ export default function VenueSettingsModal({
     payload.pay_period = form.pay_period;
     if (form.pay_period === 'biweekly' && form.pay_period_anchor) payload.pay_period_anchor = form.pay_period_anchor;
     payload.pay_period_approval = !!form.pay_period_approval;
+    payload.tips_enabled = !!form.tips_enabled;                                   // Phase 35.2
+    payload.tip_pool_split = form.tip_pool_split;
+    payload.tip_pool_payroll = !!form.tip_pool_payroll;
+    payload.tips_shown_to_workers = !!form.tips_shown_to_workers;
     if (lat !== null) {
       payload.lat = lat;
       payload.lng = lng;
@@ -713,6 +722,60 @@ function TimePayTab({ form, setForm, set }) {
               A shift keeps the setting it had when it started, so changing this later doesn't rewrite past hours.
             </span>
           </p>
+        </div>
+
+        {/* Phase 35.2: tips */}
+        <div className={cardCls}>
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <Coins className="w-4 h-4 text-amber-400" /> Tips
+          </div>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" checked={!!form.tips_enabled} onChange={(e) => setForm({ ...form, tips_enabled: e.target.checked })}
+              className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500" />
+            <span>
+              <span className="block text-sm font-semibold text-white">Track tips in ShiftBoard</span>
+              <span className="block text-xs text-slate-400">
+                After an event, enter its tip pool and anyone's own tips on the event's time sheet. Positions marked
+                "Tips" can get their own tips; positions marked "Tip pool" share the pool.
+              </span>
+            </span>
+          </label>
+          {form.tips_enabled && (
+            <>
+              <div>
+                <span className={labelCls}>Share tip pools</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {[['hours', 'By hours worked', 'More hours, bigger share.'], ['equal', 'Equally', 'Everyone in the pool gets the same.']].map(([id, title, body]) => (
+                    <label key={id}
+                      className={`flex items-start gap-2 p-2.5 rounded-xl border cursor-pointer transition ${form.tip_pool_split === id ? 'border-amber-500 bg-amber-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'}`}>
+                      <input type="radio" name="tip_pool_split" value={id} checked={form.tip_pool_split === id} onChange={set('tip_pool_split')} className="mt-1 text-amber-500" />
+                      <span>
+                        <span className="block text-sm font-semibold text-white">{title}</span>
+                        <span className="block text-[11px] text-slate-400">{body}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">This is the default; each event's time sheet can switch it.</p>
+              </div>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!form.tip_pool_payroll} onChange={(e) => setForm({ ...form, tip_pool_payroll: e.target.checked })}
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-white">People on your venue's payroll share tip pools</span>
+                  <span className="block text-xs text-slate-400">They don't clock in here, so their scheduled hours are used for an hours split.</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!form.tips_shown_to_workers} onChange={(e) => setForm({ ...form, tips_shown_to_workers: e.target.checked })}
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-white">Workers see their tips in Hours & pay</span>
+                  <span className="block text-xs text-slate-400">Off: only managers see tips (time sheets, pay periods, the hours download).</span>
+                </span>
+              </label>
+            </>
+          )}
         </div>
       </div>
 

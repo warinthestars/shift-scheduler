@@ -185,6 +185,10 @@ class VenueBase(BaseModel):
     pay_period: str = "weekly"              # Phase 35: weekly | biweekly | semimonthly | monthly
     pay_period_anchor: Optional[date] = None  # Phase 35: biweekly only
     pay_period_approval: bool = True        # Phase 35: approve and lock each pay period
+    tips_enabled: bool = True               # Phase 35.2: managers enter tips per event
+    tip_pool_split: str = "hours"           # Phase 35.2: hours | equal
+    tip_pool_payroll: bool = True           # Phase 35.2: venue-payroll people share tip pools (scheduled hours)
+    tips_shown_to_workers: bool = True      # Phase 35.2: workers see their tips in Hours & pay
 
 class VenueCreate(BaseModel):
     name: str
@@ -240,6 +244,10 @@ class VenueUpdateSettings(BaseModel):
     pay_period: Optional[str] = None                  # Phase 35
     pay_period_anchor: Optional[date] = None          # Phase 35
     pay_period_approval: Optional[bool] = None        # Phase 35
+    tips_enabled: Optional[bool] = None               # Phase 35.2
+    tip_pool_split: Optional[str] = None              # Phase 35.2: hours | equal
+    tip_pool_payroll: Optional[bool] = None           # Phase 35.2
+    tips_shown_to_workers: Optional[bool] = None      # Phase 35.2
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -2023,6 +2031,7 @@ class EarningsShift(BaseModel):
     tips_eligible: bool = False
     auto_closed: bool = False                # clocked out automatically
     edited: bool = False                     # a manager changed the times
+    tips: float = 0                          # Phase 35.2: this shift's tips (on its first clock-in)
 
 
 class EarningsVenue(BaseModel):
@@ -2031,6 +2040,20 @@ class EarningsVenue(BaseModel):
     hours: float = 0
     pay: float = 0
     shifts: int = 0
+    tips: float = 0                          # Phase 35.2
+
+
+class EarningsTip(BaseModel):
+    """Phase 35.2: tips for one of my shifts (own tips + my share of the tip pool)."""
+    request_id: UUID
+    event_title: str
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    role_type: str
+    start_time: datetime
+    own: float = 0
+    pool_share: float = 0
+    total: float = 0
 
 
 class EarningsUpcoming(BaseModel):
@@ -2055,6 +2078,8 @@ class EarningsResponse(BaseModel):
     upcoming: EarningsUpcoming = EarningsUpcoming()
     payroll_shifts: int = 0                  # Phase 35: shifts in the period tracked by a venue's own payroll (not counted here)
     payroll_venues: List[str] = []           # Phase 35
+    total_tips: float = 0                    # Phase 35.2: tips for shifts starting in the period (venues that show them)
+    tips: List[EarningsTip] = []             # Phase 35.2
 
 
 
@@ -2163,6 +2188,7 @@ class PayPeriodPerson(BaseModel):
     edited_entries: int = 0
     outside_area: int = 0
     auto_closed: int = 0
+    tips: float = 0                          # Phase 35.2: own tips + pool shares for shifts starting in the period
 
 
 class PayPeriodPayrollPerson(BaseModel):
@@ -2170,6 +2196,7 @@ class PayPeriodPayrollPerson(BaseModel):
     name: str
     shifts: int = 0
     scheduled_hours: float = 0               # from the posted times (their real hours are in the venue's payroll)
+    tips: float = 0                          # Phase 35.2
 
 
 class PayPeriodSummary(BaseModel):
@@ -2183,6 +2210,7 @@ class PayPeriodSummary(BaseModel):
     total_hours: float = 0
     overtime_hours: float = 0
     total_pay: float = 0
+    total_tips: float = 0                    # Phase 35.2
     open_entries: int = 0
     payroll_people: int = 0
     payroll_shifts: int = 0
@@ -2208,6 +2236,58 @@ class PayPeriodList(BaseModel):
 
 class PayPeriodReopenBody(BaseModel):
     reason: str = Field(..., min_length=3, max_length=500)
+
+
+# ------------------------------------------------------------------------------------------------
+# Phase 35.2: Tips per event
+# ------------------------------------------------------------------------------------------------
+class TipPerson(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    name: str
+    role_type: str
+    tips_eligible: bool = False              # the position gets tips (own tips can be entered)
+    in_pool: bool = False                    # shares the event's tip pool
+    time_tracking: str = "shiftboard"        # payroll = hours below are the scheduled hours
+    basis_hours: float = 0                   # hours used for an hours split
+    individual: float = 0                    # own tips
+    pool_share: float = 0
+    total: float = 0
+
+
+class EventTips(BaseModel):
+    event_id: UUID
+    title: str
+    start_time: datetime
+    timezone: str
+    enabled: bool = True                     # venues.tips_enabled
+    can_edit: bool = False
+    blocked_reason: Optional[str] = None     # why it can't be edited (not started / cancelled / locked / tips off)
+    locked: bool = False                     # in an approved pay period
+    split: str = "hours"                     # this event's pool split: hours | equal
+    venue_split: str = "hours"               # the venue default
+    pool_payroll: bool = True                # venue-payroll people share the pool
+    pool_amount: float = 0
+    note: Optional[str] = None
+    fell_back_equal: bool = False            # hours split, but nobody in the pool has hours yet -> shared equally
+    pool_unshared: bool = False              # a pool is set but nobody is in a tip-pool position
+    total_individual: float = 0
+    total_tips: float = 0
+    people: List[TipPerson] = []
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
+class TipAmountIn(BaseModel):
+    request_id: UUID
+    amount: Optional[float] = None           # None or 0 = no own tips
+
+
+class EventTipsUpdate(BaseModel):
+    pool_amount: Optional[float] = None      # None = leave as it is
+    split: Optional[str] = None              # hours | equal; None = leave as it is
+    note: Optional[str] = Field(None, max_length=300)
+    individual: List[TipAmountIn] = []       # only the people listed change
 
 
 WorkerProfile.model_rebuild()

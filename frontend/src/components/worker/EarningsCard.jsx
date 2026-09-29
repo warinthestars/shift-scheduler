@@ -31,6 +31,7 @@ export default function EarningsCard({ refreshKey = 0 }) {
           <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">This week</div>
           <div className="text-base font-black text-white">
             {hoursText(data.total_hours)} · <span className="text-emerald-400">{money(data.total_pay)}</span>
+            {data.total_tips > 0 && <span className="text-amber-300"> + {money(data.total_tips)} tips</span>}
           </div>
           <div className="text-[11px] text-slate-400 truncate">
             {data.in_progress > 0 ? 'Clocked in now · ' : ''}

@@ -645,6 +645,9 @@ async def export_venue_payroll_csv(
     Calculates hours worked for workers at this venue.
     Phase 27: adds work location, clock-in/out location check, late minutes and auto-closed flags.
     Phase 35: optional company filter; last three columns: Regular hours, Overtime hours, Works through.
+    Phase 35.2: then Own tips, Tip pool share, Tips total: on each booking's first clock-in row, plus a
+    "tips only" row for people with tips but no clock-ins in the file (e.g. on venue payroll). Tips count on
+    the day the shift starts.
     """
     venue = await verify_venue_manager_access(venue_id, current_user, db)
     await auto_close_open_entries(db, venue_id=venue_id)
@@ -718,7 +721,31 @@ async def export_venue_payroll_csv(
         "Hourly rate", "Pay before tips", "Gets tips", "Tip pool", "Time changed by a manager",
         "Clock-in location", "Clock-out location", "Minutes late", "Clocked out automatically",
         "Regular hours", "Overtime hours", "Works through",                        # Phase 35 (added at the end)
+        "Own tips", "Tip pool share", "Tips total",                               # Phase 35.2 (added at the end)
     ])
+
+    # Phase 35.2: tips per booking; they go on the booking's first clock-in row in this file
+    tip_map = {}
+    if venue.tips_enabled:
+        from src.services.tips import tips_by_request, event_ids_starting
+        if lo is not None or hi is not None:
+            t_lo = lo or datetime(1970, 1, 1, tzinfo=timezone.utc)
+            t_hi = hi or datetime(9999, 1, 1, tzinfo=timezone.utc)
+            eids = await event_ids_starting(db, [venue_id], t_lo, t_hi)
+        else:
+            eids = list((await db.execute(select(Shift.event_id).where(
+                Shift.venue_id == venue_id, Shift.event_id.isnot(None)).distinct())).scalars().all())
+        tip_map = await tips_by_request(db, eids)
+    first_row = {}
+    for entry, _w, _s, req in sorted(records, key=lambda r: r[0].clock_in_time):
+        if req is not None and req.id not in first_row:
+            first_row[req.id] = entry.id
+
+    def tip_cells(req, entry_id):
+        if req is None or first_row.get(req.id) != entry_id or req.id not in tip_map:
+            return ["", "", ""]
+        own, share = tip_map[req.id]
+        return [f"{own:.2f}", f"{share:.2f}", f"{own + share:.2f}"]
 
     for entry, worker, shift, req in records:
         worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
@@ -748,7 +775,38 @@ async def export_venue_payroll_csv(
             "Yes" if entry.auto_closed else "No",
             f"{max(0.0, hours - ot.get(entry.id, 0.0)):.2f}", f"{ot.get(entry.id, 0.0):.2f}",   # Phase 35
             companies.get(worker.id, ""),
+            *tip_cells(req, entry.id),                                                          # Phase 35.2
         ])
+
+    # Phase 35.2: tips for bookings with no clock-in rows in this file (venue payroll, or never clocked in)
+    missing = [rid for rid in tip_map if rid not in first_row]
+    if missing:
+        q = (select(ShiftRequest, Shift, User).join(Shift, Shift.id == ShiftRequest.shift_id)
+             .join(User, User.id == ShiftRequest.worker_id).where(ShiftRequest.id.in_(missing)))
+        if lo is not None:
+            q = q.where(Shift.start_time >= lo)
+        if hi is not None:
+            q = q.where(Shift.start_time < hi)
+        tip_only = sorted((await db.execute(q)).all(), key=lambda r: r[1].start_time)
+        more = {s.event_id for _r, s, _w in tip_only if s.event_id and s.event_id not in ev_loc}
+        if more:
+            ev_loc.update(dict((await db.execute(
+                select(ShiftEvent.id, ShiftEvent.location_id).where(ShiftEvent.id.in_(more)))).all()))
+            locations = await load_locations(db, ev_loc.values())
+        for req, shift, worker in tip_only:
+            if company and (companies.get(worker.id) or "").lower() != company.strip().lower():
+                continue
+            own, share = tip_map[req.id]
+            loc = locations.get(ev_loc.get(shift.event_id)) if shift.event_id else None
+            writer.writerow([
+                f"{worker.first_name} {worker.last_name}".strip() or worker.email, worker.email or "",
+                shift.title or "", shift.role_type or "", _local_str(shift.start_time, vtz, "%Y-%m-%d"),
+                loc.name if loc is not None else "Venue",
+                "Tips only (no ShiftBoard clock-in)", "", "0.00", "", "0.00",
+                "Yes" if shift.tips_eligible else "No", "Yes" if shift.tip_pool else "No",
+                "", "", "", "", "", "0.00", "0.00", companies.get(worker.id, ""),
+                f"{own:.2f}", f"{share:.2f}", f"{own + share:.2f}",
+            ])
 
     output.seek(0)
     return StreamingResponse(

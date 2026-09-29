@@ -101,8 +101,9 @@ export default function DownloadHoursModal({ venueId, venueName, onClose, onDone
         )}
         <p className="text-xs text-slate-400">
           {range.start ? `${dayText(range.start)} – ${dayText(range.end)}` : 'All clock-ins at this venue'}. Weeks start on Monday. Times are in
-          the venue's time zone. Overtime follows your Time & pay settings. People your venue's own payroll tracks don't clock in
-          here, so they aren't in this file. Tips aren't included yet.
+          the venue's time zone. Overtime follows your Time & pay settings. Tips are in the last three columns (on each shift's
+          first clock-in). People your venue's own payroll tracks don't clock in here, so they only appear on a "tips only"
+          row when they got tips.
         </p>
       </div>
     </ModalShell>

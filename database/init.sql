@@ -83,6 +83,10 @@ CREATE TABLE venues (
     pay_period VARCHAR(20) NOT NULL DEFAULT 'weekly',        -- Phase 35: weekly | biweekly | semimonthly | monthly
     pay_period_anchor DATE,                                  -- Phase 35: biweekly: the first day of any pay period
     pay_period_approval BOOLEAN NOT NULL DEFAULT TRUE,       -- Phase 35: managers approve and lock each pay period
+    tips_enabled BOOLEAN NOT NULL DEFAULT TRUE,              -- Phase 35.2: managers enter tips per event
+    tip_pool_split VARCHAR(20) NOT NULL DEFAULT 'hours',     -- Phase 35.2: hours | equal (default for new tip pools)
+    tip_pool_payroll BOOLEAN NOT NULL DEFAULT TRUE,          -- Phase 35.2: venue-payroll people share pools (scheduled hours)
+    tips_shown_to_workers BOOLEAN NOT NULL DEFAULT TRUE,     -- Phase 35.2: workers see their tips in Hours & pay
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -265,6 +269,7 @@ CREATE TABLE shift_requests (
     pay_rate NUMERIC(10, 2),
     info_seen_at TIMESTAMPTZ,
     time_tracking VARCHAR(20),                                -- Phase 35: payroll | shiftboard, written when the shift starts
+    tip_amount NUMERIC(10, 2),                                -- Phase 35.2: this person's own tips for the shift (NULL = none)
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_shift_worker UNIQUE (shift_id, worker_id)
@@ -712,6 +717,7 @@ CREATE TABLE pay_period_approvals (
     total_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
     overtime_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
     total_pay NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    total_tips NUMERIC(12, 2) NOT NULL DEFAULT 0,             -- Phase 35.2
     approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     approved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     reopened_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -722,3 +728,19 @@ CREATE TABLE pay_period_approvals (
 CREATE INDEX idx_pay_period_approvals_venue ON pay_period_approvals(venue_id, start_date);
 -- one live approval per venue and period
 CREATE UNIQUE INDEX uq_pay_period_approved ON pay_period_approvals(venue_id, start_date) WHERE status = 'approved';
+
+-- ==============================================================================
+-- Phase 35.2: Tips per event (one tip pool per event; own tips live on shift_requests.tip_amount)
+-- ==============================================================================
+CREATE TABLE event_tips (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id UUID NOT NULL UNIQUE REFERENCES shift_events(id) ON DELETE CASCADE,
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    pool_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,            -- shared by everyone booked in tip-pool positions
+    split VARCHAR(20) NOT NULL DEFAULT 'hours',               -- hours | equal
+    note TEXT,
+    updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_event_tips_venue ON event_tips(venue_id);

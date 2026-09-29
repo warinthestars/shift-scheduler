@@ -4,6 +4,32 @@ All notable changes to ShiftBoard. The format follows [Keep a Changelog](https:/
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.35.3] - 2026-09-29 - Phase 35.2: Tips per event
+
+### Added
+- **Tips panel on each event's time sheet** (once the event has started):
+  - the tip pool amount, how it's shared (by hours worked or equally) and a note
+  - own tips per person (positions marked Tips)
+  - each person's pool share and total, live
+- **The pool is shared by everyone booked in Tip-pool positions:**
+  - By hours: ShiftBoard clock-ins, or scheduled hours for people on the venue's payroll.
+  - If nobody has hours yet, it's shared equally.
+  - Shares are rounded to the cent and always add up to the pool.
+  - No-shows get nothing.
+- **Venue settings → Time & pay periods → Tips:**
+  - track tips on / off (`venues.tips_enabled`)
+  - default split (`tip_pool_split`: hours | equal)
+  - whether venue-payroll people share pools (`tip_pool_payroll`)
+  - whether workers see their tips (`tips_shown_to_workers`)
+- **New table `event_tips`** (one pool per event), plus `shift_requests.tip_amount` and `pay_period_approvals.total_tips`.
+- **API:** `GET /api/events/{id}/tips` and `PUT /api/events/{id}/tips`. Managers of the venue and admins only. Changes go in the activity log.
+- **Pay periods:** a Tips total, tips per person (including people on venue payroll), and tips in the approval snapshot.
+- **Hours download:** three new columns at the end, *Own tips*, *Tip pool share* and *Tips total*, on each shift's first clock-in row. There's a "tips only" row for people with tips but no clock-ins. Earlier columns keep their positions.
+- **Worker Hours & pay:** a Tips tile, a Tips list, "+ $x tips" on each shift, and tips in the spreadsheet (a new last column).
+
+### Changed
+- An approved (locked) pay period also locks its tips (409 *"… Reopen it on the Pay periods screen to change its tips."*).
+
 ## [0.35.2] - 2026-09-28 - Phase 35.1.1: Secrets out of .env
 
 ### Changed

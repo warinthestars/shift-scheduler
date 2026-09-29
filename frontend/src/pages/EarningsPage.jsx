@@ -105,9 +105,13 @@ export default function EarningsPage() {
             <p className="text-xs text-slate-400">
               {data.label}: {dayText(data.start_date)} – {dayText(data.end_date)}
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className={`grid grid-cols-1 gap-3 ${data.total_tips > 0 ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'}`}>
               <Tile icon={Clock} label="Hours" value={hoursText(data.total_hours)} sub={`${data.shifts_worked} shift${data.shifts_worked === 1 ? '' : 's'} worked`} />
               <Tile icon={Coins} label="Pay" value={money(data.total_pay)} sub="Before tips and taxes" />
+              {data.total_tips > 0 && (                                                  // Phase 35.2
+                <Tile icon={Coins} label="Tips" value={money(data.total_tips)}
+                  sub={`${data.tips.length} shift${data.tips.length === 1 ? '' : 's'} · entered by the venue`} />
+              )}
               <Tile icon={CalendarCheck} label="Still coming" value={up.shifts ? money(up.est_pay) : '—'}
                 sub={up.shifts ? `${up.shifts} booked shift${up.shifts === 1 ? '' : 's'} · about ${hoursText(up.hours)}` : 'Nothing else booked in this period'} />
             </div>
@@ -130,6 +134,28 @@ export default function EarningsPage() {
               </div>
             )}
 
+            {/* Phase 35.2: tips per shift (own tips + my share of the tip pool) */}
+            {data.tips.length > 0 && (
+              <section className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/30">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-amber-300 mb-2">Tips</h2>
+                <div className="divide-y divide-amber-500/10">
+                  {data.tips.map((t) => (
+                    <div key={t.request_id} className="py-2 flex items-center gap-3 text-sm">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-white font-semibold truncate">{t.event_title}</div>
+                        <div className="text-[11px] text-slate-400 truncate">
+                          {fmtDate(t.start_time, t.venue_timezone)} · {t.role_type} · {t.venue_name}
+                          {t.own > 0 && t.pool_share > 0 && ` · your tips ${money(t.own)} + pool ${money(t.pool_share)}`}
+                          {t.own === 0 && t.pool_share > 0 && ' · tip pool share'}
+                        </div>
+                      </div>
+                      <span className="w-24 text-right font-bold text-amber-300">{money(t.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {data.venues.length > 1 && (
               <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">By venue</h2>
@@ -140,6 +166,7 @@ export default function EarningsPage() {
                       <span className="flex-1 min-w-0 truncate text-white">{v.name}</span>
                       <span className="text-slate-400">{hoursText(v.hours)}</span>
                       <span className="w-24 text-right font-bold text-emerald-400">{money(v.pay)}</span>
+                      {data.total_tips > 0 && <span className="w-20 text-right text-amber-300">{v.tips > 0 ? `+${money(v.tips)}` : ''}</span>}
                     </div>
                   ))}
                 </div>
@@ -176,6 +203,7 @@ export default function EarningsPage() {
                         </div>
                         <div className="text-right flex-shrink-0">
                           <div className="text-base font-black text-emerald-400">{s.in_progress ? '—' : money(s.pay)}</div>
+                          {s.tips > 0 && <div className="text-xs font-bold text-amber-300">+{money(s.tips)} tips</div>}
                         </div>
                       </div>
                     ))}
@@ -187,8 +215,9 @@ export default function EarningsPage() {
             <p className="text-[11px] text-slate-500 flex items-start gap-1.5">
               <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
               <span>
-                Worked out from your clock-in and clock-out times × your pay rate, before tips and taxes
-                {data.any_tips ? ' (tips aren’t tracked here yet)' : ''}. Your venue’s payroll is the final word. If a time looks wrong, ask the
+                Worked out from your clock-in and clock-out times × your pay rate, before tips and taxes. Tips are what
+                the venue entered for each shift (your own tips plus your share of any tip pool), counted on the day the
+                shift starts; not every venue enters them here. Your venue’s payroll is the final word. If a time looks wrong, ask the
                 manager to fix it on their time sheet. Weeks start on Monday.
               </span>
             </p>

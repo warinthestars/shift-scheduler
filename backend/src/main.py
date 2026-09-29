@@ -26,6 +26,7 @@ from src.routers.event_templates import router as event_templates_router
 from src.routers.profile import router as profile_router   # Phase 31 + 32
 from src.routers.cover import router as cover_router       # Phase 34
 from src.routers.pay_periods import router as pay_periods_router   # Phase 35
+from src.routers.tips import router as tips_router                 # Phase 35.2
 from src.services.notification_worker import notification_worker_loop
 from src.version import APP_VERSION                          # Phase 34.5
 from src.json_guard import RejectNonFiniteJSON                # Phase 34.5
@@ -145,6 +146,7 @@ app.include_router(event_templates_router)
 app.include_router(profile_router)   # Phase 31 + 32
 app.include_router(cover_router)     # Phase 34
 app.include_router(pay_periods_router)   # Phase 35
+app.include_router(tips_router)          # Phase 35.2
 
 
 @app.get("/healthz", tags=["System"])

@@ -25,7 +25,9 @@ NOT_NULL_VENUE_FIELDS = (
     "geofence_enabled", "geofence_buffer_meters", "clock_in_early_minutes", "auto_clock_out_hours",   # Phase 27
     "allow_public_cover",                                                                            # Phase 34
     "team_time_tracking", "work_week_start", "pay_period", "pay_period_approval",                    # Phase 35
+    "tips_enabled", "tip_pool_split", "tip_pool_payroll", "tips_shown_to_workers",                   # Phase 35.2
 )
+VALID_TIP_SPLITS = ("hours", "equal")                                                                 # Phase 35.2
 VALID_TIME_TRACKING = ("shiftboard", "payroll")                                                      # Phase 35
 VALID_PAY_PERIODS = ("weekly", "biweekly", "semimonthly", "monthly")
 TEXT_VENUE_FIELDS = (
@@ -129,6 +131,8 @@ def clean_venue_payload(data: dict) -> dict:
         raise HTTPException(status_code=400, detail="Pick the day your work week starts.")
     if "pay_period" in data and data["pay_period"] not in VALID_PAY_PERIODS:
         raise HTTPException(status_code=400, detail="Choose how often you pay: weekly, every two weeks, twice a month or monthly.")
+    if "tip_pool_split" in data and data["tip_pool_split"] not in VALID_TIP_SPLITS:
+        raise HTTPException(status_code=400, detail="Choose how tip pools are shared: by hours worked or equally.")
     if data.get("auto_approve_rating_threshold") is not None:
         t = float(data["auto_approve_rating_threshold"])
         if not (1.0 <= t <= 5.0):

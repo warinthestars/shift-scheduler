@@ -69,7 +69,7 @@ async def _summary(db: AsyncSession, venue, start: date, end: date, today: date,
         start_date=start, end_date=end, label=pp.period_label(start, end), state=state,
         can_approve=state == "ready" and blocked is None, blocked_reason=blocked if state != "approved" else None,
         people=data["people"], total_hours=data["total_hours"], overtime_hours=data["overtime_hours"],
-        total_pay=data["total_pay"], open_entries=data["open_entries"],
+        total_pay=data["total_pay"], total_tips=data["total_tips"], open_entries=data["open_entries"],
         payroll_people=data["payroll_people"], payroll_shifts=data["payroll_shifts"],
         approved_at=appr.approved_at if appr else None, approved_by=approved_by,
         last_reopened_at=last_reopen.reopened_at if last_reopen else None,
@@ -141,6 +141,7 @@ async def approve_pay_period(
         db.add(PayPeriodApproval(
             venue_id=venue.id, start_date=s, end_date=e, status="approved", people=current.people,
             total_hours=current.total_hours, overtime_hours=current.overtime_hours, total_pay=current.total_pay,
+            total_tips=current.total_tips,                                               # Phase 35.2
             approved_by_user_id=current_user.id, approved_at=datetime.now(timezone.utc),
         ))
         await db.commit()
@@ -149,7 +150,8 @@ async def approve_pay_period(
         raise HTTPException(status_code=500, detail=f"Could not approve the pay period: {ex}")
     await activity.for_venue("pay_period_approved", venue_id, current_user.id,
                              f"Approved and locked pay period {pp.period_label(s, e)} "
-                             f"({current.total_hours:g} h, ${current.total_pay:,.2f})")
+                             f"({current.total_hours:g} h, ${current.total_pay:,.2f}"
+                             + (f" + ${current.total_tips:,.2f} tips" if current.total_tips else "") + ")")
     return await _summary(db, venue, s, e, _today(venue), detail=True)
 
 

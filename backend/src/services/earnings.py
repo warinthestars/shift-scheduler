@@ -3,7 +3,8 @@ Phase 33.1: A worker's own hours & pay.
 
 * Hours come from time entries (clock-in -> clock-out); an entry that's still open counts as "in progress", 0 h.
 * Rate = the manager's per-person rate for that shift if set (time sheet), else the posted rate. Same rule as payroll.
-* Pay is before tips and taxes. Tips aren't tracked yet (Phase 35); shifts that get tips are marked.
+* Pay is before tips and taxes. Phase 35.2: tips are listed separately (own tips + pool shares entered by the
+  manager), for shifts that start in the period, at venues that show tips to workers.
 * Periods use the worker's own time zone (Notification settings), weeks run Monday -> Sunday.
 * Workers see the real rate of shifts they worked, even when the venue hides pay on listings (they were booked).
 """
@@ -18,7 +19,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import Shift, ShiftEvent, ShiftRequest, TimeEntry, TimeEntryEdit, User, Venue
-from src.schemas import EarningsResponse, EarningsShift, EarningsVenue, EarningsUpcoming
+from src.schemas import EarningsResponse, EarningsShift, EarningsVenue, EarningsUpcoming, EarningsTip
 from src.services.notify import load_prefs
 from src.services.fit import tz_of
 
@@ -156,6 +157,34 @@ async def build_earnings(db: AsyncSession, user: User, period: str = "week",
         up_hours += h
         up_pay += h * _rate(shift, req)[0]
 
+    # Phase 35.2: tips for my shifts that start in the period (venues that show tips to workers)
+    from src.services.tips import tips_by_request
+    my_rows = (await db.execute(
+        select(ShiftRequest, Shift, Venue, ShiftEvent)
+        .join(Shift, Shift.id == ShiftRequest.shift_id).join(Venue, Venue.id == Shift.venue_id)
+        .outerjoin(ShiftEvent, ShiftEvent.id == Shift.event_id)
+        .where(ShiftRequest.worker_id == user.id, Shift.start_time >= lo, Shift.start_time < hi,
+               Shift.event_id.isnot(None))
+    )).all()
+    tip_map = await tips_by_request(db, {s.event_id for _r, s, _v, _e in my_rows}, for_workers=True)
+    tip_items = []
+    for r, s, v, ev in sorted(my_rows, key=lambda x: _utc(x[1].start_time)):
+        if r.id not in tip_map:
+            continue
+        own, share = tip_map[r.id]
+        tip_items.append(EarningsTip(
+            request_id=r.id, event_title=(ev.title if ev is not None else None) or s.title or s.role_type or "Shift",
+            venue_name=v.name, venue_timezone=v.timezone or "America/New_York", role_type=s.role_type or "Shift",
+            start_time=_utc(s.start_time), own=own, pool_share=share, total=round(own + share, 2),
+        ))
+        by_venue[v.id]["name"] = v.name
+        by_venue[v.id]["tips"] = by_venue[v.id].get("tips", 0.0) + own + share
+    placed = set()
+    for sh in sorted(shifts, key=lambda x: x.clock_in_time):
+        if sh.request_id in tip_map and sh.request_id not in placed:
+            sh.tips = round(sum(tip_map[sh.request_id]), 2)
+            placed.add(sh.request_id)
+
     worked = [s for s in shifts if not s.in_progress]
     return EarningsResponse(
         period=period, label=label, start_date=first, end_date=last, timezone=str(tz.key),
@@ -165,7 +194,8 @@ async def build_earnings(db: AsyncSession, user: User, period: str = "week",
         in_progress=len(shifts) - len(worked),
         any_tips=any(s.tips_eligible for s in shifts),
         venues=sorted(
-            [EarningsVenue(venue_id=k, name=v["name"], hours=round(v["hours"], 2), pay=round(v["pay"], 2), shifts=len(v["shifts"]))
+            [EarningsVenue(venue_id=k, name=v["name"], hours=round(v["hours"], 2), pay=round(v["pay"], 2), shifts=len(v["shifts"]),
+                           tips=round(v.get("tips", 0.0), 2))
              for k, v in by_venue.items()],
             key=lambda x: -x.pay,
         ),
@@ -173,6 +203,8 @@ async def build_earnings(db: AsyncSession, user: User, period: str = "week",
         upcoming=EarningsUpcoming(shifts=len(upcoming_rows), hours=round(up_hours, 2), est_pay=round(up_pay, 2)),
         payroll_shifts=len(payroll_rows),                                              # Phase 35
         payroll_venues=sorted({v.name for _r, _s, v in payroll_rows}),
+        total_tips=round(sum(t.total for t in tip_items), 2),                         # Phase 35.2
+        tips=tip_items,
     )
 
 
@@ -189,7 +221,7 @@ async def earnings_csv(db: AsyncSession, user: User, period: str = "month",
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(["Date", "Venue", "Event", "Position", "Clock in (venue time)", "Clock out (venue time)",
-                "Hours", "Hourly rate", "Pay before tips", "Gets tips", "Notes"])
+                "Hours", "Hourly rate", "Pay before tips", "Gets tips", "Notes", "Tips"])   # Phase 35.2: Tips at the end
     for s in reversed(data.shifts):                  # oldest first in the file
         notes = []
         if s.in_progress:
@@ -205,8 +237,19 @@ async def earnings_csv(db: AsyncSession, user: User, period: str = "month",
             s.venue_name, s.event_title, s.role_type,
             _local(s.clock_in_time, s.venue_timezone), _local(s.clock_out_time, s.venue_timezone) or "",
             f"{s.hours:.2f}", f"{s.rate:.2f}", f"{s.pay:.2f}", "Yes" if s.tips_eligible else "No", "; ".join(notes),
+            f"{s.tips:.2f}" if s.tips else "",
+        ])
+    # Phase 35.2: tips for shifts with no clock-in of mine in the period (e.g. tracked by the venue's payroll)
+    placed = {s.request_id for s in data.shifts if s.tips}
+    for t in data.tips:
+        if t.request_id in placed:
+            continue
+        w.writerow([
+            _utc(t.start_time).astimezone(tz_of(t.venue_timezone)).strftime("%Y-%m-%d"), t.venue_name, t.event_title,
+            t.role_type, "Tips only", "", "0.00", "", "0.00", "Yes", "", f"{t.total:.2f}",
         ])
     w.writerow([])
-    w.writerow(["Total", "", "", "", "", "", f"{data.total_hours:.2f}", "", f"{data.total_pay:.2f}", "", ""])
+    w.writerow(["Total", "", "", "", "", "", f"{data.total_hours:.2f}", "", f"{data.total_pay:.2f}", "", "",
+                f"{data.total_tips:.2f}"])
     name = f"shiftboard-hours-{data.start_date.isoformat()}-to-{data.end_date.isoformat()}.csv"
     return name, out.getvalue()

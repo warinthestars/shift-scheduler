@@ -137,6 +137,10 @@ class Venue(Base):
     pay_period = Column(String(20), nullable=False, default="weekly")              # Phase 35
     pay_period_anchor = Column(Date, nullable=True)                                # Phase 35: biweekly
     pay_period_approval = Column(Boolean, nullable=False, default=True)            # Phase 35
+    tips_enabled = Column(Boolean, nullable=False, default=True)                   # Phase 35.2
+    tip_pool_split = Column(String(20), nullable=False, default="hours")           # Phase 35.2: hours | equal
+    tip_pool_payroll = Column(Boolean, nullable=False, default=True)               # Phase 35.2
+    tips_shown_to_workers = Column(Boolean, nullable=False, default=True)          # Phase 35.2
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -399,6 +403,7 @@ class ShiftRequest(Base):
     pay_rate = Column(Numeric(10, 2), nullable=True)
     info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
     time_tracking = Column(String(20), nullable=True)                       # Phase 35: written when the shift starts
+    tip_amount = Column(Numeric(10, 2), nullable=True)                      # Phase 35.2: own tips (NULL = none)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -762,6 +767,7 @@ class PayPeriodApproval(Base):
     total_hours = Column(Numeric(10, 2), nullable=False, default=0)
     overtime_hours = Column(Numeric(10, 2), nullable=False, default=0)
     total_pay = Column(Numeric(12, 2), nullable=False, default=0)
+    total_tips = Column(Numeric(12, 2), nullable=False, default=0)             # Phase 35.2
     approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     approved_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     reopened_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -770,3 +776,20 @@ class PayPeriodApproval(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("idx_pay_period_approvals_venue", "venue_id", "start_date"),)
+
+
+class EventTip(Base):
+    """Phase 35.2: an event's tip pool (own tips are on ShiftRequest.tip_amount)."""
+    __tablename__ = "event_tips"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="CASCADE"), nullable=False, unique=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
+    pool_amount = Column(Numeric(10, 2), nullable=False, default=0)
+    split = Column(String(20), nullable=False, default="hours")                  # hours | equal
+    note = Column(Text, nullable=True)
+    updated_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_event_tips_venue", "venue_id"),)

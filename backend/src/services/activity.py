@@ -64,6 +64,7 @@ CATEGORY = {
     "venue_settings": "changes",
     "pay_period_approved": "changes",    # Phase 35
     "pay_period_reopened": "changes",
+    "tips_updated": "changes",           # Phase 35.2
     "not_clocked_in": "alerts",
     "no_show": "alerts",                # Phase 30
     "manager_clock_in": "alerts",
@@ -195,6 +196,7 @@ async def _for_event(db: AsyncSession, kind: str, event_id, actor_id, extra: str
         "event_drafted": f"Saved a draft: {what}",                 # Phase 29.3
         "event_published": f"Published {what}",
         "event_unpublished": f"Moved {what} back to drafts",
+        "tips_updated": f"Tips for {what}",                           # Phase 35.2
     }.get(kind, what)
     if extra:
         text += f" · {extra}"

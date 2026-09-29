@@ -132,6 +132,12 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
   * Per venue: weekly overtime limit (default 40 h), optional daily limit, the day the work week starts, and the pay period (weekly, every two weeks, twice a month, monthly).
   * Overtime is flagged and counted (time sheets, pay periods, the hours download). ShiftBoard doesn't add an overtime premium to pay.
   * **Pay periods** screen: totals per person and per period. When approving is on, a finished period is **approved and locked**: nobody can add, edit or delete times or change pay rates in it until a manager reopens it with a reason. Approvals keep a snapshot of the totals and are logged.
+* **Tips per event** (Phase 35.2, `services/tips.py`, `routers/tips.py`):
+  * After an event starts, a manager enters its **tip pool** and anyone's **own tips** in the Tips panel of the event's time sheet.
+  * Positions marked **Tips** can get own tips; positions marked **Tip pool** share the pool.
+  * The pool is split **by hours worked** or **equally** (a venue default; each event can switch). Hours are ShiftBoard clock-ins, or scheduled hours for people on the venue's payroll, who are in pools only when the venue allows it. Nobody with hours yet → equal. Shares are rounded to the cent and always add up to the pool.
+  * No-shows get nothing. Tips count on the day the shift starts. They show in pay periods (per person and in the approval snapshot), the hours download (three columns at the end, plus "tips only" rows), and workers' Hours & pay (unless the venue hides them).
+  * An approved pay period locks its tips too (409 until it's reopened). Turning tips off stops counting them; what was entered is kept.
 * **Reliability scoring** (`services/reliability.py`):
   * The score is `100 × (on-time + ½ × late) ÷ (worked + no-shows + late drops)`, across the whole platform.
   * Late means clocking in more than 10 minutes after the start.
@@ -139,7 +145,7 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
   * Managers see it as a badge next to each person.
 * **Activity log** of every booking, change and approval. **Venue settings**:
   * address, website, clock-in area, clock-in rules
-  * time tracking, overtime and pay periods (Time & pay periods tab)
+  * time tracking, overtime, pay periods and tips (Time & pay periods tab)
   * approval policy, public cover
   * positions & pay, locations, templates
 

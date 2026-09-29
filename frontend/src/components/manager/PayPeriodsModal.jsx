@@ -173,6 +173,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                   {p.people} {p.people === 1 ? 'person' : 'people'} · {hrs(p.total_hours)}
                   {p.overtime_hours > 0 && <span className="text-orange-300"> · OT {hrs(p.overtime_hours)}</span>}
                   {' · '}{money(p.total_pay)}
+                  {p.total_tips > 0 && <span className="text-amber-300"> · tips {money(p.total_tips)}</span>}
                 </div>
               </button>
             ))}
@@ -201,12 +202,13 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                       <button type="button" onClick={download} className={btnGhost}><Download className="w-3.5 h-3.5" /> Download</button>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                     {[
                       ['People', detail.people],
                       ['Hours', hrs(detail.total_hours)],
                       ['Overtime', hrs(detail.overtime_hours)],
                       ['Pay before tips', money(detail.total_pay)],
+                      ['Tips', money(detail.total_tips)],                                // Phase 35.2
                     ].map(([k, v]) => (
                       <div key={k} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
                         <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">{k}</div>
@@ -290,12 +292,13 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                         <th className="text-right font-semibold px-2 py-2">Regular</th>
                         <th className="text-right font-semibold px-2 py-2">Overtime</th>
                         <th className="text-right font-semibold px-2 py-2">Total</th>
-                        <th className="text-right font-semibold px-3 py-2">Pay</th>
+                        <th className="text-right font-semibold px-2 py-2">Pay</th>
+                        <th className="text-right font-semibold px-3 py-2">Tips</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
                       {detail.rows.length === 0 && (
-                        <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">No ShiftBoard clock-ins in this period.</td></tr>
+                        <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-500">No ShiftBoard clock-ins in this period.</td></tr>
                       )}
                       {detail.rows.map((r) => (
                         <tr key={r.worker_id} className="bg-slate-900/40">
@@ -317,7 +320,8 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                           <td className="px-2 py-2 text-right text-slate-300">{r.regular_hours.toFixed(2)}</td>
                           <td className={`px-2 py-2 text-right ${r.overtime_hours > 0 ? 'text-orange-300 font-bold' : 'text-slate-500'}`}>{r.overtime_hours.toFixed(2)}</td>
                           <td className="px-2 py-2 text-right text-white font-semibold">{r.hours.toFixed(2)}</td>
-                          <td className="px-3 py-2 text-right text-emerald-400 font-semibold">{money(r.pay)}</td>
+                          <td className="px-2 py-2 text-right text-emerald-400 font-semibold">{money(r.pay)}</td>
+                          <td className={`px-3 py-2 text-right ${r.tips > 0 ? 'text-amber-300 font-semibold' : 'text-slate-600'}`}>{r.tips > 0 ? money(r.tips) : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -325,6 +329,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                 </div>
                 <p className="text-[11px] text-slate-500">
                   Pay is hours × each person's rate, before tips. Overtime is flagged, not paid extra here: your payroll adds any premium.
+                  Tips (own tips + tip-pool shares, entered on each event's time sheet) count on the day the shift starts.
                 </p>
 
                 {detail.payroll_rows.length > 0 && (
@@ -337,7 +342,10 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                       {detail.payroll_rows.map((r) => (
                         <div key={r.worker_id} className="py-1.5 flex items-center justify-between text-xs">
                           <span className="text-white font-semibold">{r.name}</span>
-                          <span className="text-violet-200">{r.shifts} shift{r.shifts === 1 ? '' : 's'} · {hrs(r.scheduled_hours)} scheduled</span>
+                          <span className="text-violet-200">
+                            {r.shifts} shift{r.shifts === 1 ? '' : 's'} · {hrs(r.scheduled_hours)} scheduled
+                            {r.tips > 0 && <span className="text-amber-300"> · tips {money(r.tips)}</span>}
+                          </span>
                         </div>
                       ))}
                     </div>

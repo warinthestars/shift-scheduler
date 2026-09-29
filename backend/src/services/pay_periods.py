@@ -173,8 +173,9 @@ async def lock_covering(db: AsyncSession, venue_id, day: date) -> Optional[PayPe
         PayPeriodApproval.start_date <= day, PayPeriodApproval.end_date >= day).limit(1))
 
 
-async def assert_unlocked(db: AsyncSession, venue: Venue, *moments) -> None:
-    """409 if any of these times falls in an approved (locked) pay period at this venue."""
+async def assert_unlocked(db: AsyncSession, venue: Venue, *moments, what: str = "times") -> None:
+    """409 if any of these times falls in an approved (locked) pay period at this venue.
+    Phase 35.2: `what` names what can't change ("times" or "tips")."""
     tz = tz_of(venue.timezone)
     for m in moments:
         if m is None:
@@ -183,7 +184,7 @@ async def assert_unlocked(db: AsyncSession, venue: Venue, *moments) -> None:
         if lock is not None:
             raise HTTPException(status_code=409, detail=(
                 f"The pay period {period_label(lock.start_date, lock.end_date)} is approved and locked. "
-                "Reopen it on the Pay periods screen to change its times."))
+                f"Reopen it on the Pay periods screen to change its {what}."))
 
 
 # ------------------------------------------------------------------------------------------------
@@ -226,7 +227,7 @@ async def summarize(db: AsyncSession, venue: Venue, start: date, end: date, comp
         p = per.setdefault(u.id, {
             "worker_id": u.id, "name": (f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email),
             "email": u.email, "works_through": company_of(u.id), "shifts": set(), "hours": 0.0, "overtime_hours": 0.0,
-            "pay": 0.0, "open_entries": 0, "edited_entries": 0, "outside_area": 0, "auto_closed": 0,
+            "pay": 0.0, "open_entries": 0, "edited_entries": 0, "outside_area": 0, "auto_closed": 0, "tips": 0.0,
         })
         p["shifts"].add(s.id)
         if e.clock_out_time is None:
@@ -256,17 +257,45 @@ async def summarize(db: AsyncSession, venue: Venue, start: date, end: date, comp
         if company and (company_of(u.id) or "").lower() != company.strip().lower():
             continue
         q = payroll.setdefault(u.id, {"worker_id": u.id, "name": (f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email),
-                                      "shifts": 0, "scheduled_hours": 0.0})
+                                      "shifts": 0, "scheduled_hours": 0.0, "tips": 0.0})
         q["shifts"] += 1
         q["scheduled_hours"] += max(0.0, (_utc(s.end_time) - _utc(s.start_time)).total_seconds() / 3600.0)
+
+    # Phase 35.2: tips, on the day the shift starts. People with tips but no clock-ins still get a row.
+    if venue.tips_enabled:
+        from src.services.tips import tips_by_request, event_ids_starting
+        tip_map = await tips_by_request(db, await event_ids_starting(db, [venue.id], lo, hi))
+        if tip_map:
+            tip_rows = (await db.execute(
+                select(ShiftRequest, Shift, User).join(Shift, Shift.id == ShiftRequest.shift_id)
+                .join(User, User.id == ShiftRequest.worker_id)
+                .where(ShiftRequest.id.in_(list(tip_map.keys())), Shift.start_time >= lo, Shift.start_time < hi)
+            )).all()
+            tip_modes = await modes_for_requests(db, [(r, s) for r, s, _u in tip_rows])
+            for r, s, u in tip_rows:
+                if company and (company_of(u.id) or "").lower() != company.strip().lower():
+                    continue
+                amount = sum(tip_map[r.id])
+                name = f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
+                if u.id in per:
+                    per[u.id]["tips"] += amount
+                elif tip_modes.get(r.id) == PAYROLL:
+                    payroll.setdefault(u.id, {"worker_id": u.id, "name": name, "shifts": 0, "scheduled_hours": 0.0,
+                                              "tips": 0.0})["tips"] += amount
+                else:
+                    per[u.id] = {"worker_id": u.id, "name": name, "email": u.email, "works_through": company_of(u.id),
+                                 "shifts": {s.id}, "hours": 0.0, "overtime_hours": 0.0, "pay": 0.0, "open_entries": 0,
+                                 "edited_entries": 0, "outside_area": 0, "auto_closed": 0, "tips": amount}
 
     people_rows = []
     for p in per.values():
         people_rows.append({**p, "shifts": len(p["shifts"]), "hours": round(p["hours"], 2),
                             "overtime_hours": round(p["overtime_hours"], 2),
-                            "regular_hours": round(p["hours"] - p["overtime_hours"], 2), "pay": round(p["pay"], 2)})
+                            "regular_hours": round(p["hours"] - p["overtime_hours"], 2), "pay": round(p["pay"], 2),
+                            "tips": round(p["tips"], 2)})
     people_rows.sort(key=lambda x: x["name"].lower())
-    payroll_rows = sorted([{**q, "scheduled_hours": round(q["scheduled_hours"], 2)} for q in payroll.values()],
+    payroll_rows = sorted([{**q, "scheduled_hours": round(q["scheduled_hours"], 2), "tips": round(q["tips"], 2)}
+                           for q in payroll.values()],
                           key=lambda x: x["name"].lower())
     out = {
         "people": len(people_rows),
@@ -276,6 +305,7 @@ async def summarize(db: AsyncSession, venue: Venue, start: date, end: date, comp
         "open_entries": sum(p["open_entries"] for p in people_rows),
         "payroll_people": len(payroll_rows),
         "payroll_shifts": sum(q["shifts"] for q in payroll_rows),
+        "total_tips": round(sum(p["tips"] for p in people_rows) + sum(q["tips"] for q in payroll_rows), 2),   # Phase 35.2
     }
     if people:
         out["rows"] = people_rows
