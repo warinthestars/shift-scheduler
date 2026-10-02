@@ -94,6 +94,19 @@ async def seed_initial_data(db: AsyncSession):
     except Exception as e:
         logger.error(f"Error syncing ALWAYS_ADMIN_EMAILS: {e}", exc_info=True)
 
+    # Phase 35.3: SEED_DEMO_ACCOUNTS=false = a clean install. Stop here: no demo venue, no demo accounts.
+    # (Demo accounts created by an earlier start are left alone; remove them in Admin -> Users.)
+    if not settings.SEED_DEMO_ACCOUNTS:
+        try:
+            linked = await backfill_missing_events(db)
+            if linked:
+                logger.info(f"Linked {linked} shift(s) to events.")
+        except Exception as e:
+            await db.rollback()
+            logger.warning(f"Event backfill skipped: {e}")
+        logger.info("SEED_DEMO_ACCOUNTS=false: skipped the starter demo venue and accounts. Initialization complete.")
+        return
+
     # --------------------------------------------------------------------------
     # 2. Demo Venue Seeding ("The Hippodrome")
     # --------------------------------------------------------------------------

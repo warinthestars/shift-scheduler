@@ -4,6 +4,39 @@ All notable changes to ShiftBoard. The format follows [Keep a Changelog](https:/
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.35.5] - 2026-10-02 - Phase 35.3.1: Demo data script for PowerShell
+
+### Added
+- **`deploy_test_data.ps1`** in the repository root: the PowerShell twin of `deploy_test_data.sh`, for deploying from Windows (`.\deploy_test_data.ps1 [load | reset | clear | status]`).
+  - Same commands, options, checks and messages as the bash script: `--start`, `--demo-copy`, `-y`, and every loader option passed through.
+  - Works in Windows PowerShell 5.1 and PowerShell 7, and puts you back in the folder you started in.
+
+### Fixed
+- `deploy_test_data.sh` ended with a stray code-fence line, which made bash report a syntax error after a successful load. The line is removed.
+
+### Changed
+- `docs/DEPLOYMENT.md`, README and `agy_system_instructions.md` describe both scripts.
+
+## [0.35.4] - 2026-10-02 - Phase 35.3: Demo data and deployment guide
+
+### Added
+- **Full demo data loader**, `backend/src/demo_data.py`. Run it in the backend container: `python -m src.demo_data load | reset | clear | status`.
+  - It builds five venues set up five different ways, about 115 people, weeks of finished events (clock-ins, late arrivals, no-shows, drops, edited times, tips, ratings, overtime, approved and reopened pay periods), events happening today, and upcoming events with requests, offers, waitlists, cover requests, hand-offs, drafts and templates.
+  - Everything is dated from the moment it's loaded; `reset` refreshes it.
+  - Demo accounts all end in `@demo.example.com`, share one password (`--password`), and have email and texts off. Loading sends nothing.
+  - `clear` removes exactly the demo venues and demo accounts. Nothing else in the database is touched.
+  - Options: `--weeks-back`, `--weeks-ahead`, `--seed`, `--password`, `--manager-email` (make an existing manager or admin a manager of every demo venue).
+- **`deploy_test_data.sh`** in the repository root: runs the loader's Docker commands for you from any folder (`bash deploy_test_data.sh [load | reset | clear | status]`).
+  - It checks Docker and the backend, waits for the database, and asks before `reset` or `clear`.
+  - `--start` starts the stack first; `--demo-copy` uses the separate demo copy.
+  - `.gitattributes` keeps `*.sh` files on LF line endings so bash can run them on Windows checkouts.
+- **`SEED_DEMO_ACCOUNTS`** setting (default `true`). `false` gives a clean install: startup creates only the first admin, with no demo venue, manager or workers.
+- **`docker-compose.demo.yaml`**: a separate copy of the stack for demo data, with its own database, on other ports (web app on 5183), no tunnel, and email and texts never sent.
+- **`docs/DEPLOYMENT.md`**: deploying clean, with starter accounts, with the full demo data, or with the demo data in a separate copy; snapshots; going from demo to real.
+
+### Changed
+- README, `agy_system_instructions.md` and `scripts/consolidate_env.py` refer to `docker-compose.yaml` (the compose file's current name).
+
 ## [0.35.3] - 2026-09-29 - Phase 35.2: Tips per event
 
 ### Added

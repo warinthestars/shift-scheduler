@@ -20,7 +20,11 @@ You must structure the project as follows. **CRITICAL:** Create a `.env.template
 ```text
 /shift-scheduler
 ├── .gitignore               # MUST ignore .env, .env.*, .secrets/* (NOT ".secrets/"), node_modules, etc.
-├── docker-compose.yml       # reads .env + .secrets/stack.env + .secrets/integrations.env (Phase 35.1.1)
+├── docker-compose.yaml      # reads .env + .secrets/stack.env + .secrets/integrations.env (Phase 35.1.1)
+├── docker-compose.demo.yaml # optional separate demo copy of the stack (Phase 35.3)
+├── docs/DEPLOYMENT.md       # deploying with or without demo data
+├── deploy_test_data.sh      # runs the demo data loader's Docker commands (LF line endings)
+├── deploy_test_data.ps1     # the same for Windows PowerShell; keep the two in step
 ├── .env                     # ordinary settings, NO secrets. Ignored by git.
 ├── .env.template            # documents every ordinary setting
 ├── .secrets/
@@ -90,9 +94,10 @@ The project rules that always apply are in README.md → "Working on the code" (
 
 ## Configuration rules (added in Phase 35.1, updated in 35.1.1; apply to every phase)
 1. **Three settings files:** `.env` (ordinary settings, NO secrets), `.secrets/stack.env` (`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN`), `.secrets/integrations.env` (keys for outside services). `database`, `redis` and `cloudflared` read ONLY `stack.env`; the backend reads all three; the frontend reads none. Never add other `env_file` entries.
-2. **Never put a secret in `${...}` in `docker-compose.yml`** (Compose reads `${...}` only from `.env`). Containers get secrets through `env_file`; if a command needs one, use the container's shell with `$$VAR`.
+2. **Never put a secret in `${...}` in `docker-compose.yaml`** (Compose reads `${...}` only from `.env`). Containers get secrets through `env_file`; if a command needs one, use the container's shell with `$$VAR`.
 3. **A new setting** goes in `backend/src/config.py` AND in the right template: `.env.template` if it isn't secret, `.secrets/stack.env.template` if the stack needs it, `.secrets/integrations.env.template` for an outside service's key. Update the README Configuration table.
 4. **Never read, print or commit real `.env` / `.secrets` contents.** Only templates hold example values.
 5. **The frontend has no settings.** Don't add `VITE_` variables or Docker build args unless a phase explicitly asks; the Firebase web config comes from the backend (`GET /api/auth/firebase-config`).
 6. **Don't touch `.secrets/*` in `.gitignore`** (ignoring `.secrets/` itself untracks the templates).
 7. Changing settings needs `docker compose up -d --force-recreate`, NOT `down -v` (that deletes the database).
+8. **Demo data (Phase 35.3):** `backend/src/demo_data.py` builds the full demo data set with the models. When a phase adds a table or a required column, update it in the same phase so `python -m src.demo_data load` still works. Demo accounts always end in `@demo.example.com`; never give them real addresses. `deploy_test_data.sh` (bash) and `deploy_test_data.ps1` (PowerShell) run the loader and must behave the same: a change to one goes into the other in the same phase.

@@ -22,7 +22,7 @@ It NEVER prints a value, only setting names and which file each came from / goes
 Template placeholders (your_..._here) are never carried over: the script refuses to --apply
 while a secret the stack needs is still a placeholder.
 
-Run it from the repository root (the folder with docker-compose.yml). Needs Python 3.8+ only.
+Run it from the repository root (the folder with docker-compose.yaml). Needs Python 3.8+ only.
 No Python on this computer? Use Docker:
     docker run --rm -v "${PWD}:/work" -w /work python:3.11-slim python scripts/consolidate_env.py --apply
 
@@ -319,8 +319,8 @@ def main():
         if not source.exists():
             sys.exit(f"{source} doesn't exist. Nothing changed.")
         SOURCES = [(f"{source}", source)] + SOURCES[1:]
-    if not Path("docker-compose.yml").exists():
-        sys.exit("Run this from the repository root (the folder with docker-compose.yml).")
+    if not (Path("docker-compose.yaml").exists() or Path("docker-compose.yml").exists()):
+        sys.exit("Run this from the repository root (the folder with docker-compose.yaml).")
 
     if args.undo:
         restored = 0

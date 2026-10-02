@@ -221,6 +221,12 @@ frontend/src/
   context/AuthContext.jsx, api/client.js   (locked: change only when asked)
   utils/             formatting, time zones, errors, push, version
 database/init.sql    the whole schema (runs on an empty database)
+backend/src/seed.py        starter demo accounts at startup (off with SEED_DEMO_ACCOUNTS=false)
+backend/src/demo_data.py   the full demo data loader: python -m src.demo_data load | reset | clear | status
+deploy_test_data.sh        runs the loader's Docker commands for you: bash deploy_test_data.sh [load | reset | clear | status]
+deploy_test_data.ps1       the same for Windows PowerShell: .\deploy_test_data.ps1 [load | reset | clear | status]
+docker-compose.demo.yaml   a separate demo copy of the stack (own database, other ports)
+docs/DEPLOYMENT.md         deploying with or without demo data
 ```
 
 API docs are live at `/docs` (Swagger) and `/redoc` on the backend.
@@ -275,7 +281,16 @@ docker compose logs -f backend
 | Worker | `demo_worker@shiftboard.com` | `DemoWorker123!` |
 | Worker | `worker1@shiftboard.com`, `worker2@shiftboard.com` | `Worker123!` |
 
-Change these before anyone else can reach the app.
+Change these before anyone else can reach the app. For a real deployment set `SEED_DEMO_ACCOUNTS=false` so they're never created.
+
+**With or without demo data.** [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) covers every setup step by step:
+
+| Setup | In short |
+| :--- | :--- |
+| Clean (real use) | `SEED_DEMO_ACCOUNTS=false`, `SHOW_DEMO_LOGINS=false` in `.env` |
+| Starter demo accounts | the default: the accounts in the table above |
+| Full demo data | `bash deploy_test_data.sh` on Linux / macOS, `.\deploy_test_data.ps1` in Windows PowerShell (or `docker compose exec backend python -m src.demo_data load`): five venues, about 115 people, weeks of history, something live today. `reset` refreshes the dates, `clear` removes exactly the demo data. |
+| Full demo data in a separate copy | `docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build`, then the same loader inside it (or both in one: `bash deploy_test_data.sh load --demo-copy --start`, or `.\deploy_test_data.ps1 load --demo-copy --start`). Its own database, on http://localhost:5183. |
 
 **Everyday commands**
 ```bash
@@ -292,12 +307,12 @@ docker compose down -v && docker compose up -d --build                          
 
 | File | Holds | Read by |
 | :--- | :--- | :--- |
-| `.env` | ordinary settings, **no secrets**: ports, names, providers, addresses, switches | `backend` (and `${...}` in `docker-compose.yml`) |
+| `.env` | ordinary settings, **no secrets**: ports, names, providers, addresses, switches | `backend` (and `${...}` in `docker-compose.yaml`) |
 | `.secrets/stack.env` | stack secrets: `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY`, `SUPER_ADMIN_PASSWORD`, `TUNNEL_TOKEN` | `database`, `redis`, `cloudflared`, `backend` |
 | `.secrets/integrations.env` | outside-service keys: SMTP / Resend, Twilio, `VAPID_PRIVATE_KEY`, R2 keys | `backend` only |
 
 * So the database, Redis and the tunnel never see email, text or storage keys; the frontend gets nothing.
-* **Secrets are never written as `${...}` in `docker-compose.yml`** (Compose would only look for them in `.env`). Each container reads them from its `env_file`; Redis reads its password in its own start command.
+* **Secrets are never written as `${...}` in `docker-compose.yaml`** (Compose would only look for them in `.env`). Each container reads them from its `env_file`; Redis reads its password in its own start command.
 * The backend builds the database and Redis addresses itself (`backend/src/config.py`). `POSTGRES_PORT` / `REDIS_PORT` are only the ports on your computer; containers always use 5432 / 6379.
 * After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
 * **Two files stay in `.secrets/`** because they aren't `KEY=VALUE` text: `firebase-web-config.js` (Firebase web config, sent to the browser by the backend) and `firebase_service_account.json` (FCM push).
@@ -310,7 +325,7 @@ The main settings:
 | Area | Settings |
 | :--- | :--- |
 | Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
-| Sign-in | `SECRET_KEY` (signs every login; must be set; in `stack.env`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS` |
+| Sign-in | `SECRET_KEY` (signs every login; must be set; in `stack.env`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS`, `SEED_DEMO_ACCOUNTS` (`false` = clean install, no starter demo accounts) |
 | Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
 | Links | `APP_BASE_URL`: the public address used in emails, texts and invites |
 | Email | `EMAIL_PROVIDER` (`console` \| `smtp` \| `resend`), `EMAIL_FROM`, `SMTP_*`, `RESEND_API_KEY` |
