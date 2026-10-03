@@ -39,7 +39,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['dev-scheduler.jaccollective.com', 'shiftboard.local', 'dev-scheduler-local.jaccollective.com'],
+    allowedHosts: ['dev-scheduler.jaccollective.com', 'shiftboard.local', 'dev-scheduler-local.jaccollective.com', 'dev.shift-up.team', 'shift-up.team', 'dev-local.shift-up.team'],
     watch: {
       usePolling: true,
     },
