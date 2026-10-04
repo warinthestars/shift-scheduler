@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
+import WorkerTabBar from './components/WorkerTabBar';   // Phase 33: phone tab bar (workers only)
 import LoginPage from './pages/LoginPage';
 import WorkerDashboard from './pages/WorkerDashboard';
 import VenueManagerDashboard from './pages/VenueManagerDashboard';
@@ -10,6 +11,8 @@ import AdminPanel from './pages/AdminPanel';
 import VenuesDirectory from './pages/VenuesDirectory';
 import VenueProfile from './pages/VenueProfile';
 import JoinPage from './pages/JoinPage';
+import ProfilePage from './pages/ProfilePage';
+import EarningsPage from './pages/EarningsPage';   // Phase 33.1
 
 function HomeRedirect() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -61,6 +64,7 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'platform_admin']}>
                   <Navbar />
                   <WorkerDashboard />
+                  <WorkerTabBar />
                 </ProtectedRoute>
               }
             />
@@ -94,6 +98,7 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
                   <Navbar />
                   <VenuesDirectory />
+                  <WorkerTabBar />
                 </ProtectedRoute>
               }
             />
@@ -103,6 +108,31 @@ export default function App() {
                 <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
                   <Navbar />
                   <VenueProfile />
+                  <WorkerTabBar />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Phase 33.1: a worker's own hours & pay */}
+            <Route
+              path="/earnings"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'platform_admin']}>
+                  <Navbar />
+                  <EarningsPage />
+                  <WorkerTabBar />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Phase 31 + 32: everyone's own profile */}
+            <Route
+              path="/profile"
+              element={
+                <ProtectedRoute allowedRoles={['worker', 'venue_manager', 'platform_admin']}>
+                  <Navbar />
+                  <ProfilePage />
+                  <WorkerTabBar />
                 </ProtectedRoute>
               }
             />

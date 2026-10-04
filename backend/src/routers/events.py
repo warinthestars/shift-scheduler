@@ -14,10 +14,12 @@ from src.auth import require_manager_or_admin
 from src.services.venue_public import can_manage_venue
 from src.services.shift_events import (
     create_event_with_positions, update_event, build_event_detail, cancel_shifts, duplicate_event,
+    publish_event, unpublish_event, discard_draft, DRAFT,
 )
 from src.services.timesheets import build_timesheet
 from src.services import notify_events
 from src.services import activity
+from src.services.activity import short_when
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/events", tags=["Events"])
@@ -50,6 +52,9 @@ async def create_event(
         raise HTTPException(status_code=403, detail="You don't manage this venue.")
     event = await create_event_with_positions(db, venue, current_user, data)
     detail = await build_event_detail(db, event)
+    if event.status == DRAFT:                               # Phase 29.3: drafts stay quiet
+        await activity.for_event("event_drafted", event.id, current_user.id)
+        return detail
     await notify_events.new_event_posted(event.id)          # Phase 28: tell the venue's team
     await activity.for_event("event_created", event.id, current_user.id)   # Phase 29.1
     return detail
@@ -129,13 +134,65 @@ async def duplicate(
     """Phase 26: Copy this event to one or more dates (same local start time)."""
     event = await _load_managed_event(db, event_id, current_user)
     venue = await _venue_for(db, event.venue_id)
-    created = await duplicate_event(db, event, venue, current_user, body.dates)
+    created = await duplicate_event(db, event, venue, current_user, body.dates, as_draft=body.as_draft)
+    drafts = sum(1 for ev in created if ev.status == DRAFT)
     for ev in created:
-        await notify_events.new_event_posted(ev.id)         # Phase 28
+        if ev.status != DRAFT:
+            await notify_events.new_event_posted(ev.id)     # Phase 28 (drafts stay quiet, Phase 29.3)
     if created:
         await activity.for_event("event_duplicated", event_id, current_user.id,
-                                 f"{len(created)} {'copy' if len(created) == 1 else 'copies'}")   # Phase 29.1
+                                 f"{len(created)} {'copy' if len(created) == 1 else 'copies'}"
+                                 + (" as drafts" if drafts else ""))   # Phase 29.1
     return DuplicateEventResult(created_event_ids=[e.id for e in created], count=len(created))
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.3: Draft / publish
+# ------------------------------------------------------------------------------
+@router.post("/{event_id}/publish", response_model=EventDetail)
+async def publish(
+    event_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Make a draft live: workers can see and request it, and the venue's team is told."""
+    event = await _load_managed_event(db, event_id, current_user)
+    await publish_event(db, event)
+    await db.refresh(event)
+    detail = await build_event_detail(db, event)
+    await notify_events.new_event_posted(event.id)
+    await activity.for_event("event_published", event.id, current_user.id)
+    return detail
+
+
+@router.post("/{event_id}/unpublish", response_model=EventDetail)
+async def unpublish(
+    event_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Take a live event back to drafts (only while nobody has requested, been booked or been offered it)."""
+    event = await _load_managed_event(db, event_id, current_user)
+    await unpublish_event(db, event)
+    await db.refresh(event)
+    detail = await build_event_detail(db, event)
+    await activity.for_event("event_unpublished", event.id, current_user.id)
+    return detail
+
+
+@router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_draft(
+    event_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a draft. Published events can only be cancelled."""
+    event = await _load_managed_event(db, event_id, current_user)
+    venue = await _venue_for(db, event.venue_id)
+    what = f"{event.title} ({short_when(event.start_time, venue)})"
+    venue_id = event.venue_id
+    await discard_draft(db, event)
+    await activity.for_venue("event_discarded", venue_id, current_user.id, f"Deleted the draft {what}")
 
 
 @router.get("/{event_id}/timesheet", response_model=EventTimesheet)

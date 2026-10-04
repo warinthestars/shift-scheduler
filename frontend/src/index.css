@@ -84,3 +84,10 @@ body {
   color: #94a3b8;
 }
 
+
+/* Phase 33: on phones, workers get a bottom tab bar. Sticky bars (e.g. Save profile) sit above it. */
+@media (max-width: 767px) {
+  html.has-tabbar {
+    --tabbar-h: calc(4rem + env(safe-area-inset-bottom));
+  }
+}

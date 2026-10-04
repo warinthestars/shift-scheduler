@@ -11,6 +11,7 @@ from src.models import (
     User, RequestStatus, TimeEntry, ShiftBoardMessage, ShiftEvent
 )
 from src.schemas import (
+    DropShiftBody,                                            # Phase 29.4
     ShiftCreate, ShiftResponse, ShiftRequestResponse, ShiftRequestStatusUpdate,
     CheckInRequest, CheckOutRequest, TimeEntryResponse,
     ShiftBoardMessageCreate, ShiftBoardMessageResponse,
@@ -202,7 +203,7 @@ async def update_shift_request_status(
     """Core update handler for manual approval or rejection of shift requests"""
     target_status = status_update.status.upper()
     if target_status not in ("APPROVED", "REJECTED"):
-        raise HTTPException(status_code=400, detail="Status must be APPROVED or REJECTED")
+        raise HTTPException(status_code=400, detail="Choose Approve or Deny.")
 
     query = await db.execute(
         select(ShiftRequest)
@@ -240,18 +241,18 @@ async def update_shift_request_status(
             exclude_shift_id=shift.id
         )
         if shift.spots_filled >= shift.capacity:
-            raise HTTPException(status_code=400, detail="Cannot approve: shift capacity is reached")
+            raise HTTPException(status_code=400, detail="This shift is already full.")
         shift.spots_filled += 1
         if shift.spots_filled >= shift.capacity:
             shift.status = "FILLED"
         shift_req.status = "approved"
         shift_req.approval_source = "manager_manual"
         shift_req.approved_by_user_id = current_user.id
-        shift_req.approved_at = datetime.utcnow()
+        shift_req.approved_at = datetime.now(timezone.utc)      # Phase 29.4: was a naive utcnow()
         # Phase 26.1: booked on this position -> close their other waiting requests in the event
         await withdraw_other_pending_in_event(
             db, shift_req.worker_id, shift.event_id, shift.id,
-            "Booked on another position for this event",
+            "Booked on another shift at this event",
         )
     elif target_clean == "rejected":
         if prev_status == "approved":
@@ -383,6 +384,7 @@ async def check_out_shift(
 @router.post("/{shift_id}/drop")
 async def drop_shift(
     shift_id: UUID,
+    body: Optional[DropShiftBody] = None,                     # Phase 29.4: optional reason for the manager
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -408,7 +410,7 @@ async def drop_shift(
     if not shift_req:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Shift assignment not found or not in approved status."
+            detail="You're not booked on this shift."
         )
 
     # 3. Datetime Normalization
@@ -423,7 +425,7 @@ async def drop_shift(
     if time_to_start < 86400:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot drop shift within 24 hours of start time."
+            detail="It starts in less than 24 hours, so it can't be dropped. Ask for cover, hand it off to a teammate, or message your manager."
         )
 
     # 4. Database Transaction
@@ -431,11 +433,15 @@ async def drop_shift(
         # Step 1: Update status of worker's ShiftRequest record to "dropped"
         shift_req.status = "dropped"
         shift_req.dropped_at = now_utc
+        shift_req.status_reason = ((body.reason or "").strip()[:500] or None) if body else None   # Phase 29.4
 
         # Step 2: Decrement spots_filled
         shift.spots_filled = max(0, (shift.spots_filled or 1) - 1)
         if shift.status == "FILLED":
             shift.status = "OPEN"
+        # Phase 34: their cover request (and a cover take waiting for the manager) closes with the booking
+        from src.services.cover import close_for_request
+        await close_for_request(db, shift_req.id, "You dropped this shift")
 
         # Step 3: Commit transaction
         await db.commit()
@@ -448,7 +454,10 @@ async def drop_shift(
 
     # Phase 29.1: managers hear about drops right away (after commit; never raises)
     await notify_events.shift_dropped(shift_req.id)
-    await activity.for_request("shift_dropped", shift_req.id, current_user.id)
+    from src.services import waitlist
+    await waitlist.kick(shift.id)          # Phase 34: the freed spot goes to the waitlist right away (never raises)
+    await activity.for_request("shift_dropped", shift_req.id, current_user.id,
+                               f"“{shift_req.status_reason}”" if shift_req.status_reason else "")   # Phase 29.4: with their reason
 
     return {
         "detail": "Shift successfully dropped.",
@@ -586,7 +595,7 @@ async def verify_shift_message_access(shift: Shift, user: User, db: AsyncSession
     if not req:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only assigned workers and venue managers may access this shift discussion board."
+            detail="Only people working this shift (and its managers) can see its chat."
         )
 
 @router.get("/{shift_id}/messages", response_model=List[ShiftBoardMessageResponse])

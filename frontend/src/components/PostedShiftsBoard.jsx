@@ -3,7 +3,7 @@ import { Calendar, dateFnsLocalizer } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { enUS } from 'date-fns/locale';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
-import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin } from 'lucide-react';
+import { Calendar as CalendarIcon, List as ListIcon, Clock, Users, UserPlus, Pencil, Eye, EyeOff, Copy, ClipboardList, Ban, MoreHorizontal, MapPin, Send, Undo2, Trash2, LayoutTemplate, FilePen } from 'lucide-react';
 import api from '../api/client';
 import TipBadge from './TipBadge';
 import PayLabel from './PayLabel';
@@ -14,6 +14,7 @@ const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales
 
 const SCOPES = [
   { id: 'upcoming', label: 'Upcoming' },
+  { id: 'drafts', label: 'Drafts' },       // Phase 29.3
   { id: 'past', label: 'Past' },
   { id: 'all', label: 'All' },
 ];
@@ -36,6 +37,10 @@ export default function PostedShiftsBoard({
   openEventId = null,      // Phase 28: open this event's roster once it loads (notification link)
   onOpenedEvent,
   onDataChanged,           // Phase 29: after assign / offer / rating (parent reloads, which bumps refreshKey)
+  onPublishEvent,          // Phase 29.3: (ev) draft -> live
+  onUnpublishEvent,        // Phase 29.3: (ev) live -> draft
+  onDeleteDraft,           // Phase 29.3: (ev)
+  onSaveTemplate,          // Phase 29.3: (ev)
 }) {
   const [scope, setScope] = useState('upcoming');
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'calendar'
@@ -65,7 +70,7 @@ export default function PostedShiftsBoard({
         }
       })
       .catch((err) => {
-        if (active) setError(err.response?.data?.detail || 'Could not load posted shifts.');
+        if (active) setError(err.response?.data?.detail || 'Could not load posted events.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -133,9 +138,9 @@ export default function PostedShiftsBoard({
         <div className="flex items-start gap-2">
           <CalendarIcon className="w-5 h-5 text-emerald-400 mt-0.5 flex-shrink-0" />
           <div className="min-w-0">
-            <h2 className="text-base font-bold text-white">Posted Shifts ({events.length})</h2>
+            <h2 className="text-base font-bold text-white">Posted events ({events.length})</h2>
             <p className="text-xs text-slate-400">
-              Every event with its positions, staff and requests.
+              Every event with its shifts, staff and requests.
               {timeZone && <span className="text-slate-500"> Times in venue time ({timeZone}).</span>}
             </p>
           </div>
@@ -166,7 +171,7 @@ export default function PostedShiftsBoard({
       )}
 
       {loading && events.length === 0 ? (
-        <div className="text-center py-12 text-xs text-slate-400">Loading posted shifts…</div>
+        <div className="text-center py-12 text-xs text-slate-400">Loading posted events…</div>
       ) : viewMode === 'calendar' ? (
         <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-h-[620px]">
           <Calendar
@@ -181,8 +186,9 @@ export default function PostedShiftsBoard({
             popup
             eventPropGetter={(e) => ({
               style: {
-                backgroundColor: e.resource.total_requested > 0 ? '#b45309' : '#059669',
-                borderColor: e.resource.total_requested > 0 ? '#f59e0b' : '#10b981',
+                backgroundColor: e.resource.status === 'draft' ? '#334155' : e.resource.total_requested > 0 ? '#b45309' : '#059669',
+                borderColor: e.resource.status === 'draft' ? '#94a3b8' : e.resource.total_requested > 0 ? '#f59e0b' : '#10b981',
+                borderStyle: e.resource.status === 'draft' ? 'dashed' : 'solid',
                 color: '#ffffff',
                 borderRadius: '6px',
                 padding: '2px 6px',
@@ -197,7 +203,9 @@ export default function PostedShiftsBoard({
         <div className="text-center py-12 bg-slate-950/50 rounded-xl border border-slate-800">
           <CalendarIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
           <p className="text-xs text-slate-400">
-            {scope === 'upcoming' ? 'No upcoming shifts posted for this venue.' : 'No shifts found.'}
+            {scope === 'upcoming' ? 'No upcoming events posted for this venue.'
+              : scope === 'drafts' ? 'No drafts. Use “Save as draft” when posting an event to prepare it before workers can see it.'
+              : 'No events found.'}
           </p>
         </div>
       ) : (
@@ -211,11 +219,21 @@ export default function PostedShiftsBoard({
               <div className="space-y-3">
                 {items.map((ev) => {
                   const timeStr = fmtTimeRange(ev.start_time, ev.end_time, timeZone);
+                  const isDraft = ev.status === 'draft';          // Phase 29.3
+                  const upcoming = new Date(ev.start_time) > new Date();
+                  const nobody = ev.total_assigned === 0 && ev.total_requested === 0 && !ev.positions.some((p) => (p.offers || []).some((o) => o.status === 'pending'));
                   return (
-                    <div key={ev.event_key} className={`bg-slate-950 border rounded-xl overflow-visible ${ev.cancelled ? 'border-rose-900/60 opacity-70' : 'border-slate-800'}`}>
+                    <div key={ev.event_key} className={`bg-slate-950 border rounded-xl overflow-visible ${ev.cancelled ? 'border-rose-900/60 opacity-70' : isDraft ? 'border-dashed border-slate-500' : 'border-slate-800'}`}>
                       <div className="px-4 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/30">
                         <div>
-                          <div className="text-sm font-bold text-white">{ev.title}</div>
+                          <div className="text-sm font-bold text-white flex flex-wrap items-center gap-2">
+                            {ev.title}
+                            {isDraft && (
+                              <span title="Only managers can see a draft" className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-500 inline-flex items-center gap-1">
+                                <FilePen className="w-3 h-3" /> Draft · not visible to workers
+                              </span>
+                            )}
+                          </div>
                           {ev.cancelled && (
                             <div className="text-[11px] text-rose-300">Cancelled{ev.cancel_reason ? `: ${ev.cancel_reason}` : ''}</div>
                           )}
@@ -233,7 +251,7 @@ export default function PostedShiftsBoard({
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 self-start md:self-auto relative">
+                        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto relative">
                           <button
                             type="button"
                             onClick={() => setSelectedKey(ev.event_key)}
@@ -241,6 +259,17 @@ export default function PostedShiftsBoard({
                           >
                             <Eye className="w-3.5 h-3.5" /> Details
                           </button>
+                          {isDraft && onPublishEvent && !ev.cancelled && (
+                            <button
+                              type="button"
+                              onClick={() => onPublishEvent(ev)}
+                              disabled={!upcoming}
+                              title={upcoming ? 'Workers can see and request it, and your team is told' : 'The start time has passed. Edit the date first.'}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition inline-flex items-center gap-1.5 disabled:opacity-40"
+                            >
+                              <Send className="w-3.5 h-3.5" /> Publish
+                            </button>
+                          )}
                           {onEditEvent && ev.event_id && !ev.cancelled && (
                             <button
                               type="button"
@@ -262,7 +291,7 @@ export default function PostedShiftsBoard({
                           )}
                           {menuKey === ev.event_key && (
                             <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
-                              {onTimesheet && (
+                              {onTimesheet && !isDraft && (
                                 <button type="button" onClick={() => { setMenuKey(null); onTimesheet(ev); }}
                                   className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
                                   <ClipboardList className="w-3.5 h-3.5" /> Time sheet
@@ -274,7 +303,25 @@ export default function PostedShiftsBoard({
                                   <Copy className="w-3.5 h-3.5" /> Duplicate / repeat
                                 </button>
                               )}
-                              {onCancelEvent && !ev.cancelled && new Date(ev.start_time) > new Date() && (
+                              {onSaveTemplate && (
+                                <button type="button" onClick={() => { setMenuKey(null); onSaveTemplate(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+                                  <LayoutTemplate className="w-3.5 h-3.5" /> Save as template
+                                </button>
+                              )}
+                              {onUnpublishEvent && !isDraft && !ev.cancelled && upcoming && nobody && (
+                                <button type="button" onClick={() => { setMenuKey(null); onUnpublishEvent(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 inline-flex items-center gap-2">
+                                  <Undo2 className="w-3.5 h-3.5" /> Move back to drafts
+                                </button>
+                              )}
+                              {onDeleteDraft && isDraft && (
+                                <button type="button" onClick={() => { setMenuKey(null); onDeleteDraft(ev); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
+                                  <Trash2 className="w-3.5 h-3.5" /> Delete draft
+                                </button>
+                              )}
+                              {onCancelEvent && !isDraft && !ev.cancelled && new Date(ev.start_time) > new Date() && (
                                 <button type="button" onClick={() => { setMenuKey(null); onCancelEvent(ev); }}
                                   className="w-full text-left px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2">
                                   <Ban className="w-3.5 h-3.5" /> Cancel event
@@ -293,7 +340,7 @@ export default function PostedShiftsBoard({
                                 <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{pos.role_type}</span>
                                 {pos.status === 'CANCELLED' && <span className="text-[10px] text-rose-300">cancelled</span>}
                               </div>
-                              <div className="md:col-span-3 flex items-center gap-1.5 text-emerald-400 font-semibold">
+                              <div className="md:col-span-3 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0 text-emerald-400 font-semibold whitespace-nowrap">
                                 <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
                                 {pos.hide_rate && <EyeOff className="w-3 h-3 text-slate-500" title="Pay hidden from workers" />}
                                 {pos.approval_mode === 'auto' && <span className="text-[10px] text-emerald-400">Instant</span>}

@@ -9,7 +9,7 @@ asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
 alembic>=1.13.1
 redis>=5.0.3
-firebase-admin>=6.5.0
+firebase-admin>=7.0.0
 boto3>=1.34.0
 python-dotenv>=1.0.1
 httpx>=0.27.0
@@ -23,3 +23,6 @@ google-auth>=2.27.0
 requests>=2.31.0
 tzdata>=2024.1
 segno>=1.6.0
+# Phase 33.0.1: phone / browser notifications (Web Push fallback when Firebase messaging isn't set up)
+pywebpush==2.3.0
+py-vapid>=1.9

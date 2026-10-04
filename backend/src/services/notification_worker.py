@@ -6,7 +6,13 @@ Every minute:
   2. reminders to booked workers: ~24h before and ~2h before (each once, via dedupe keys)
   3. "not clocked in" 10 minutes after start -> the worker (urgent) and the venue's managers
   4. managers: people who haven't read an UPDATE to a shift starting within 24h (once per update)
-  5. send due email / SMS from the outbox
+  5. managers: a position still has open spots 3 hours before it starts (once per position; Phase 30)
+  5b. workers: a certificate expires in 30 days, in 7 days, or today (once each; Phase 32)
+  5c. cover requests: close stale ones, warn 12 h / 3 h before start if nobody took it (Phase 34)
+  5d. waitlists: give opened spots to the next person in line, expire old offers (Phase 34)
+  0.  Phase 35: bookings whose shift started get their time-tracking mode written (payroll | shiftboard),
+      so late alerts, reliability and pay use what applied at the start even if settings change later
+  6. send due email / SMS from the outbox
 
 Only one process runs a tick at a time (Redis lock). If Redis is unreachable the tick still runs;
 dedupe keys keep reminders from doubling.
@@ -107,9 +113,13 @@ async def scan_reminders(db: AsyncSession, now: datetime) -> int:
 async def scan_late(db: AsyncSession, now: datetime) -> int:
     sent = 0
     rows = await _booked_rows(db, now - timedelta(hours=24), now - LATE_AFTER, BOOKED_NOT_STARTED)
+    from src.services.time_tracking import modes_for_requests, PAYROLL      # Phase 35
+    modes = await modes_for_requests(db, [(r, s) for r, s, *_ in rows])
     for r, s, ev, venue, loc in rows:
         if _as_utc(s.end_time) <= now:
             continue
+        if modes.get(r.id) == PAYROLL:
+            continue                           # Phase 35: the venue's own payroll tracks their time
         has_entry = await db.scalar(
             select(func.count(TimeEntry.id)).where(TimeEntry.shift_id == s.id, TimeEntry.worker_id == r.worker_id)
         )
@@ -169,17 +179,108 @@ async def scan_unread_updates(db: AsyncSession, now: datetime) -> int:
     return sent
 
 
+UNFILLED_WINDOW = timedelta(hours=3)
+
+
+async def scan_unfilled(db: AsyncSession, now: datetime) -> int:
+    """Phase 30: one alert per position that still has open spots when it's 3 h (or less) from starting."""
+    rows = (await db.execute(
+        select(Shift).where(
+            func.upper(Shift.status) == "OPEN",
+            Shift.start_time > now,
+            Shift.start_time <= now + UNFILLED_WINDOW,
+            Shift.spots_filled < Shift.capacity,
+        )
+    )).scalars().all()
+    sent = 0
+    for s in rows:
+        ev = await db.scalar(select(ShiftEvent).where(ShiftEvent.id == s.event_id)) if s.event_id else None
+        if ev is not None and (ev.cancelled_at is not None or (ev.status or "published") != "published"):
+            continue
+        venue = await db.scalar(select(Venue).where(Venue.id == s.venue_id))
+        open_n = (s.capacity or 1) - (s.spots_filled or 0)
+        name = ev.title if ev else s.title
+        n = await notify_in(
+            db, await manager_ids(db, s.venue_id), "unfilled_soon",
+            f"{open_n} {s.role_type} spot{'s' if open_n != 1 else ''} still open: {name}",
+            f"Starts {when_text(s.start_time, venue)}. Offer it or assign someone from the Today board.",
+            manager_link(s.venue_id, s.event_id), venue_id=s.venue_id, event_id=s.event_id,
+            urgent=True, dedupe_key=f"unfilled3h:{s.id}",
+        )
+        if n:
+            sent += n
+            await record_in(db, s.venue_id, "unfilled_soon",
+                            f"{open_n} {s.role_type} spot{'s' if open_n != 1 else ''} still open 3 h before {name}",
+                            event_id=s.event_id)
+    return sent
+
+
+async def scan_expiring_certs(db: AsyncSession, now: datetime) -> int:
+    """Phase 32: remind people 30 days and 7 days before a certificate expires, and on the day."""
+    from src.models import WorkerCertification
+    from src.services.fit import cert_label
+    today = now.date()
+    sent = 0
+    for c in (await db.execute(
+        select(WorkerCertification).where(
+            WorkerCertification.expires_on.isnot(None),
+            WorkerCertification.expires_on >= today,
+            WorkerCertification.expires_on <= today + timedelta(days=30),
+            WorkerCertification.status != "rejected",
+        )
+    )).scalars().all():
+        left = (c.expires_on - today).days
+        bucket = "0" if left <= 0 else ("7" if left <= 7 else "30")
+        label = cert_label(c.cert_type)
+        title = f"Your {label.lower()} expires today" if left <= 0 else f"Your {label.lower()} expires in {left} day{'s' if left != 1 else ''}"
+        sent += await notify_in(
+            db, [c.worker_id], "cert_expiring", title,
+            "Renew it and update your profile. Positions that need it can't be booked once it expires.",
+            "/profile?tab=certificates", urgent=left <= 0,
+            dedupe_key=f"cert-exp:{c.id}:{c.expires_on.isoformat()}:{bucket}",
+        )
+    return sent
+
+
+async def scan_tracking(db: AsyncSession, now: datetime) -> int:
+    """Phase 35: write the time-tracking mode on bookings whose shift has started."""
+    from src.services.time_tracking import freeze_started
+    return await freeze_started(db, now)
+
+
+async def scan_cover(db: AsyncSession, now: datetime) -> int:
+    """Phase 34: close stale cover posts, then warn the worker + managers 12 h / 3 h before the start."""
+    from src.services import cover, notify_cover
+    warnings = await cover.sweep(db, now)
+    return await notify_cover.warnings_in(db, warnings)
+
+
+async def run_waitlists(now: datetime) -> None:
+    """Phase 34: waitlist engine (commits as it goes), then its notifications."""
+    from src.services import waitlist, notify_cover
+    async with AsyncSessionLocal() as db:
+        events = await waitlist.process(db, now)
+    async with AsyncSessionLocal() as db:
+        await notify_cover.waitlist_events_in(db, events)
+        await db.commit()
+
+
 async def run_tick() -> None:
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
         await auto_close_open_entries(db)
-    for label, fn in (("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates)):
+    for label, fn in (("tracking", scan_tracking), ("reminders", scan_reminders), ("late", scan_late), ("unread", scan_unread_updates),
+                      ("unfilled", scan_unfilled), ("certs", scan_expiring_certs), ("cover", scan_cover)):
         try:
             async with AsyncSessionLocal() as db:
                 await fn(db, now)
                 await db.commit()
         except Exception:
             logger.exception(f"notification scan '{label}' failed")
+    try:
+        await run_waitlists(now)                                                   # Phase 34
+    except Exception:
+        logger.exception("waitlist processing failed")
     try:
         async with AsyncSessionLocal() as db:
             await deliver_pending(db)

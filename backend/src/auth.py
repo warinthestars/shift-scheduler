@@ -111,7 +111,7 @@ async def get_current_user(
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header",
+            detail="Please sign in again.",
             headers={"WWW-Authenticate": "Bearer"}
         )
 
@@ -123,7 +123,7 @@ async def get_current_user(
     if settings.USE_MOCK_FIREBASE and (token.startswith("mock-firebase-") or token == "mock-firebase-token-123"):
         user = await get_or_create_mock_firebase_user(db)
         if not user.is_active:
-            raise HTTPException(status_code=403, detail="Inactive user account")
+            raise HTTPException(status_code=403, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
         return user
 
     # --------------------------------------------------------------------------
@@ -133,7 +133,7 @@ async def get_current_user(
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id_str: str = payload.get("sub")
         if not user_id_str:
-            raise HTTPException(status_code=401, detail="Invalid token payload: missing sub")
+            raise HTTPException(status_code=401, detail="Please sign in again.")
     except JWTError:
         # Fallback to real firebase auth if mock is disabled
         if not settings.USE_MOCK_FIREBASE:
@@ -149,23 +149,23 @@ async def get_current_user(
                 pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired authentication credentials",
+            detail="Your sign-in has expired. Please sign in again.",
             headers={"WWW-Authenticate": "Bearer"}
         )
 
     try:
         user_uuid = uuid.UUID(user_id_str)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid user identifier in token")
+        raise HTTPException(status_code=401, detail="Please sign in again.")
 
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
 
     if not user:
-        raise HTTPException(status_code=401, detail="User account not found")
+        raise HTTPException(status_code=401, detail="Please sign in again.")
 
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="Inactive user account")
+        raise HTTPException(status_code=403, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
 
     return user
 
@@ -180,7 +180,7 @@ def require_role(allowed_roles: List[str]):
         if user_role not in normalized_allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: requires one of {allowed_roles}"
+                detail="You don't have access to this."
             )
         return user
     return role_checker
@@ -215,7 +215,7 @@ async def verify_venue_access(
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Not authorized to manage this venue."
+        detail="You don't manage this venue."
     )
 
 require_venue_access = verify_venue_access

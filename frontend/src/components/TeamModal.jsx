@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Users, UserPlus, Link2, Copy, Download, RefreshCw, Mail, Phone, Upload, ShieldCheck, Trash2, Ban,
-  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus,
+  RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus, BadgeCheck,
+  Building2, Timer,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import RatingBadge from './RatingBadge';
 import ReliabilityBadge from './ReliabilityBadge';
 import WorkerProfilePanel, { Avatar } from './WorkerProfilePanel';
+import { certShort } from '../utils/certs';
 import { fmtShortDate } from '../utils/venueTime';
 
 const inputCls =
@@ -30,6 +32,13 @@ const SOURCE_LABEL = {
   admin: 'Added by an admin',
   worked: 'Worked here',
 };
+// Phase 35: how this person's time is tracked at this venue
+const TRACKING_OPTIONS = [
+  ['venue', 'Use the venue setting'],
+  ['payroll', "Venue's payroll (no clock-in here)"],
+  ['shiftboard', 'Clock in with ShiftBoard'],
+];
+
 const INVITE_CHIP = {
   pending: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
   accepted: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
@@ -188,10 +197,12 @@ const FILTERS = [
   ['all', 'Everyone'],
 ];
 
-function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUpdated, onMessage }) {
+function MemberRow({ m, venueId, timeZone, positionOptions, companies = [], open, onToggle, onUpdated, onMessage }) {
   const [editing, setEditing] = useState(false);
   const [positions, setPositions] = useState(m.positions || []);
   const [notes, setNotes] = useState(m.notes || '');
+  const [tracking, setTracking] = useState(m.time_tracking || 'venue');      // Phase 35
+  const [company, setCompany] = useState(m.works_through || '');            // Phase 35
   const [confirm, setConfirm] = useState(null); // 'blocked' | 'removed'
   const [busy, setBusy] = useState(false);
   const [profileKey, setProfileKey] = useState(0);
@@ -236,6 +247,26 @@ function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUp
               <span key={p} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[9px] font-bold uppercase">{p}</span>
             ))}
             {m.notes && <span title={m.notes} className="text-[10px] text-amber-300">• note</span>}
+            {(m.certs || []).map((k) => (
+              <span key={k} title="Verified certificate" className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
+                <BadgeCheck className="w-2.5 h-2.5" /> {certShort(k)}
+              </span>
+            ))}
+            {/* Phase 35: time tracking + staffing company */}
+            {m.status === 'active' && m.effective_time_tracking === 'payroll' && (
+              <span title="Their time is tracked by the venue's own payroll. They don't clock in here."
+                className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-300 border border-violet-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
+                <Timer className="w-2.5 h-2.5" /> Venue payroll
+              </span>
+            )}
+            {m.works_through && (
+              <span title="Works through this company" className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
+                <Building2 className="w-2.5 h-2.5" /> {m.works_through}
+              </span>
+            )}
+            {m.cert_attention > 0 && (
+              <span className="text-[10px] text-sky-300" title="Open the row to check and verify">• {m.cert_attention} to verify</span>
+            )}
           </div>
           <div className="text-[11px] text-slate-500 truncate">
             {m.shifts_worked} shift{m.shifts_worked === 1 ? '' : 's'} here
@@ -258,7 +289,7 @@ function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUp
             {m.email && <a href={`mailto:${m.email}`} className={btnGhost}><Mail className="w-3.5 h-3.5" /> Email</a>}
             {!editing && (
               <button type="button" className={btnGhost} onClick={() => setEditing(true)}>
-                <Pencil className="w-3.5 h-3.5" /> Positions & note
+                <Pencil className="w-3.5 h-3.5" /> Edit
               </button>
             )}
             <span className="flex-1" />
@@ -310,11 +341,36 @@ function MemberRow({ m, venueId, timeZone, positionOptions, open, onToggle, onUp
                 <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={2000} className={inputCls}
                   placeholder="e.g. Great with VIP tables. Prefers weekends." />
               </div>
+              {/* Phase 35: time tracking + staffing company */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1" htmlFor={`tt-${m.worker_id}`}>How their time is tracked</label>
+                  <select id={`tt-${m.worker_id}`} value={tracking} onChange={(e) => setTracking(e.target.value)} className={inputCls}>
+                    {TRACKING_OPTIONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1" htmlFor={`wt-${m.worker_id}`}>Works through (staffing company)</label>
+                  <input id={`wt-${m.worker_id}`} value={company} onChange={(e) => setCompany(e.target.value)} maxLength={120}
+                    list={`companies-${venueId}`} className={inputCls} placeholder="Blank = your own staff" />
+                  <datalist id={`companies-${venueId}`}>
+                    {companies.map((c) => <option key={c} value={c} />)}
+                  </datalist>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                "Use the venue setting" follows Venue settings → Time & pay periods. People who work through a staffing company
+                clock in with ShiftBoard unless you pick otherwise here. Shifts that already started keep the setting they had.
+              </p>
               <div className="flex gap-2">
-                <button type="button" className={btnPrimary} disabled={busy} onClick={() => patch({ positions, notes })}>
+                <button type="button" className={btnPrimary} disabled={busy}
+                  onClick={() => patch({ positions, notes, time_tracking: tracking, works_through: company.trim() })}>
                   {busy ? 'Saving…' : 'Save'}
                 </button>
-                <button type="button" className={btnGhost} onClick={() => { setEditing(false); setPositions(m.positions || []); setNotes(m.notes || ''); }}>
+                <button type="button" className={btnGhost} onClick={() => {
+                  setEditing(false); setPositions(m.positions || []); setNotes(m.notes || '');
+                  setTracking(m.time_tracking || 'venue'); setCompany(m.works_through || '');
+                }}>
                   Cancel
                 </button>
               </div>
@@ -541,9 +597,14 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
     const term = q.trim().toLowerCase();
     if (!term) return members;
     return members.filter((m) =>
-      `${m.first_name} ${m.last_name} ${m.email || ''} ${m.phone || ''} ${(m.positions || []).join(' ')}`.toLowerCase().includes(term)
+      `${m.first_name} ${m.last_name} ${m.email || ''} ${m.phone || ''} ${(m.positions || []).join(' ')} ${m.works_through || ''}`.toLowerCase().includes(term)
     );
   }, [members, q]);
+  // Phase 35: company names already used on this team (suggested when editing someone)
+  const companies = useMemo(
+    () => [...new Set(members.map((m) => m.works_through).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [members]
+  );
 
   const updated = (member) => {
     setMembers((prev) =>
@@ -559,7 +620,7 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter your team by name, phone or position" className={`${inputCls} pl-9`} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter your team by name, phone, position or company" className={`${inputCls} pl-9`} />
         </div>
         <div className="flex bg-slate-800 border border-slate-700 rounded-xl p-0.5 overflow-x-auto">
           {FILTERS.map(([id, label]) => (
@@ -612,6 +673,7 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
               venueId={venueId}
               timeZone={timeZone}
               positionOptions={positionOptions}
+              companies={companies}
               open={openId === m.worker_id}
               onToggle={() => setOpenId(openId === m.worker_id ? null : m.worker_id)}
               onUpdated={updated}
@@ -671,7 +733,7 @@ function TeamLinkCard({ venueId, venueName, onMessage }) {
         {/localhost|127\.0\.0\.1/.test(link.url) && !/localhost|127\.0\.0\.1/.test(window.location.hostname) && (
           <p className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/40 rounded-lg p-2 flex gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            This link points at localhost, so it won't open on anyone's phone. Set APP_BASE_URL in the server's secrets file to your site address.
+            This link won't open on other people's phones yet. Ask your ShiftBoard admin to set the site's public address.
           </p>
         )}
         <div className="flex gap-2">
@@ -719,7 +781,7 @@ function ResultsTable({ result }) {
     <div className={`${cardCls} space-y-2`}>
       <p className="text-sm text-white">
         <strong>{result.invited}</strong> invited, <strong>{result.skipped}</strong> skipped.
-        {result.emailed > 0 && ` ${result.emailed} emailed${result.email_available ? '' : ' (email isn’t set up on this server, so they were only logged; copy the links instead)'}.`}
+        {result.emailed > 0 && ` ${result.emailed} emailed${result.email_available ? '' : ' (email isn’t available yet, so copy the links instead)'}.`}
         {result.texted > 0 && ` ${result.texted} texted.`}
       </p>
       <div className="max-h-64 overflow-y-auto divide-y divide-slate-800 text-xs">
@@ -837,7 +899,7 @@ function InviteTab({ venueId, venueName, positionOptions, onMessage }) {
       </form>
 
       <div className={`${cardCls} space-y-3`}>
-        <div className="text-sm font-bold text-white flex items-center gap-2"><Upload className="w-4 h-4 text-emerald-400" /> Import a list (CSV)</div>
+        <div className="text-sm font-bold text-white flex items-center gap-2"><Upload className="w-4 h-4 text-emerald-400" /> Import a spreadsheet (.csv)</div>
         <p className="text-xs text-slate-400">
           First row = column names: <code className="text-slate-200">name</code> (or <code className="text-slate-200">first_name</code>, <code className="text-slate-200">last_name</code>),{' '}
           <code className="text-slate-200">email</code>, <code className="text-slate-200">phone</code>, <code className="text-slate-200">positions</code> (separate several with ;).
@@ -963,7 +1025,7 @@ function ManagersTab({ venueId, onMessage }) {
       <div className={`${cardCls} space-y-2`}>
         <div className="text-sm font-bold text-white flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-400" /> Managers of this venue</div>
         {managers.length === 0 && (
-          <p className="text-xs text-slate-500">No managers yet. Only platform admins can run this venue until you add one below.</p>
+          <p className="text-xs text-slate-500">No managers yet. Only ShiftBoard admins can run this venue until you add one below.</p>
         )}
         <div className="divide-y divide-slate-800">
           {managers.map((m) => (
@@ -1005,7 +1067,7 @@ function ManagersTab({ venueId, onMessage }) {
           </div>
           <p className="text-[11px] text-slate-500">
             If they already have a manager account, they're added to this venue. Otherwise a manager account is created with a temporary password.
-            Worker accounts can't be made managers here (ask a platform admin).
+            Worker accounts can't be made managers here (ask a ShiftBoard admin).
           </p>
           <button type="submit" className={btnPrimary} disabled={busy}>
             <UserCog className="w-4 h-4" /> {busy ? 'Saving…' : 'Add co-manager'}

@@ -17,6 +17,18 @@ else:
         f"postgresql+asyncpg://{DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
 
+def _redis_url() -> str:
+    """Phase 35.1.1: REDIS_URL if set (e.g. local runs), else redis://:<REDIS_PASSWORD>@<REDIS_HOST>:6379/0.
+    Always port 6379: REDIS_PORT in .env is the port on the host computer, not inside Docker."""
+    explicit = os.getenv("REDIS_URL", "").strip()
+    if explicit:
+        return explicit
+    from urllib.parse import quote
+    password = os.getenv("REDIS_PASSWORD", "shiftboard_redis_pass")
+    host = os.getenv("REDIS_HOST", "redis")
+    return f"redis://:{quote(password, safe='')}@{host}:6379/0"
+
+
 class Settings(BaseSettings):
     ENV: str = os.getenv("ENV", "development")
     DEBUG: bool = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
@@ -33,8 +45,8 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "20"))
     DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
-    # Redis
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://:shiftboard_redis_pass@redis:6379/0")
+    # Redis. Phase 35.1.1: built from REDIS_PASSWORD (.secrets/stack.env) and REDIS_HOST unless REDIS_URL is set.
+    REDIS_URL: str = _redis_url()
 
     # JWT Authentication
     SECRET_KEY: str = os.getenv("SECRET_KEY", "fallback_secret_key_for_local_dev_only")
@@ -58,6 +70,9 @@ class Settings(BaseSettings):
     FIREBASE_AUTH_PROVIDERS: str = os.getenv("FIREBASE_AUTH_PROVIDERS", "")
     ALLOW_SELF_REGISTRATION: bool = os.getenv("ALLOW_SELF_REGISTRATION", "true").lower() in ("true", "1", "yes")
     SHOW_DEMO_LOGINS: bool = os.getenv("SHOW_DEMO_LOGINS", "false").lower() in ("true", "1", "yes")
+    # Phase 35.3: true = create the starter demo venue, manager and workers at startup (as before).
+    # false = a clean install: only the super admin (and ALWAYS_ADMIN_EMAILS) is set up.
+    SEED_DEMO_ACCOUNTS: bool = os.getenv("SEED_DEMO_ACCOUNTS", "true").lower() in ("true", "1", "yes")
     # Phase 28.1: emails that are always platform admins (comma-separated)
     ALWAYS_ADMIN_EMAILS: str = os.getenv("ALWAYS_ADMIN_EMAILS", "")
 

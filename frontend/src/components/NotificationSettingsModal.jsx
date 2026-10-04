@@ -3,6 +3,7 @@ import { Bell, Mail, MessageSquare, Moon, Send, Info, Eye } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { TIMEZONE_OPTIONS } from '../utils/venueTime';
+import PushDeviceCard from './PushDeviceCard';   // Phase 33
 
 const inputCls =
   'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
@@ -66,6 +67,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
         reminders_enabled: prefs.reminders_enabled,
         new_shift_alerts: prefs.new_shift_alerts,
         manager_alerts_email: prefs.manager_alerts_email,
+        push_enabled: prefs.push_enabled !== false,        // Phase 33
         timezone: prefs.timezone,
         phone,
         discoverable: prefs.discoverable || 'private',   // Phase 29.1
@@ -135,6 +137,9 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-4">
+            {/* Phase 33: phone / browser notifications */}
+            <PushDeviceCard pushEnabled={prefs.push_enabled !== false} onPushEnabled={(v) => set('push_enabled', v)} />
+
             <div className={cardCls}>
               <div className="flex items-center gap-2 text-sm font-semibold text-white"><Mail className="w-4 h-4 text-emerald-400" /> Email</div>
               <Toggle
@@ -145,7 +150,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
               />
               {!prefs.email_available && (
                 <p className="text-[11px] text-amber-300 flex items-start gap-1">
-                  <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" /> Email sending isn't set up on this server yet, so emails are only logged.
+                  <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" /> Email isn't available yet. You'll still see everything in the bell.
                 </p>
               )}
             </div>
@@ -164,7 +169,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
                 body="Cancellations, removals, last-minute changes, 2-hour reminders and missed clock-ins. Nothing else."
               />
               {!prefs.sms_available && (
-                <p className="text-[11px] text-slate-500">Texts aren't set up on this server yet.</p>
+                <p className="text-[11px] text-slate-500">Texts aren't available yet.</p>
               )}
             </div>
           </div>
@@ -201,7 +206,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
               <Toggle
                 checked={quietOn}
                 onChange={setQuietOn}
-                title="Hold non-urgent email and texts overnight"
+                title="Hold non-urgent email, texts and phone notifications overnight"
                 body="Urgent ones (cancellations, last-minute changes) still come through."
               />
               {quietOn && (

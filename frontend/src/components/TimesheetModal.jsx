@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ClipboardList, Plus, Pencil, Trash2, Check, X, Clock, DollarSign, AlertTriangle } from 'lucide-react';
+import { ClipboardList, Plus, Pencil, Trash2, Check, X, Clock, DollarSign, AlertTriangle, Coins, Lock } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { fmtDate, fmtTimeRange, fmtTime, fmtShortDate, utcToZonedLocalInput, zonedLocalToUtcIso } from '../utils/venueTime';
@@ -41,6 +41,130 @@ const STATUS = {
 };
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 const inputCls = 'px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white';
+
+// Phase 35.2: the event's tips: a tip pool shared by tip-pool positions, and own tips per person
+const toStr = (n) => (n ? String(Number(n).toFixed(2)) : '');
+
+function TipsPanel({ eventId, refreshKey, onSaved }) {
+  const [tips, setTips] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const reset = (t) => {
+    setTips(t);
+    setDraft({
+      pool: toStr(t.pool_amount), split: t.split, note: t.note || '',
+      own: Object.fromEntries(t.people.map((p) => [p.request_id, toStr(p.individual)])),
+    });
+  };
+
+  useEffect(() => {
+    let alive = true;
+    api.get(`/events/${eventId}/tips`)
+      .then((res) => { if (alive) reset(res.data); })
+      .catch(() => { if (alive) setTips(null); });
+    return () => { alive = false; };
+  }, [eventId, refreshKey]);
+
+  if (!tips || !draft || !tips.enabled) return null;
+  if (!tips.people.some((p) => p.tips_eligible || p.in_pool) && !tips.pool_amount) return null;
+
+  const numOr0 = (v) => (v === '' ? 0 : parseFloat(v));
+  const changedOwn = tips.people.filter((p) => numOr0(draft.own[p.request_id] ?? '') !== p.individual);
+  const dirty = numOr0(draft.pool) !== tips.pool_amount || draft.split !== tips.split
+    || (draft.note || '') !== (tips.note || '') || changedOwn.length > 0;
+
+  const save = async () => {
+    const bad = [draft.pool, ...Object.values(draft.own)].some((v) => v !== '' && (Number.isNaN(parseFloat(v)) || parseFloat(v) < 0));
+    if (bad) return setError('Tips must be amounts of $0 or more.');
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const res = await api.put(`/events/${eventId}/tips`, {
+        pool_amount: numOr0(draft.pool),
+        split: draft.split,
+        note: draft.note,
+        individual: changedOwn.map((p) => ({ request_id: p.request_id, amount: numOr0(draft.own[p.request_id] ?? '') || null })),
+      });
+      reset(res.data);
+      setNotice('Tips saved.');
+      onSaved && onSaved();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'The tips did not save.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const ro = !tips.can_edit;
+  const inCls = 'px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white disabled:opacity-50';
+  return (
+    <div className="mb-4 p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-bold text-amber-100 inline-flex items-center gap-1.5">
+          <Coins className="w-4 h-4 text-amber-400" /> Tips
+          {tips.locked && <span className="text-[10px] font-semibold text-emerald-300 inline-flex items-center gap-0.5"><Lock className="w-3 h-3" /> locked</span>}
+        </div>
+        <span className="text-xs text-amber-100">Total <strong>{money(tips.total_tips)}</strong></span>
+      </div>
+      {ro && <p className="text-[11px] text-amber-100/80">{tips.blocked_reason}</p>}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-[11px] text-slate-300">Tip pool ($)
+          <input type="number" min="0" step="0.01" inputMode="decimal" aria-label="Tip pool" disabled={ro} value={draft.pool}
+            onChange={(e) => setDraft({ ...draft, pool: e.target.value })} className={`${inCls} block mt-0.5 w-28`} placeholder="0.00" />
+        </label>
+        <label className="text-[11px] text-slate-300">Share it
+          <select aria-label="Tip pool split" disabled={ro} value={draft.split} onChange={(e) => setDraft({ ...draft, split: e.target.value })} className={`${inCls} block mt-0.5`}>
+            <option value="hours">By hours worked</option>
+            <option value="equal">Equally</option>
+          </select>
+        </label>
+        <label className="text-[11px] text-slate-300 flex-1 min-w-[10rem]">Note
+          <input disabled={ro} value={draft.note} maxLength={300} onChange={(e) => setDraft({ ...draft, note: e.target.value })}
+            className={`${inCls} block mt-0.5 w-full`} placeholder="e.g. card tips from the bar" />
+        </label>
+      </div>
+      {tips.fell_back_equal && <p className="text-[11px] text-amber-200">Nobody in the pool has hours yet, so it's shared equally for now.</p>}
+      {tips.pool_unshared && <p className="text-[11px] text-rose-300">Nobody on this event is in a tip-pool position, so the pool isn't shared with anyone.</p>}
+      <div className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-slate-950/60">
+        {tips.people.map((p) => (
+          <div key={p.request_id} className="px-2.5 py-1.5 flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-white font-semibold min-w-[7rem]">{p.name}</span>
+            <span className="text-[10px] text-slate-400 uppercase font-bold">{p.role_type}</span>
+            {p.in_pool && (
+              <span className="text-[10px] text-amber-300">
+                pool{draft.split === 'hours' ? ` · ${p.basis_hours.toFixed(2)} h${p.time_tracking === 'payroll' ? ' scheduled' : ''}` : ''}
+              </span>
+            )}
+            <span className="ml-auto flex items-center gap-2">
+              {p.tips_eligible ? (
+                <input type="number" min="0" step="0.01" inputMode="decimal" aria-label={`Own tips for ${p.name}`} disabled={ro}
+                  value={draft.own[p.request_id] ?? ''} placeholder="own tips"
+                  onChange={(e) => setDraft({ ...draft, own: { ...draft.own, [p.request_id]: e.target.value } })} className={`${inCls} w-24`} />
+              ) : <span className="text-[11px] text-slate-600 w-24 text-center">no tips</span>}
+              <span className="text-slate-400 w-20 text-right" title="Share of the tip pool">{p.in_pool ? money(p.pool_share) : '—'}</span>
+              <span className="text-amber-200 font-semibold w-20 text-right">{money(p.total)}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      {error && <p className="text-xs text-rose-300">{error}</p>}
+      {notice && !dirty && <p className="text-xs text-emerald-300">{notice}</p>}
+      {!ro && dirty && (
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => reset(tips)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300">Undo</button>
+          <button type="button" onClick={save} disabled={saving}
+            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+            <Check className="w-3 h-3" /> {saving ? 'Saving…' : 'Save tips'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }) {
   const [data, setData] = useState(null);
@@ -131,7 +255,7 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
           </label>
         )}
         {f.kind === 'delete' && <p className="text-xs text-rose-300">Delete this time entry?</p>}
-        {f.kind === 'noshow' && <p className="text-xs text-rose-300">Mark as a no-show? This counts against their reliability.</p>}
+        {f.kind === 'noshow' && <p className="text-xs text-rose-300">Mark as a no-show? This counts against their reliability, they’re told, and their spot opens again.</p>}
         <input
           value={f.reason}
           onChange={(e) => setForm({ ...f, reason: e.target.value })}
@@ -172,6 +296,7 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
         <p className="text-sm text-slate-500 text-center py-10">No one is booked on this shift yet.</p>
       ) : data ? (
         <div className="space-y-3">
+          <TipsPanel eventId={eventId} refreshKey={data} onSaved={onChanged} />
           {data.people.map((p) => {
             const st = STATUS[p.status] || { label: p.status, cls: 'bg-slate-800 text-slate-300 border-slate-700' };
             const canNoShow = data.started && ['approved', 'confirmed'].includes(p.status) && p.entries.length === 0;
@@ -183,6 +308,19 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
                     <span className="text-sm font-semibold text-white">{p.name}</span>
                     <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-bold uppercase">{p.role_type}</span>
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${st.cls}`}>{st.label}</span>
+                    {/* Phase 35 */}
+                    {p.time_tracking === 'payroll' && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-violet-500/10 text-violet-300 border-violet-500/30">Venue payroll</span>
+                    )}
+                    {p.works_through && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-sky-500/10 text-sky-300 border-sky-500/30">{p.works_through}</span>
+                    )}
+                    {p.overtime_hours > 0 && (
+                      <span title="Hours past the venue's overtime limits (Venue settings → Time & pay periods)"
+                        className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-orange-500/10 text-orange-300 border-orange-500/40">
+                        OT {p.overtime_hours.toFixed(2)} h
+                      </span>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-3 text-xs">
                     <button type="button"
@@ -219,6 +357,11 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
                   </div>
                 )}
 
+                {p.time_tracking === 'payroll' && p.entries.length === 0 && (
+                  <p className="mt-2 text-[11px] text-violet-200/80">
+                    Their hours are tracked in your venue's own payroll, so there's nothing to clock here. Times you add still count in ShiftBoard.
+                  </p>
+                )}
                 {!formHere && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button type="button"

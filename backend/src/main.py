@@ -22,7 +22,14 @@ from src.routers.invites import router as invites_router
 from src.routers.staffing import router as staffing_router
 from src.routers.activity import router as activity_router
 from src.routers.admin_console import router as admin_console_router
+from src.routers.event_templates import router as event_templates_router
+from src.routers.profile import router as profile_router   # Phase 31 + 32
+from src.routers.cover import router as cover_router       # Phase 34
+from src.routers.pay_periods import router as pay_periods_router   # Phase 35
+from src.routers.tips import router as tips_router                 # Phase 35.2
 from src.services.notification_worker import notification_worker_loop
+from src.version import APP_VERSION                          # Phase 34.5
+from src.json_guard import RejectNonFiniteJSON                # Phase 34.5
 
 
 # Configure logging
@@ -89,9 +96,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ShiftBoard API",
     description="Shift scheduling and community call-board platform for the service industry",
-    version="0.2.0",
+    version=APP_VERSION,                                     # Phase 34.5 (was a fixed "0.2.0")
     lifespan=lifespan
 )
+
+# Phase 34.5: refuse NaN / Infinity in JSON bodies (added BEFORE CORS so CORS stays the outer layer)
+app.add_middleware(RejectNonFiniteJSON)
 
 # CORS middleware configuration
 app.add_middleware(
@@ -132,6 +142,11 @@ app.include_router(invites_router)
 app.include_router(staffing_router)
 app.include_router(activity_router)
 app.include_router(admin_console_router)
+app.include_router(event_templates_router)
+app.include_router(profile_router)   # Phase 31 + 32
+app.include_router(cover_router)     # Phase 34
+app.include_router(pay_periods_router)   # Phase 35
+app.include_router(tips_router)          # Phase 35.2
 
 
 @app.get("/healthz", tags=["System"])

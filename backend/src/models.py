@@ -3,9 +3,10 @@ from enum import Enum
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, Numeric,
-    DateTime, ForeignKey, Enum as SQLEnum, ARRAY, CheckConstraint, UniqueConstraint
+    DateTime, ForeignKey, ARRAY, CheckConstraint, UniqueConstraint,   # Phase 34.5: no SQLAlchemy Enum (no native PG ENUMs)
+    Date, SmallInteger, LargeBinary, Index,                           # Phase 35: Index
 )
-from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION
+from sqlalchemy.dialects.postgresql import UUID, DOUBLE_PRECISION, JSONB
 from sqlalchemy.orm import relationship
 from src.database import Base
 
@@ -60,6 +61,9 @@ class User(Base):
     total_shifts = Column(Integer, nullable=False, default=0)
     firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
     discoverable = Column(String(20), nullable=False, default="private")   # Phase 29.1: private | venues | everyone
+    emergency_contact_name = Column(String(100), nullable=True)            # Phase 32
+    emergency_contact_phone = Column(String(30), nullable=True)            # Phase 32
+    departments = Column(ARRAY(String), nullable=False, default=list)     # Phase 32.2: departments they work
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -115,6 +119,7 @@ class Venue(Base):
     logo_url = Column(Text, nullable=True)
     timezone = Column(String(64), nullable=False, default="America/New_York")
     phone = Column(String(30), nullable=True)
+    website_url = Column(String(500), nullable=True)                           # Phase 34.6: public profile link
     arrival_instructions = Column(Text, nullable=True)
     dress_code = Column(Text, nullable=True)
     default_shift_notes = Column(Text, nullable=True)
@@ -124,6 +129,18 @@ class Venue(Base):
     geofence_buffer_meters = Column(Integer, nullable=False, default=150)      # Phase 27: flagged, not blocked
     clock_in_early_minutes = Column(Integer, nullable=False, default=30)       # Phase 27
     auto_clock_out_hours = Column(Integer, nullable=False, default=2)          # Phase 27
+    allow_public_cover = Column(Boolean, nullable=False, default=True)         # Phase 34
+    team_time_tracking = Column(String(20), nullable=False, default="shiftboard")   # Phase 35: shiftboard | payroll
+    ot_weekly_hours = Column(Numeric(5, 2), nullable=True, default=40)             # Phase 35: None = off
+    ot_daily_hours = Column(Numeric(5, 2), nullable=True)                          # Phase 35: None = off
+    work_week_start = Column(SmallInteger, nullable=False, default=0)              # Phase 35: 0 = Monday
+    pay_period = Column(String(20), nullable=False, default="weekly")              # Phase 35
+    pay_period_anchor = Column(Date, nullable=True)                                # Phase 35: biweekly
+    pay_period_approval = Column(Boolean, nullable=False, default=True)            # Phase 35
+    tips_enabled = Column(Boolean, nullable=False, default=True)                   # Phase 35.2
+    tip_pool_split = Column(String(20), nullable=False, default="hours")           # Phase 35.2: hours | equal
+    tip_pool_payroll = Column(Boolean, nullable=False, default=True)               # Phase 35.2
+    tips_shown_to_workers = Column(Boolean, nullable=False, default=True)          # Phase 35.2
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -182,6 +199,8 @@ class VenueWhitelist(Base):
     status = Column(String(20), nullable=False, default="active")            # Phase 29: active | removed | blocked
     positions = Column(ARRAY(String), nullable=False, default=list)          # Phase 29
     source = Column(String(20), nullable=False, default="manager")           # Phase 29: manager | invite | import | admin
+    time_tracking = Column(String(20), nullable=True)                        # Phase 35: payroll | shiftboard | None = venue setting
+    works_through = Column(String(120), nullable=True)                       # Phase 35: staffing company / agency
     added_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -204,6 +223,8 @@ class VenuePosition(Base):
     tip_pool = Column(Boolean, nullable=False, default=False)
     sort_order = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, nullable=False, default=True)
+    required_certs = Column(ARRAY(String), nullable=False, default=list)   # Phase 32: cert type keys
+    department = Column(String(20), nullable=False, default="general")    # Phase 32.2: services/departments.py
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -254,10 +275,34 @@ class ShiftEvent(Base):
     location_staff_notes = Column(Text, nullable=True)                     # Phase 27: event-specific, booked staff only
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     cancel_reason = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="published")      # Phase 29.3: draft | published
+    published_at = Column(DateTime(timezone=True), nullable=True)          # Phase 29.3
+    series_id = Column(UUID(as_uuid=True), nullable=True, index=True)      # Phase 32.3: shared by an event and its "Copy to dates" copies
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     shifts = relationship("Shift", back_populates="event", cascade="all, delete-orphan")
+
+
+class EventTemplate(Base):
+    """Phase 29.3: A venue's reusable event setup. Times are venue-local 'HH:MM' (end earlier = next day)."""
+    __tablename__ = "event_templates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String(120), nullable=False)
+    title = Column(String(255), nullable=False)
+    start_local = Column(String(5), nullable=False)
+    end_local = Column(String(5), nullable=False)
+    notes = Column(Text, nullable=True)
+    staff_notes = Column(Text, nullable=True)
+    location_id = Column(UUID(as_uuid=True), ForeignKey("venue_locations.id", ondelete="SET NULL"), nullable=True)
+    geofence_mode = Column(String(20), nullable=False, default="venue_default")
+    location_staff_notes = Column(Text, nullable=True)
+    positions = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 class Shift(Base):
     __tablename__ = "shifts"
@@ -352,8 +397,13 @@ class ShiftRequest(Base):
     notes = Column(Text, nullable=True)
     dropped_at = Column(DateTime(timezone=True), nullable=True)
     status_reason = Column(Text, nullable=True)
+    previous_drop_at = Column(DateTime(timezone=True), nullable=True)   # Phase 29.4: rebooked / asking back after a drop
+    rebook_reason = Column(Text, nullable=True)                         # Phase 29.4
+    outside_department = Column(Boolean, nullable=False, default=False)  # Phase 32.2: outside their departments (needs a manager)
     pay_rate = Column(Numeric(10, 2), nullable=True)
     info_seen_at = Column(DateTime(timezone=True), nullable=True)          # Phase 26.2: worker read the shift info
+    time_tracking = Column(String(20), nullable=True)                       # Phase 35: written when the shift starts
+    tip_amount = Column(Numeric(10, 2), nullable=True)                      # Phase 35.2: own tips (NULL = none)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -441,7 +491,7 @@ class NotificationDelivery(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     notification_id = Column(UUID(as_uuid=True), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    channel = Column(String(10), nullable=False)                     # email | sms
+    channel = Column(String(10), nullable=False)                     # email | sms | push (Phase 33)
     status = Column(String(12), nullable=False, default="pending")   # pending | sent | failed | skipped
     digest = Column(Boolean, nullable=False, default=False)
     send_after = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
@@ -460,8 +510,9 @@ class NotificationPreference(Base):
     reminders_enabled = Column(Boolean, nullable=False, default=True)
     new_shift_alerts = Column(String(10), nullable=False, default="daily")   # off | instant | daily
     manager_alerts_email = Column(Boolean, nullable=False, default=True)
-    quiet_start = Column(Integer, nullable=True)                             # hour 0-23
-    quiet_end = Column(Integer, nullable=True)
+    push_enabled = Column(Boolean, nullable=False, default=True)             # Phase 33: phone / browser notifications
+    quiet_start = Column(SmallInteger, nullable=True)                        # hour 0-23 (Phase 34.5: SMALLINT, as in init.sql)
+    quiet_end = Column(SmallInteger, nullable=True)
     timezone = Column(String(64), nullable=False, default="America/New_York")
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -539,6 +590,7 @@ class ShiftTransfer(Base):
     to_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String(50), nullable=False, default="pending_worker_acceptance", index=True)
     notes = Column(Text, nullable=True)
+    cover_request_id = Column(UUID(as_uuid=True), nullable=True)                # Phase 34: came from a cover post
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -558,3 +610,186 @@ class ShiftBoardMessage(Base):
     shift = relationship("Shift", foreign_keys=[shift_id])
     author = relationship("User", foreign_keys=[author_id])
 
+
+# ------------------------------------------------------------------------------
+# Phase 31: Availability  /  Phase 32.1: time off blocks
+# ------------------------------------------------------------------------------
+class WorkerAvailability(Base):
+    """One weekly window. A worker with no rows hasn't set availability (treated as open)."""
+    __tablename__ = "worker_availability"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    weekday = Column(SmallInteger, nullable=False)          # 0 = Monday ... 6 = Sunday
+    start_local = Column(String(5), nullable=False)         # 'HH:MM'
+    end_local = Column(String(5), nullable=False)           # 'HH:MM' or '24:00'; earlier than start = next day
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (CheckConstraint("weekday BETWEEN 0 AND 6", name="chk_availability_weekday"),)
+
+
+class TimeOffBlock(Base):
+    """Phase 32.1: time the worker has blocked off. No approval; managers can't book over it."""
+    __tablename__ = "time_off_blocks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    all_day = Column(Boolean, nullable=False, default=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=True)                  # inclusive; None = repeats with no end
+    start_local = Column(String(5), nullable=True)          # 'HH:MM' when not all day
+    end_local = Column(String(5), nullable=True)            # 'HH:MM' or '24:00'
+    repeat = Column(String(20), nullable=False, default="none")          # none | weekly | biweekly
+    weekdays = Column(ARRAY(SmallInteger), nullable=False, default=list)  # 0 = Monday ... 6 = Sunday
+    reason = Column(String(200), nullable=True)             # managers see this
+    private_note = Column(Text, nullable=True)              # only the worker sees this
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (CheckConstraint("end_date IS NULL OR end_date >= start_date", name="chk_time_off_block_range"),)
+
+
+# ------------------------------------------------------------------------------
+# Phase 32: Profile files & certifications
+# ------------------------------------------------------------------------------
+class UserFile(Base):
+    """Small uploads kept in the database (profile photos, certificate scans)."""
+    __tablename__ = "user_files"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(20), nullable=False)               # avatar | certificate
+    filename = Column(String(255), nullable=True)
+    content_type = Column(String(100), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class WorkerCertification(Base):
+    __tablename__ = "worker_certifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    cert_type = Column(String(50), nullable=False)          # keys in services/certs.py CERT_TYPES
+    number = Column(String(100), nullable=True)
+    issued_on = Column(Date, nullable=True)
+    expires_on = Column(Date, nullable=True)
+    file_id = Column(UUID(as_uuid=True), ForeignKey("user_files.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(20), nullable=False, default="unverified")   # unverified | verified | rejected
+    verified_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    verified_venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="SET NULL"), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    review_note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (UniqueConstraint("worker_id", "cert_type", name="uq_worker_cert"),)
+
+
+class PushSubscription(Base):
+    """Phase 33: one browser / installed app that turned on notifications (Web Push)."""
+    __tablename__ = "push_subscriptions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint = Column(Text, nullable=False, unique=True)                # Web Push URL, or the Firebase token (Phase 33.0.1)
+    p256dh = Column(String(200), nullable=True)                         # Web Push only
+    auth = Column(String(100), nullable=True)                           # Web Push only
+    provider = Column(String(10), nullable=False, default="webpush")    # Phase 33.0.1: webpush | fcm
+    device_label = Column(String(120), nullable=True)                   # "iPhone", "Android · Chrome", ...
+    last_success_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class AppKey(Base):
+    """Phase 33: server-generated keys (the Web Push VAPID key pair when .secrets doesn't set one)."""
+    __tablename__ = "app_keys"
+
+    name = Column(String(50), primary_key=True)
+    value = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class CoverRequest(Base):
+    """Phase 34: a booked worker asks their venue team (and optionally the public board) to take their shift.
+    They stay booked until someone takes it."""
+    __tablename__ = "cover_requests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="CASCADE"), nullable=False)
+    from_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    audience = Column(String(10), nullable=False, default="team")              # team | public
+    note = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="open", index=True)    # open | pending_approval | covered | cancelled | expired
+    taken_by_worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    transfer_id = Column(UUID(as_uuid=True), ForeignKey("shift_transfers.id", ondelete="SET NULL"), nullable=True)
+    warned_12h_at = Column(DateTime(timezone=True), nullable=True)
+    warned_3h_at = Column(DateTime(timezone=True), nullable=True)
+    closed_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WaitlistEntry(Base):
+    """Phase 34: a place in line for a full position. When a spot opens the first person is booked
+    (auto_book) or offered it for a short time."""
+    __tablename__ = "waitlist_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False, index=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="CASCADE"), nullable=True)
+    worker_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    auto_book = Column(Boolean, nullable=False, default=True)
+    status = Column(String(20), nullable=False, default="waiting")   # waiting | offered | booked | requested | passed | expired | left | closed
+    offered_at = Column(DateTime(timezone=True), nullable=True)
+    offer_expires_at = Column(DateTime(timezone=True), nullable=True)
+    request_id = Column(UUID(as_uuid=True), ForeignKey("shift_requests.id", ondelete="SET NULL"), nullable=True)
+    closed_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PayPeriodApproval(Base):
+    """Phase 35: a pay period a manager approved. While status == 'approved' its times are locked."""
+    __tablename__ = "pay_period_approvals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    status = Column(String(20), nullable=False, default="approved")           # approved | reopened
+    people = Column(Integer, nullable=False, default=0)
+    total_hours = Column(Numeric(10, 2), nullable=False, default=0)
+    overtime_hours = Column(Numeric(10, 2), nullable=False, default=0)
+    total_pay = Column(Numeric(12, 2), nullable=False, default=0)
+    total_tips = Column(Numeric(12, 2), nullable=False, default=0)             # Phase 35.2
+    approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    reopened_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reopened_at = Column(DateTime(timezone=True), nullable=True)
+    reopen_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_pay_period_approvals_venue", "venue_id", "start_date"),)
+
+
+class EventTip(Base):
+    """Phase 35.2: an event's tip pool (own tips are on ShiftRequest.tip_amount)."""
+    __tablename__ = "event_tips"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("shift_events.id", ondelete="CASCADE"), nullable=False, unique=True)
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False)
+    pool_amount = Column(Numeric(10, 2), nullable=False, default=0)
+    split = Column(String(20), nullable=False, default="hours")                  # hours | equal
+    note = Column(Text, nullable=True)
+    updated_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_event_tips_venue", "venue_id"),)

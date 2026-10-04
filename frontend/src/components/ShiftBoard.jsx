@@ -26,7 +26,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
       setMessages(res.data || []);
     } catch (err) {
       console.error('Error fetching shift board messages:', err);
-      setError(err.response?.data?.detail || 'Failed to load discussion messages.');
+      setError(err.response?.data?.detail || "Couldn't load the chat. Check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -54,7 +54,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
       setNewMessage('');
     } catch (err) {
       console.error('Error sending message:', err);
-      setError(err.response?.data?.detail || 'Failed to send message.');
+      setError(err.response?.data?.detail || "Couldn't send your message. Try again.");
     } finally {
       setSending(false);
     }
@@ -66,7 +66,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
       setMessages((prev) => prev.filter((m) => m.id !== messageId));
     } catch (err) {
       console.error('Error deleting message:', err);
-      setError(err.response?.data?.detail || 'Failed to delete message.');
+      setError(err.response?.data?.detail || "Couldn't delete that message. Try again.");
     }
   };
 
@@ -80,7 +80,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
           </div>
           <div>
             <h3 className="text-sm font-bold text-white leading-none">
-              Shift Discussion Board
+              Shift chat
             </h3>
             {shiftTitle && (
               <p className="text-xs text-slate-400 mt-1 truncate max-w-xs sm:max-w-md">
@@ -128,7 +128,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950/30">
         {loading ? (
           <div className="h-full flex items-center justify-center text-xs text-slate-500">
-            Loading discussion...
+            Loading chat…
           </div>
         ) : messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500 space-y-2">

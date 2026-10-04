@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import User, Shift, ShiftOffer
+from src.models import User, Shift, ShiftOffer, ShiftRequest
 from src.schemas import (
     AssignCandidate, AssignRequest, AssignResult, OfferCreate, OfferCreateResult, WorkerOffer, OfferAcceptResult,
 )
@@ -36,7 +36,7 @@ router = APIRouter(tags=["Staffing"])
 async def _managed_shift(db: AsyncSession, shift_id: UUID, user: User) -> Shift:
     shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
     if shift is None:
-        raise HTTPException(status_code=404, detail="Position not found.")
+        raise HTTPException(status_code=404, detail="Shift not found.")
     await verify_venue_manager_access(shift.venue_id, user, db)
     return shift
 
@@ -60,9 +60,12 @@ async def assign(
     db: AsyncSession = Depends(get_db),
 ):
     await _managed_shift(db, shift_id, current_user)
-    request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id)
+    request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id, reason=body.reason)
     await notify_events.assigned(request_id)          # after commit; never raises
-    await activity.for_request("assigned", request_id, current_user.id)   # Phase 29.1
+    # Phase 29.4: flag a rebook after a drop in the activity log
+    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
+    extra = f"booked back after a drop · “{req.rebook_reason}”" if req is not None and req.previous_drop_at and req.rebook_reason else ""
+    await activity.for_request("assigned", request_id, current_user.id, extra)   # Phase 29.1
     return AssignResult(request_id=request_id, message=message)
 
 

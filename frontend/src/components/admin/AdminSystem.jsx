@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import api from '../../api/client';
 import { card, inputCls, btnGhost, btnPrimary, SectionTitle, ago, fmtDateTime } from './adminUi';
+import { APP_VERSION } from '../../utils/version';   // Phase 34.5
 
 function Row({ state, label, children }) {
   const [Icon, tone] = state === 'ok' ? [CheckCircle2, 'text-emerald-400'] : state === 'bad' ? [XCircle, 'text-rose-400'] : [AlertTriangle, 'text-amber-400'];
@@ -80,6 +81,15 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
             )}
           />
           <div className="divide-y divide-slate-800">
+            {/* Phase 34.5: both halves should run the same release */}
+            <Row state={sys.app_version && sys.app_version === APP_VERSION ? 'ok' : 'warn'} label="Version">
+              Web app {APP_VERSION} · Server {sys.app_version || 'unknown'}
+              {sys.app_version !== APP_VERSION && (
+                <span className="block text-amber-300">
+                  These should match. One of them is running an old build: run docker compose up -d --build, then hard-refresh this page.
+                </span>
+              )}
+            </Row>
             <Row state={sys.app_base_url_ok ? 'ok' : 'bad'} label="Public address (APP_BASE_URL)">
               {sys.app_base_url || 'Not set'}{!sys.app_base_url_ok && ' · links in emails, texts and invites will not open for people.'}
             </Row>
@@ -91,6 +101,16 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
                 ? 'Console mode: texts are only written to the backend log.'
                 : sys.sms_ready ? `Sending with ${sys.sms_provider}` : `Not sending (provider "${sys.sms_provider}"). People only get emails and in-app notifications.`}
             </Row>
+            {/* Phase 33.0.1: which route phone / browser notifications take */}
+            <Row state={sys.push_route === 'fcm' ? 'ok' : 'warn'} label="Phone notifications">
+              {sys.push_route === 'fcm'
+                ? `Sending through Firebase Cloud Messaging · ${sys.push_devices} device${sys.push_devices === 1 ? '' : 's'} turned on.`
+                : `Sending with ShiftBoard's own Web Push (works without Firebase) · ${sys.push_devices} device${sys.push_devices === 1 ? '' : 's'} turned on.`}
+              {sys.push_route !== 'fcm' && (sys.push_firebase_missing || []).length > 0 && (
+                <span className="block text-slate-500">To use Firebase, add: {sys.push_firebase_missing.join('; ')}.</span>
+              )}
+              {sys.push_firebase_error && <span className="block text-amber-300">{sys.push_firebase_error}</span>}
+            </Row>
             <Row state={sys.firebase === 'real' ? 'ok' : 'warn'} label="Google / Firebase sign-in">
               {sys.firebase === 'real' ? 'On' : sys.firebase === 'mock' ? 'Mock mode (testing only)' : 'Off: people sign in with a ShiftBoard password only'}
             </Row>
@@ -101,7 +121,7 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
               {sys.always_admin_count} listed in ALWAYS_ADMIN_EMAILS{sys.always_admin_count ? '' : ' (add one so you can never be locked out)'}
             </Row>
           </div>
-          <p className="text-[11px] text-slate-500 mt-2">Change these in the backend's secrets file and restart the backend container.</p>
+          <p className="text-[11px] text-slate-500 mt-2">Change these in .env (secrets in .secrets/stack.env or .secrets/integrations.env), then recreate the containers: docker compose up -d --force-recreate (keeps your data).</p>
         </section>
 
         <section className={`${card} p-4`}>

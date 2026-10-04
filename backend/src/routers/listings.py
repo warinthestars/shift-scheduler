@@ -66,7 +66,7 @@ async def request_event_position(
         request_id=request_id,
         status=req_status,
         instant=instant,
-        message="You're booked! It's on your schedule." if instant else "Request sent. The manager will review it.",
+        message="You're booked! It's in My shifts." if instant else "Request sent. The manager will review it.",
         listing=rows[0] if rows else None,
     )
 

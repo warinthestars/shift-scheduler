@@ -17,6 +17,8 @@ from src.services.booking import withdraw_other_pending_in_event
 from src.services import notify_events
 from src.services import activity
 from src.services.team import get_transfer_candidates
+from src.services.booking import require_certs, refuse_if_blocked   # Phase 32 / 32.1
+from src.services import cover as cover_svc                          # Phase 34
 
 router = APIRouter(prefix="/api/transfers", tags=["Shift Transfers"])
 
@@ -34,13 +36,13 @@ async def propose_shift_transfer(
     if transfer_in.to_worker_id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot transfer a shift to yourself."
+            detail="You can't hand a shift to yourself."
         )
 
     # 1. Verify target worker exists
     to_worker = await db.scalar(select(User).where(User.id == transfer_in.to_worker_id))
     if not to_worker:
-        raise HTTPException(status_code=404, detail="Target worker not found.")
+        raise HTTPException(status_code=404, detail="We couldn't find that teammate.")
 
     # 2. Verify shift exists
     shift = await db.scalar(
@@ -66,6 +68,17 @@ async def propose_shift_transfer(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You do not hold a confirmed spot on this shift."
         )
+    # Phase 34: one way out at a time: a live cover request blocks a direct hand-off
+    if await db.scalar(select(cover_svc.CoverRequest.id).where(
+            cover_svc.CoverRequest.request_id == ownership.id, cover_svc.CoverRequest.status.in_(cover_svc.LIVE))):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You've asked for cover on this shift. Cancel the cover request first to hand it to someone directly."
+        )
+
+    # Phase 32: the teammate needs the position's certificates
+    await require_certs(db, to_worker, shift, you=False, who=f"{to_worker.first_name or 'They'}".strip())
+    await refuse_if_blocked(db, to_worker, shift, who=f"{to_worker.first_name or 'They'}".strip())   # Phase 32.1
 
     # 4. Check if there's already an active transfer for this shift
     existing_active = await db.scalar(
@@ -78,7 +91,7 @@ async def propose_shift_transfer(
     if existing_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A transfer request for this shift is already in progress."
+            detail="You've already sent a hand-off for this shift. Withdraw it first to pick someone else."
         )
 
     # 5. Check if target worker is already booked for this slot
@@ -144,12 +157,12 @@ async def respond_to_shift_transfer(
     )
     transfer = res.scalar_one_or_none()
     if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer offer not found.")
+        raise HTTPException(status_code=404, detail="This hand-off is no longer available.")
 
     if transfer.to_worker_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the target worker can respond to this transfer offer."
+            detail="This hand-off was sent to someone else."
         )
 
     action = body.action.lower().strip()
@@ -157,7 +170,7 @@ async def respond_to_shift_transfer(
         if transfer.status != "pending_worker_acceptance":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot accept transfer in '{transfer.status}' status."
+                detail="This hand-off is already settled."
             )
         shift = transfer.shift
         await check_double_booking(
@@ -171,7 +184,7 @@ async def respond_to_shift_transfer(
     elif action in ("decline", "reject"):
         transfer.status = "declined"
     else:
-        raise HTTPException(status_code=400, detail="Action must be 'accept' or 'decline'.")
+        raise HTTPException(status_code=400, detail="Something went wrong. Refresh the page and try again.")
 
     await db.commit()
     await db.refresh(transfer)
@@ -210,7 +223,7 @@ async def reject_shift_transfer(
     )
     transfer = res.scalar_one_or_none()
     if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found.")
+        raise HTTPException(status_code=404, detail="This hand-off is no longer available.")
 
     user_role = normalize_role(current_user.role)
     is_manager = False
@@ -225,6 +238,10 @@ async def reject_shift_transfer(
         )
         is_manager = bool(mgr)
 
+    # Phase 29.4: only a hand-off that's still waiting can be declined / withdrawn / denied
+    if (transfer.status or "").lower() not in ("pending_worker_acceptance", "pending_manager_approval"):
+        raise HTTPException(status_code=400, detail="This hand-off is already settled.")
+
     if current_user.id == transfer.to_worker_id:
         transfer.status = "declined"
     elif current_user.id == transfer.from_worker_id:
@@ -234,8 +251,9 @@ async def reject_shift_transfer(
     else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to reject this transfer."
+            detail="You can't change this hand-off."
         )
+    await cover_svc.after_transfer_review(db, transfer)          # Phase 34: keep a cover post in step
 
     await db.commit()
     await db.refresh(transfer)
@@ -264,7 +282,7 @@ async def manager_review_shift_transfer(
     )
     transfer = res.scalar_one_or_none()
     if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found.")
+        raise HTTPException(status_code=404, detail="This hand-off is no longer available.")
 
     # Uses verify_venue_access dependency logic
     await verify_venue_access(transfer.shift.venue_id, current_user, db)
@@ -272,8 +290,12 @@ async def manager_review_shift_transfer(
                   f"{transfer.to_worker.first_name if transfer.to_worker else 'someone'}")   # Phase 29.1 (read before commit)
 
     action = body.action.lower().strip()
+    # Phase 34: only a hand-off that's waiting for the manager can be approved or denied
+    if (transfer.status or "").lower() != "pending_manager_approval":
+        raise HTTPException(status_code=400, detail="This hand-off is already settled.")
     if action == "approve":
         shift = transfer.shift
+        await cover_svc.check_before_approve(db, transfer)          # Phase 34: the original worker still holds it
 
         # Double check double-booking before proceeding
         await check_double_booking(
@@ -327,7 +349,8 @@ async def manager_review_shift_transfer(
     elif action in ("deny", "reject"):
         transfer.status = "denied"
     else:
-        raise HTTPException(status_code=400, detail="Action must be 'approve' or 'deny'.")
+        raise HTTPException(status_code=400, detail="Something went wrong. Refresh the page and try again.")
+    await cover_svc.after_transfer_review(db, transfer)          # Phase 34: keep a cover post in step
 
     await db.commit()
     await db.refresh(transfer)
@@ -410,7 +433,7 @@ async def get_venue_pending_transfers(
         if not mgr:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized for this venue."
+                detail="You don't manage this venue."
             )
 
     res = await db.execute(

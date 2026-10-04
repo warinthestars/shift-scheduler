@@ -3,7 +3,12 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import NotificationBell from './NotificationBell';
-import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin } from 'lucide-react';
+import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound, Wallet } from 'lucide-react';
+import { Avatar } from './WorkerProfilePanel';
+import { syncPush, disablePush } from '../utils/push';   // Phase 33
+
+// Phase 33.1: role names people read
+const ROLE_TEXT = { worker: 'Worker', venue_manager: 'Manager', platform_admin: 'Admin' };
 
 export default function Navbar() {
   const { user, logout, isAdmin, isWorker } = useAuth();
@@ -20,11 +25,17 @@ export default function Navbar() {
   const isPlatformAdmin = userRole === 'platform_admin' || isAdmin;
   const isManagerRole = userRole === 'venue_manager';
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setMobileOpen(false);
+    await disablePush();          // Phase 33: this device stops getting this account's notifications
     logout();
     navigate('/login');
   };
+
+  // Phase 33: if this device already allowed notifications, make sure the server still has it
+  useEffect(() => {
+    if (user?.id) syncPush();
+  }, [user?.id]);
 
   // Close the mobile menu whenever the route changes
   useEffect(() => {
@@ -79,13 +90,19 @@ export default function Navbar() {
   const links = [
     (isWorker || isPlatformAdmin) && {
       to: '/worker',
-      label: 'Worker',
+      label: isPlatformAdmin ? 'Worker view' : 'My shifts',
       icon: Briefcase,
+      active: 'bg-slate-800 text-emerald-400',
+    },
+    isWorker && {                                   // Phase 33.1
+      to: '/earnings',
+      label: 'Hours & pay',
+      icon: Wallet,
       active: 'bg-slate-800 text-emerald-400',
     },
     (isManagerRole || isPlatformAdmin) && {
       to: '/venue',
-      label: 'Venue Manager',
+      label: isPlatformAdmin ? 'Manager view' : 'My venue',
       icon: Building2,
       active: 'bg-slate-800 text-teal-400',
     },
@@ -181,13 +198,17 @@ export default function Navbar() {
             )}
 
             {user && (
-              <div className="text-right hidden lg:block">
-                <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
-                <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
-                  <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
-                  <span>{userRole.replace('_', ' ')}</span>
+              <Link to="/profile" title="Your profile" className={`hidden lg:flex items-center gap-2 pl-1 pr-2 py-1 rounded-xl transition ${
+                location.pathname === '/profile' ? 'bg-slate-800' : 'hover:bg-slate-800/60'}`}>
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
+                  <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
+                    <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
+                    <span>{ROLE_TEXT[userRole] || 'Worker'}</span>
+                  </div>
                 </div>
-              </div>
+                <Avatar person={user} size="w-8 h-8 text-xs" />
+              </Link>
             )}
 
             {user && (
@@ -223,7 +244,7 @@ export default function Navbar() {
               <div className="text-sm font-semibold text-white">{user.first_name} {user.last_name}</div>
               <div className="text-xs text-slate-400 capitalize flex items-center space-x-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
-                <span>{userRole.replace('_', ' ')}</span>
+                <span>{ROLE_TEXT[userRole] || 'Worker'}</span>
               </div>
             </div>
             {userRole === 'worker' && (
@@ -235,7 +256,7 @@ export default function Navbar() {
           </div>
 
           <nav className="grid gap-2">
-            {links.map(({ to, label, icon: Icon, active }) => (
+            {[...links, { to: '/profile', label: 'My profile', icon: UserRound, active: 'bg-slate-800 text-emerald-400' }].map(({ to, label, icon: Icon, active }) => (
               <Link
                 key={to}
                 to={to}

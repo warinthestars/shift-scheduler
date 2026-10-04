@@ -10,7 +10,7 @@ Categories (for the filter chips on the dashboard):
   staffing  - direct assigns and offers
   team      - team changes, invites, joins, co-managers
   changes   - events posted / edited / cancelled / copied, venue settings
-  alerts    - not clocked in
+  alerts    - not clocked in, no-shows, manager clock-ins, spots still open close to start (Phase 30)
 """
 import logging
 from typing import Optional
@@ -32,6 +32,9 @@ CATEGORY = {
     "request_denied": "bookings",
     "request_withdrawn": "bookings",
     "shift_dropped": "bookings",
+    "cover_requested": "bookings",       # Phase 34
+    "cover_taken": "bookings",
+    "cover_pending": "bookings",
     "person_removed": "bookings",
     "transfer_approved": "bookings",
     "transfer_denied": "bookings",
@@ -42,6 +45,7 @@ CATEGORY = {
     "team_added": "team",
     "team_account": "team",
     "team_status": "team",
+    "team_tracking": "team",             # Phase 35: time tracking / staffing company changed
     "invites_sent": "team",
     "team_joined": "team",
     "manager_added": "team",
@@ -51,8 +55,23 @@ CATEGORY = {
     "event_cancelled": "changes",
     "position_cancelled": "changes",
     "event_duplicated": "changes",
+    "event_drafted": "changes",          # Phase 29.3
+    "event_published": "changes",
+    "event_unpublished": "changes",
+    "event_discarded": "changes",
+    "template_saved": "changes",
+    "template_deleted": "changes",
     "venue_settings": "changes",
+    "pay_period_approved": "changes",    # Phase 35
+    "pay_period_reopened": "changes",
+    "tips_updated": "changes",           # Phase 35.2
     "not_clocked_in": "alerts",
+    "no_show": "alerts",                # Phase 30
+    "manager_clock_in": "alerts",
+    "unfilled_soon": "alerts",
+    "time_off_conflict": "alerts",      # Phase 32.1: a worker blocked off time they're booked for
+    "cert_verified": "team",            # Phase 32
+    "cert_rejected": "team",
 }
 CATEGORIES = ("bookings", "staffing", "team", "changes", "alerts")
 
@@ -123,14 +142,19 @@ async def _for_request(db: AsyncSession, kind: str, request_id, actor_id, extra:
     name = person(worker)
     text = {
         "request_created": f"{name} requested {what}",
-        "instant_booked": f"{name} booked {what} (instant)",
+        "instant_booked": f"{name} booked {what} (no approval needed)",
         "request_approved": f"Approved {name} for {what}",
         "request_denied": f"Declined {name} for {what}",
         "request_withdrawn": f"{name} withdrew their request for {what}",
         "shift_dropped": f"{name} dropped {what}",
+        "cover_requested": f"{name} asked for cover on {what}",              # Phase 34
+        "cover_taken": f"{name} is covering {what}",
+        "cover_pending": f"Cover for {name} on {what} is waiting for approval",
         "person_removed": f"Removed {name} from {what}",
         "assigned": f"Assigned {name} to {what}",
         "offer_accepted": f"{name} accepted the offer for {what}",
+        "no_show": f"Marked {name} as a no-show for {what}",               # Phase 30
+        "manager_clock_in": f"Clocked {name} in for {what}",
     }.get(kind, f"{name}: {what}")
     if extra:
         text += f" · {extra}"
@@ -167,8 +191,12 @@ async def _for_event(db: AsyncSession, kind: str, event_id, actor_id, extra: str
         "event_created": f"Posted {what}",
         "event_updated": f"Edited {what}",
         "event_cancelled": f"Cancelled {what}",
-        "position_cancelled": f"Cancelled a position in {what}",
+        "position_cancelled": f"Cancelled a shift in {what}",
         "event_duplicated": f"Copied {what}",
+        "event_drafted": f"Saved a draft: {what}",                 # Phase 29.3
+        "event_published": f"Published {what}",
+        "event_unpublished": f"Moved {what} back to drafts",
+        "tips_updated": f"Tips for {what}",                           # Phase 35.2
     }.get(kind, what)
     if extra:
         text += f" · {extra}"

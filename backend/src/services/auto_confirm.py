@@ -21,7 +21,7 @@ async def check_double_booking(
     (existing_shift.start_time < new_shift.end_time) AND (existing_shift.end_time > new_shift.start_time).
 
     Raises:
-        HTTPException(status_code=400, detail="Worker is already booked for this time slot.")
+        HTTPException(status_code=400, detail="That time overlaps another shift that's already booked.")
     """
     query = (
         select(Shift)
@@ -46,7 +46,7 @@ async def check_double_booking(
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Worker is already booked for this time slot."
+            detail="That time overlaps another shift that's already booked."
         )
 
 

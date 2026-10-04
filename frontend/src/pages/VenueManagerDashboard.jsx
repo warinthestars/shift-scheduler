@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
-  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, Users, ArrowRightLeft, X,
+  Plus, Check, Building2, AlertCircle, Download, Settings, UserPlus, Globe, X, LayoutTemplate, CalendarRange,
 } from 'lucide-react';
 import PostedShiftsBoard from '../components/PostedShiftsBoard';
 import VenueSettingsModal from '../components/VenueSettingsModal';
@@ -11,18 +11,25 @@ import ShiftEventFormModal from '../components/ShiftEventFormModal';
 import ShiftBoardModal from '../components/ShiftBoardModal';
 import ReasonDialog from '../components/ReasonDialog';
 import DuplicateEventModal from '../components/DuplicateEventModal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import TimesheetModal from '../components/TimesheetModal';
 import TeamModal from '../components/TeamModal';
 import ReviewModal from '../components/ReviewModal';
+import DownloadHoursModal from '../components/manager/DownloadHoursModal';   // Phase 33.1
+import PayPeriodsModal from '../components/manager/PayPeriodsModal';         // Phase 35
 import ActivityFeed from '../components/ActivityFeed';
 import { ApprovalQueueCard, TransfersCard } from '../components/ManagerQueues';
 import { WorkerProfileModal } from '../components/WorkerProfilePanel';
+import TonightBoard from '../components/manager/TonightBoard';
+import NeedsYouStrip from '../components/manager/NeedsYouStrip';
+import AppNudge from '../components/AppNudge';   // Phase 33
 
 /**
  * Venue manager dashboard.
- * Phase 29.1 layout: Posted Shifts on the left (2/3), and on the right the things that need you
- * (requests, hand-offs) plus the venue's activity log. On phones a "Needs attention" strip at the
- * top jumps to the queues. The old Phase 16 roster/calendar code (never shown) was removed.
+ * Phase 30 layout, top to bottom:
+ *   1. "Needs you (N)" strip: requests, hand-offs, late people, open spots soon (tap to jump)
+ *   2. Today / This week board: live clock status and one-tap actions (TonightBoard)
+ *   3. Posted Shifts (2/3) + right column: request / hand-off cards (only while they have items) and the activity log
  */
 export default function VenueManagerDashboard() {
   const { user } = useAuth();
@@ -44,7 +51,8 @@ export default function VenueManagerDashboard() {
   const [venueDetails, setVenueDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
-  const [exportingCSV, setExportingCSV] = useState(false);
+  const [showDownload, setShowDownload] = useState(false);   // Phase 33.1: Download hours (pick a date range)
+  const [showPayPeriods, setShowPayPeriods] = useState(false);   // Phase 35: approve / lock pay periods
   const [activeDiscussionShift, setActiveDiscussionShift] = useState(null);
   const [notification, setNotification] = useState(null);
 
@@ -53,7 +61,9 @@ export default function VenueManagerDashboard() {
   const [boardRefreshKey, setBoardRefreshKey] = useState(0);
   const [venuePositions, setVenuePositions] = useState([]);
   const [showVenueSettings, setShowVenueSettings] = useState(false);
-  const [eventForm, setEventForm] = useState(null); // { mode: 'create' } | { mode: 'edit', eventId }
+  const [settingsTab, setSettingsTab] = useState('details');   // Phase 29.3
+  const [confirmDialog, setConfirmDialog] = useState(null);    // Phase 29.3
+  const [eventForm, setEventForm] = useState(null); // { mode: 'create', templateId? } | { mode: 'edit', eventId }
   const [reasonDialog, setReasonDialog] = useState(null);
   const [dupEvent, setDupEvent] = useState(null);
   const [timesheetEventId, setTimesheetEventId] = useState(null);
@@ -61,6 +71,7 @@ export default function VenueManagerDashboard() {
   const [showTeam, setShowTeam] = useState(false);    // Phase 29: Team page
   const [review, setReview] = useState(null);         // Phase 29.1: { type: 'request' | 'transfer', data }
   const [profileWorkerId, setProfileWorkerId] = useState(null); // Phase 29.1: from the activity log
+  const [tonightSummary, setTonightSummary] = useState({ late: 0, openSpots: 0 }); // Phase 30: from TonightBoard
   const noticeTimer = useRef(null);
 
   // Phase 29.1: success / info banners clear themselves after 6 s; errors stay until dismissed
@@ -111,7 +122,7 @@ export default function VenueManagerDashboard() {
       console.error('Failed to load venue manager data:', err);
       setNotification({
         type: 'error',
-        message: 'Could not load venue shifts, approval queue, or transfers from backend.',
+        message: "Couldn't load your events and requests. Check your connection and refresh.",
       });
     } finally {
       setLoading(false);
@@ -189,7 +200,7 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to approve request.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't approve the request. Try again." });
     } finally {
       setActionLoading(null);
     }
@@ -204,7 +215,7 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to deny request.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't deny the request. Try again." });
     } finally {
       setActionLoading(null);
     }
@@ -220,7 +231,7 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to approve the hand-off.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't approve the hand-off. Try again." });
     } finally {
       setActionLoading(null);
     }
@@ -235,35 +246,13 @@ export default function VenueManagerDashboard() {
       setReview(null);
       fetchVenueData(currentVenueId);
     } catch (err) {
-      setNotification({ type: 'error', message: err.response?.data?.detail || 'Failed to deny the hand-off.' });
+      setNotification({ type: 'error', message: err.response?.data?.detail || "Couldn't deny the hand-off. Try again." });
     } finally {
       setActionLoading(null);
     }
   };
 
-  // Phase 19: Hour Tracking & Payroll CSV Export
-  const exportPayroll = async () => {
-    if (!currentVenueId) return;
-    try {
-      setExportingCSV(true);
-      const response = await api.get(`/venues/${currentVenueId}/payroll/export`, { responseType: 'blob' });
-      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', 'payroll.csv');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      setNotification({ type: 'success', message: 'Payroll CSV downloaded.' });
-    } catch (err) {
-      console.error('Error exporting payroll CSV:', err);
-      setNotification({ type: 'error', message: 'Failed to download payroll CSV.' });
-    } finally {
-      setExportingCSV(false);
-    }
-  };
+
 
   const handleManagerVenueChange = (e) => {
     const newId = e.target.value;
@@ -299,11 +288,64 @@ export default function VenueManagerDashboard() {
       },
     });
 
+  // Phase 29.3: drafts and templates
+  const publishEvent = async (ev) => {
+    setActionLoading(`publish-${ev.event_id}`);
+    try {
+      await api.post(`/events/${ev.event_id}/publish`);
+      afterChange(`Published “${ev.title}”. Workers can see it and your team has been told.`);
+    } catch (err) {
+      setNotification({ type: 'error', message: err.response?.data?.detail || 'Could not publish.' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const askUnpublish = (ev) =>
+    setConfirmDialog({
+      title: 'Move back to drafts?',
+      message: `Workers will stop seeing “${ev.title}” until you publish it again. Nobody has requested it yet.`,
+      confirmLabel: 'Move to drafts',
+      onConfirm: async () => {
+        await api.post(`/events/${ev.event_id}/unpublish`);
+        afterChange(`“${ev.title}” is a draft again.`);
+      },
+    });
+
+  const askDeleteDraft = (ev) =>
+    setConfirmDialog({
+      title: 'Delete this draft?',
+      message: `“${ev.title}” and its shifts will be deleted. Nobody was told about it, so nobody is affected.`,
+      confirmLabel: 'Delete draft',
+      danger: true,
+      onConfirm: async () => {
+        await api.delete(`/events/${ev.event_id}`);
+        afterChange('Draft deleted.');
+      },
+    });
+
+  const askSaveTemplate = (ev) =>
+    setConfirmDialog({
+      title: 'Save as a template',
+      message: 'Saves the times, where, notes and shifts (with pay) so you can post this event again in a few clicks. Dates and people are not saved.',
+      confirmLabel: 'Save template',
+      input: { label: 'Template name', placeholder: 'e.g. Friday Jazz', initial: ev.title, required: true },
+      onConfirm: async (name) => {
+        await api.post(`/events/${ev.event_id}/save-as-template`, { name });
+        setNotification({ type: 'success', message: `Saved the template “${name}”. Pick it next time you post an event.` });
+      },
+    });
+
+  const openTemplates = () => {
+    setSettingsTab('templates');
+    setShowVenueSettings(true);
+  };
+
   const askCancelPosition = (pos, ev) =>
     setReasonDialog({
       title: `Cancel ${pos.role_type}?`,
       message: `Everyone booked or waiting for ${pos.role_type} on "${ev.title}" will see it as cancelled.`,
-      confirmLabel: 'Cancel position',
+      confirmLabel: 'Cancel shift',
       danger: true,
       onConfirm: async (reason) => {
         await api.post(`/events/${ev.event_id}/positions/${pos.shift_id}/cancel`, { reason });
@@ -330,7 +372,7 @@ export default function VenueManagerDashboard() {
           <Building2 className="w-10 h-10 text-amber-400 mx-auto mb-3" />
           <h1 className="text-lg font-bold text-white mb-1">No venue assigned yet</h1>
           <p className="text-sm text-slate-400">
-            Your account is a Venue Manager but isn't linked to a venue. Ask a platform admin to assign you one in the Admin Panel.
+            You're a manager, but you haven't been added to a venue yet. Ask a ShiftBoard admin to add you.
           </p>
         </div>
       </div>
@@ -338,7 +380,6 @@ export default function VenueManagerDashboard() {
   }
 
   const tz = venueDetails?.timezone;
-  const attention = pendingRequests.length + pendingTransfers.length;
   const headerBtn =
     'px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm disabled:opacity-50';
 
@@ -355,7 +396,7 @@ export default function VenueManagerDashboard() {
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-xl sm:text-2xl font-bold text-white truncate">{venueDetails?.name || 'Venue'}</h1>
                 <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  {isPlatformAdmin ? 'Platform admin' : 'Venue manager'}
+                  {isPlatformAdmin ? 'Admin' : 'Manager'}
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5 truncate">{venueDetails?.address || ''}</p>
@@ -379,16 +420,22 @@ export default function VenueManagerDashboard() {
               onClick={() => setEventForm({ mode: 'create' })}
               className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
             >
-              <Plus className="w-4 h-4" /> Post a Shift
+              <Plus className="w-4 h-4" /> Post an event
+            </button>
+            <button type="button" onClick={openTemplates} disabled={!venueDetails} className={headerBtn}>
+              <LayoutTemplate className="w-4 h-4 text-indigo-300" /> Templates
             </button>
             <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
               <UserPlus className="w-4 h-4 text-emerald-400" /> Team
             </button>
-            <button type="button" onClick={() => setShowVenueSettings(true)} disabled={!venueDetails} className={headerBtn}>
+            <button type="button" onClick={() => { setSettingsTab('details'); setShowVenueSettings(true); }} disabled={!venueDetails} className={headerBtn}>
               <Settings className="w-4 h-4 text-amber-400" /> Settings
             </button>
-            <button type="button" onClick={exportPayroll} disabled={exportingCSV || !currentVenueId} className={headerBtn}>
-              <Download className="w-4 h-4 text-emerald-400" /> {exportingCSV ? 'Downloading…' : 'Payroll CSV'}
+            <button type="button" onClick={() => setShowDownload(true)} disabled={!currentVenueId} className={headerBtn}>
+              <Download className="w-4 h-4 text-emerald-400" /> Download hours
+            </button>
+            <button type="button" onClick={() => setShowPayPeriods(true)} disabled={!currentVenueId} className={headerBtn}>
+              <CalendarRange className="w-4 h-4 text-violet-300" /> Pay periods
             </button>
             {currentVenueId && (
               <Link to={`/venues/${currentVenueId}`} className={headerBtn}>
@@ -400,6 +447,7 @@ export default function VenueManagerDashboard() {
       </section>
 
       <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <AppNudge manager />
         {notification && (
           <div
             className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
@@ -424,26 +472,30 @@ export default function VenueManagerDashboard() {
           </div>
         )}
 
-        {/* Phones / tablets: jump to the queues that sit below the shifts */}
-        {attention > 0 && (
-          <div className="lg:hidden flex flex-wrap gap-2">
-            {pendingRequests.length > 0 && (
-              <button type="button" onClick={() => scrollTo('approval-queue')}
-                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
-                <Users className="w-4 h-4" /> {pendingRequests.length} request{pendingRequests.length === 1 ? '' : 's'} to review
-              </button>
-            )}
-            {pendingTransfers.length > 0 && (
-              <button type="button" onClick={() => scrollTo('pending-transfers')}
-                className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-bold inline-flex items-center gap-1.5">
-                <ArrowRightLeft className="w-4 h-4" /> {pendingTransfers.length} hand-off{pendingTransfers.length === 1 ? '' : 's'} to approve
-              </button>
-            )}
-          </div>
-        )}
+        {/* Phase 30: everything waiting on you, then today's board */}
+        <NeedsYouStrip
+          requests={pendingRequests.length}
+          transfers={pendingTransfers.length}
+          late={tonightSummary.late}
+          openSpots={tonightSummary.openSpots}
+          onJump={scrollTo}
+        />
+
+        <TonightBoard
+          venueId={currentVenueId}
+          timeZone={tz}
+          refreshKey={boardRefreshKey}
+          reliabilityMap={reliabilityMap}
+          onOpenBoard={setActiveDiscussionShift}
+          onOpenEvent={openEvent}
+          onTimesheet={(eventId) => setTimesheetEventId(eventId)}
+          onOpenWorker={setProfileWorkerId}
+          onChanged={afterChange}
+          onSummary={setTonightSummary}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          {/* Left: posted shifts */}
+          {/* Left: posted shifts (Phase 30: now below the Today board) */}
           <div className="lg:col-span-2 min-w-0">
             <PostedShiftsBoard
               venueId={currentVenueId}
@@ -458,6 +510,10 @@ export default function VenueManagerDashboard() {
               onEditEvent={(id) => setEventForm({ mode: 'edit', eventId: id })}
               onCancelEvent={askCancelEvent}
               onDuplicateEvent={(ev) => setDupEvent(ev)}
+              onPublishEvent={publishEvent}
+              onUnpublishEvent={askUnpublish}
+              onDeleteDraft={askDeleteDraft}
+              onSaveTemplate={askSaveTemplate}
               onTimesheet={(ev) => setTimesheetEventId(ev.event_id)}
               onRemovePerson={askRemovePerson}
               onCancelPosition={askCancelPosition}
@@ -466,25 +522,29 @@ export default function VenueManagerDashboard() {
             />
           </div>
 
-          {/* Right: what needs you + activity */}
+          {/* Right: requests / hand-offs (only while something is waiting) + activity */}
           <aside className="space-y-6 min-w-0">
-            <ApprovalQueueCard
-              requests={pendingRequests}
-              reliabilityMap={reliabilityMap}
-              timeZone={tz}
-              actionLoading={actionLoading}
-              onReview={(req) => setReview({ type: 'request', data: req })}
-              onApprove={handleApprove}
-              onDeny={handleDeny}
-            />
-            <TransfersCard
-              transfers={pendingTransfers}
-              timeZone={tz}
-              actionLoading={actionLoading}
-              onReview={(t) => setReview({ type: 'transfer', data: t })}
-              onApprove={handleApproveTransfer}
-              onDeny={handleDenyTransfer}
-            />
+            {pendingRequests.length > 0 && (
+              <ApprovalQueueCard
+                requests={pendingRequests}
+                reliabilityMap={reliabilityMap}
+                timeZone={tz}
+                actionLoading={actionLoading}
+                onReview={(req) => setReview({ type: 'request', data: req })}
+                onApprove={handleApprove}
+                onDeny={handleDeny}
+              />
+            )}
+            {pendingTransfers.length > 0 && (
+              <TransfersCard
+                transfers={pendingTransfers}
+                timeZone={tz}
+                actionLoading={actionLoading}
+                onReview={(t) => setReview({ type: 'transfer', data: t })}
+                onApprove={handleApproveTransfer}
+                onDeny={handleDenyTransfer}
+              />
+            )}
             <ActivityFeed
               venueId={currentVenueId}
               refreshKey={boardRefreshKey}
@@ -499,15 +559,20 @@ export default function VenueManagerDashboard() {
         <ShiftEventFormModal
           mode={eventForm.mode}
           eventId={eventForm.eventId}
+          templateId={eventForm.templateId}
           venue={venueDetails}
           positions={venuePositions}
           onClose={() => setEventForm(null)}
-          onSaved={() => {
+          onSaved={(saved, info = {}) => {
             setEventForm(null);
             fetchVenueData(currentVenueId);
             setNotification({
               type: 'success',
-              message: eventForm.mode === 'edit' ? 'Event updated.' : 'Event and shifts published.',
+              message: saved?.status === 'draft'
+                ? 'Draft saved. Only managers can see it. Publish it from Posted events when it’s ready.'
+                : info.published
+                  ? 'Published. Workers can see it and your team has been told.'
+                  : 'Event updated.',
             });
             loadVenuePositions(currentVenueId);
           }}
@@ -515,12 +580,13 @@ export default function VenueManagerDashboard() {
       )}
 
       {reasonDialog && <ReasonDialog {...reasonDialog} onClose={() => setReasonDialog(null)} />}
+      {confirmDialog && <ConfirmDialog {...confirmDialog} onClose={() => setConfirmDialog(null)} />}
       {dupEvent && (
         <DuplicateEventModal
           event={dupEvent}
           timeZone={tz}
           onClose={() => setDupEvent(null)}
-          onDone={(count) => afterChange(`Created ${count} ${count === 1 ? 'copy' : 'copies'}.`)}
+          onDone={(count, asDraft) => afterChange(`Created ${count} ${asDraft ? 'draft ' : ''}${count === 1 ? 'copy' : 'copies'}.`)}
         />
       )}
       {timesheetEventId && (
@@ -539,6 +605,25 @@ export default function VenueManagerDashboard() {
           shiftTitle={`${activeDiscussionShift.title} (${activeDiscussionShift.role_type})`}
           currentUserRole={user?.role}
           onClose={() => setActiveDiscussionShift(null)}
+        />
+      )}
+
+      {showDownload && currentVenueId && (
+        <DownloadHoursModal
+          venueId={currentVenueId}
+          venueName={venueDetails?.name}
+          onClose={() => setShowDownload(false)}
+          onDone={(message) => setNotification({ type: 'success', message })}
+          onError={(message) => setNotification({ type: 'error', message })}
+        />
+      )}
+
+      {showPayPeriods && currentVenueId && (
+        <PayPeriodsModal
+          venueId={currentVenueId}
+          venueName={venueDetails?.name}
+          onClose={() => setShowPayPeriods(false)}
+          onOpenSettings={venueDetails ? () => { setShowPayPeriods(false); setSettingsTab('timepay'); setShowVenueSettings(true); } : null}
         />
       )}
 
@@ -578,6 +663,12 @@ export default function VenueManagerDashboard() {
         <VenueSettingsModal
           mode="edit"
           venue={venueDetails}
+          initialTab={settingsTab}
+          onUseTemplate={(tpl) => {
+            setShowVenueSettings(false);
+            loadVenuePositions(currentVenueId);
+            setEventForm({ mode: 'create', templateId: tpl.id });
+          }}
           onClose={() => {
             setShowVenueSettings(false);
             loadVenuePositions(currentVenueId);

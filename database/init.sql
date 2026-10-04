@@ -1,11 +1,18 @@
 -- ==============================================================================
 -- ShiftBoard Database Initialization Schema
 -- PostgreSQL 16
--- 
--- NOTE: If updating ENUM definitions or database constraints, wipe the existing
--- Docker database volume to apply changes:
---   docker compose down -v
---   docker compose up --build
+--
+-- RULES (Phase 34.5):
+--   * NO native PostgreSQL ENUMs. Never write CREATE TYPE ... AS ENUM. Every status / role
+--     column is a plain VARCHAR (the core user_role, request_status, shift_status and
+--     transfer_status columns are VARCHAR(50)); allowed values are checked in the app
+--     (Pydantic + Python Enum classes). The asyncpg driver can't cast to native ENUMs.
+--   * Every model in backend/src/models.py has its CREATE TABLE here, with the same
+--     columns, types, nullability, foreign keys and indexes. Change both together.
+--   * This file only runs on an EMPTY database. To apply a change, either wipe it:
+--       docker compose down -v
+--       docker compose up -d --build
+--     or run the phase's "keep your data" SQL (ALTER TABLE ... / CREATE ... IF NOT EXISTS).
 -- ==============================================================================
 
 -- Enable UUID Extension
@@ -32,6 +39,9 @@ CREATE TABLE users (
     firebase_uid VARCHAR(128) UNIQUE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     discoverable VARCHAR(20) NOT NULL DEFAULT 'private',   -- Phase 29.1: private | venues | everyone
+    emergency_contact_name VARCHAR(100),                   -- Phase 32
+    emergency_contact_phone VARCHAR(30),                   -- Phase 32
+    departments TEXT[] NOT NULL DEFAULT '{}',              -- Phase 32.2: foh | bar | kitchen | tech | security | ops
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -55,6 +65,7 @@ CREATE TABLE venues (
     logo_url TEXT,
     timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
     phone VARCHAR(30),
+    website_url VARCHAR(500),                                -- Phase 34.6: the venue's own website (public profile)
     arrival_instructions TEXT,
     dress_code TEXT,
     default_shift_notes TEXT,
@@ -64,6 +75,18 @@ CREATE TABLE venues (
     geofence_buffer_meters INT NOT NULL DEFAULT 150,
     clock_in_early_minutes INT NOT NULL DEFAULT 30,
     auto_clock_out_hours INT NOT NULL DEFAULT 2,
+    allow_public_cover BOOLEAN NOT NULL DEFAULT TRUE,        -- Phase 34: workers may also post cover on the public board
+    team_time_tracking VARCHAR(20) NOT NULL DEFAULT 'shiftboard', -- Phase 35: shiftboard | payroll (team members' default)
+    ot_weekly_hours NUMERIC(5, 2) DEFAULT 40,                -- Phase 35: overtime after this many hours a work week (NULL = off)
+    ot_daily_hours NUMERIC(5, 2),                            -- Phase 35: overtime after this many hours a day (NULL = off)
+    work_week_start SMALLINT NOT NULL DEFAULT 0,             -- Phase 35: 0 = Monday ... 6 = Sunday
+    pay_period VARCHAR(20) NOT NULL DEFAULT 'weekly',        -- Phase 35: weekly | biweekly | semimonthly | monthly
+    pay_period_anchor DATE,                                  -- Phase 35: biweekly: the first day of any pay period
+    pay_period_approval BOOLEAN NOT NULL DEFAULT TRUE,       -- Phase 35: managers approve and lock each pay period
+    tips_enabled BOOLEAN NOT NULL DEFAULT TRUE,              -- Phase 35.2: managers enter tips per event
+    tip_pool_split VARCHAR(20) NOT NULL DEFAULT 'hours',     -- Phase 35.2: hours | equal (default for new tip pools)
+    tip_pool_payroll BOOLEAN NOT NULL DEFAULT TRUE,          -- Phase 35.2: venue-payroll people share pools (scheduled hours)
+    tips_shown_to_workers BOOLEAN NOT NULL DEFAULT TRUE,     -- Phase 35.2: workers see their tips in Hours & pay
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -95,6 +118,8 @@ CREATE TABLE venue_whitelists (
     status VARCHAR(20) NOT NULL DEFAULT 'active',          -- Phase 29: active | removed | blocked
     positions TEXT[] NOT NULL DEFAULT '{}',                -- Phase 29: positions this person works here
     source VARCHAR(20) NOT NULL DEFAULT 'manager',         -- Phase 29: manager | invite | import | admin
+    time_tracking VARCHAR(20),                             -- Phase 35: payroll | shiftboard (NULL = the venue's setting)
+    works_through VARCHAR(120),                            -- Phase 35: staffing company / agency they come through
     added_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -118,6 +143,8 @@ CREATE TABLE venue_positions (
     tip_pool BOOLEAN NOT NULL DEFAULT FALSE,
     sort_order INT NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    required_certs TEXT[] NOT NULL DEFAULT '{}',          -- Phase 32: cert type keys, e.g. {alcohol_server}
+    department VARCHAR(20) NOT NULL DEFAULT 'general',     -- Phase 32.2: foh | bar | kitchen | tech | security | ops | general
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_venue_position_name UNIQUE (venue_id, name),
@@ -164,6 +191,9 @@ CREATE TABLE shift_events (
     location_staff_notes TEXT,
     cancelled_at TIMESTAMPTZ,
     cancel_reason TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'published',          -- Phase 29.3: draft | published
+    published_at TIMESTAMPTZ,                                 -- Phase 29.3: first time it went live
+    series_id UUID,                                           -- Phase 32.3: events made by one "Copy to dates" share this (the original's id)
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_event_time CHECK (end_time > start_time)
@@ -171,6 +201,7 @@ CREATE TABLE shift_events (
 
 CREATE INDEX idx_shift_events_venue ON shift_events(venue_id);
 CREATE INDEX idx_shift_events_start ON shift_events(start_time);
+CREATE INDEX idx_shift_events_series ON shift_events(series_id);
 
 -- ------------------------------------------------------------------------------
 -- 5. Shifts Table
@@ -209,6 +240,7 @@ CREATE TABLE shifts (
 );
 
 CREATE INDEX idx_shifts_venue ON shifts(venue_id);
+CREATE INDEX idx_shifts_status ON shifts(status);                                  -- Phase 34.5 (matches the model)
 CREATE INDEX idx_shifts_start_time ON shifts(start_time);
 CREATE INDEX idx_shifts_role_type ON shifts(role_type);
 CREATE INDEX idx_shifts_event ON shifts(event_id);
@@ -231,8 +263,13 @@ CREATE TABLE shift_requests (
     notes TEXT,
     dropped_at TIMESTAMPTZ,
     status_reason TEXT,
+    previous_drop_at TIMESTAMPTZ,                             -- Phase 29.4: coming back after dropping this event
+    rebook_reason TEXT,                                       -- Phase 29.4: why (worker's request note or the manager's reason)
+    outside_department BOOLEAN NOT NULL DEFAULT FALSE,        -- Phase 32.2: asked for a shift outside their departments
     pay_rate NUMERIC(10, 2),
     info_seen_at TIMESTAMPTZ,
+    time_tracking VARCHAR(20),                                -- Phase 35: payroll | shiftboard, written when the shift starts
+    tip_amount NUMERIC(10, 2),                                -- Phase 35.2: this person's own tips for the shift (NULL = none)
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_shift_worker UNIQUE (shift_id, worker_id)
@@ -360,6 +397,7 @@ CREATE TABLE shift_transfers (
     to_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(50) NOT NULL DEFAULT 'pending_worker_acceptance',
     notes TEXT,
+    cover_request_id UUID,                                    -- Phase 34: set when this hand-off came from a cover post
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -410,7 +448,7 @@ CREATE TABLE notification_deliveries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     notification_id UUID NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    channel VARCHAR(10) NOT NULL,                 -- email | sms
+    channel VARCHAR(10) NOT NULL,                 -- email | sms | push (Phase 33)
     status VARCHAR(12) NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped
     digest BOOLEAN NOT NULL DEFAULT FALSE,
     send_after TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -420,6 +458,7 @@ CREATE TABLE notification_deliveries (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_notification_deliveries_due ON notification_deliveries(status, send_after);
+CREATE INDEX idx_notification_deliveries_notification ON notification_deliveries(notification_id);   -- Phase 34.5 (FK lookups / cascades)
 
 CREATE TABLE notification_preferences (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -428,6 +467,7 @@ CREATE TABLE notification_preferences (
     reminders_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     new_shift_alerts VARCHAR(10) NOT NULL DEFAULT 'daily',   -- off | instant | daily
     manager_alerts_email BOOLEAN NOT NULL DEFAULT TRUE,
+    push_enabled BOOLEAN NOT NULL DEFAULT TRUE,               -- Phase 33: phone / browser notifications
     quiet_start SMALLINT,                                     -- hour 0-23, NULL = no quiet hours
     quiet_end SMALLINT,
     timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
@@ -505,3 +545,202 @@ CREATE TABLE admin_audit (
 );
 CREATE INDEX idx_admin_audit_created ON admin_audit(created_at DESC);
 CREATE INDEX idx_admin_audit_target ON admin_audit(target_type, target_id);
+
+-- ------------------------------------------------------------------------------
+-- Phase 29.3: Event templates (a venue's reusable event setups)
+-- ------------------------------------------------------------------------------
+CREATE TABLE event_templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    name VARCHAR(120) NOT NULL,                               -- what managers pick from ("Friday Jazz")
+    title VARCHAR(255) NOT NULL,                              -- the event name it fills in
+    start_local VARCHAR(5) NOT NULL,                          -- 'HH:MM' venue time
+    end_local VARCHAR(5) NOT NULL,                            -- 'HH:MM'; earlier than start = next day
+    notes TEXT,
+    staff_notes TEXT,
+    location_id UUID REFERENCES venue_locations(id) ON DELETE SET NULL,
+    geofence_mode VARCHAR(20) NOT NULL DEFAULT 'venue_default',
+    location_staff_notes TEXT,
+    positions JSONB NOT NULL DEFAULT '[]'::jsonb,             -- [{role_type, capacity, hourly_rate, ...}]
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_event_templates_venue ON event_templates(venue_id);
+
+-- ------------------------------------------------------------------------------
+-- Phase 31: Availability & time off
+-- ------------------------------------------------------------------------------
+CREATE TABLE worker_availability (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    weekday SMALLINT NOT NULL,                                -- 0 = Monday ... 6 = Sunday
+    start_local VARCHAR(5) NOT NULL,                          -- 'HH:MM' local time where they work
+    end_local VARCHAR(5) NOT NULL,                            -- 'HH:MM' or '24:00'; earlier than start = next day
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_availability_weekday CHECK (weekday BETWEEN 0 AND 6)
+);
+CREATE INDEX idx_worker_availability_worker ON worker_availability(worker_id);
+
+-- Phase 32.1: time off is a block the worker sets (no approval). Managers can't book over it.
+CREATE TABLE time_off_blocks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    all_day BOOLEAN NOT NULL DEFAULT TRUE,
+    start_date DATE NOT NULL,
+    end_date DATE,                                            -- inclusive; NULL = repeats with no end
+    start_local VARCHAR(5),                                   -- 'HH:MM' when not all day
+    end_local VARCHAR(5),                                     -- 'HH:MM' or '24:00'; at/before start = runs past midnight
+    repeat VARCHAR(20) NOT NULL DEFAULT 'none',               -- none | weekly | biweekly
+    weekdays SMALLINT[] NOT NULL DEFAULT '{}',                -- 0 = Monday ... 6 = Sunday (repeating blocks)
+    reason VARCHAR(200),                                      -- managers see this
+    private_note TEXT,                                        -- only the worker sees this
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_time_off_block_range CHECK (end_date IS NULL OR end_date >= start_date)
+);
+CREATE INDEX idx_time_off_blocks_worker ON time_off_blocks(worker_id);
+
+-- ------------------------------------------------------------------------------
+-- Phase 32: Profile files & certifications
+-- ------------------------------------------------------------------------------
+CREATE TABLE user_files (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind VARCHAR(20) NOT NULL,                                -- avatar | certificate
+    filename VARCHAR(255),
+    content_type VARCHAR(100) NOT NULL,
+    size_bytes INT NOT NULL,
+    data BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_user_files_owner ON user_files(owner_id);
+
+CREATE TABLE worker_certifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    cert_type VARCHAR(50) NOT NULL,                           -- alcohol_server | food_handler | age_21 | ...
+    number VARCHAR(100),
+    issued_on DATE,
+    expires_on DATE,
+    file_id UUID REFERENCES user_files(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'unverified',         -- unverified | verified | rejected
+    verified_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    verified_venue_id UUID REFERENCES venues(id) ON DELETE SET NULL,
+    verified_at TIMESTAMPTZ,
+    review_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_worker_cert UNIQUE (worker_id, cert_type)
+);
+CREATE INDEX idx_worker_certs_worker ON worker_certifications(worker_id);
+
+-- ==============================================================================
+-- Phase 33: Web Push (installed app / browser notifications)
+-- ==============================================================================
+CREATE TABLE push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL UNIQUE,                            -- Web Push: the browser's push URL. Firebase: the device token
+    p256dh VARCHAR(200),                                      -- Web Push only: the device's public key (base64url)
+    auth VARCHAR(100),                                        -- Web Push only: the device's auth secret (base64url)
+    provider VARCHAR(10) NOT NULL DEFAULT 'webpush',          -- Phase 33.0.1: webpush | fcm
+    device_label VARCHAR(120),                                -- e.g. "iPhone", "Android · Chrome"
+    last_success_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+CREATE TABLE app_keys (
+    name VARCHAR(50) PRIMARY KEY,                             -- vapid_private_pem
+    value TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ==============================================================================
+-- Phase 34: Cover requests and waitlists
+-- ==============================================================================
+CREATE TABLE cover_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    request_id UUID NOT NULL REFERENCES shift_requests(id) ON DELETE CASCADE,   -- the booking that needs cover
+    from_worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    audience VARCHAR(10) NOT NULL DEFAULT 'team',             -- team | public (team + the public board)
+    note TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'open',               -- open | pending_approval | covered | cancelled | expired
+    taken_by_worker_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    transfer_id UUID REFERENCES shift_transfers(id) ON DELETE SET NULL,
+    warned_12h_at TIMESTAMPTZ,
+    warned_3h_at TIMESTAMPTZ,
+    closed_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_cover_requests_shift ON cover_requests(shift_id);
+CREATE INDEX idx_cover_requests_status ON cover_requests(status);
+CREATE INDEX idx_cover_requests_venue ON cover_requests(venue_id);
+-- one live cover post per booking
+CREATE UNIQUE INDEX uq_cover_requests_live ON cover_requests(request_id) WHERE status IN ('open', 'pending_approval');
+
+CREATE TABLE waitlist_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shift_id UUID NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    event_id UUID REFERENCES shift_events(id) ON DELETE CASCADE,
+    worker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    auto_book BOOLEAN NOT NULL DEFAULT TRUE,                  -- book (or request) automatically when a spot opens
+    status VARCHAR(20) NOT NULL DEFAULT 'waiting',            -- waiting | offered | booked | requested | passed | expired | left | closed
+    offered_at TIMESTAMPTZ,
+    offer_expires_at TIMESTAMPTZ,
+    request_id UUID REFERENCES shift_requests(id) ON DELETE SET NULL,
+    closed_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_waitlist_shift ON waitlist_entries(shift_id, created_at);
+CREATE INDEX idx_waitlist_worker ON waitlist_entries(worker_id);
+-- one live place per person per position
+CREATE UNIQUE INDEX uq_waitlist_live ON waitlist_entries(shift_id, worker_id) WHERE status IN ('waiting', 'offered');
+
+-- ==============================================================================
+-- Phase 35: Pay periods (approved = locked)
+-- ==============================================================================
+CREATE TABLE pay_period_approvals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    start_date DATE NOT NULL,                                 -- venue-local dates, inclusive
+    end_date DATE NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'approved',           -- approved (locked) | reopened
+    people INT NOT NULL DEFAULT 0,                            -- totals when it was approved
+    total_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    overtime_hours NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    total_pay NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    total_tips NUMERIC(12, 2) NOT NULL DEFAULT 0,             -- Phase 35.2
+    approved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    approved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reopened_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    reopened_at TIMESTAMPTZ,
+    reopen_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_pay_period_approvals_venue ON pay_period_approvals(venue_id, start_date);
+-- one live approval per venue and period
+CREATE UNIQUE INDEX uq_pay_period_approved ON pay_period_approvals(venue_id, start_date) WHERE status = 'approved';
+
+-- ==============================================================================
+-- Phase 35.2: Tips per event (one tip pool per event; own tips live on shift_requests.tip_amount)
+-- ==============================================================================
+CREATE TABLE event_tips (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id UUID NOT NULL UNIQUE REFERENCES shift_events(id) ON DELETE CASCADE,
+    venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+    pool_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,            -- shared by everyone booked in tip-pool positions
+    split VARCHAR(20) NOT NULL DEFAULT 'hours',               -- hours | equal
+    note TEXT,
+    updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_event_tips_venue ON event_tips(venue_id);

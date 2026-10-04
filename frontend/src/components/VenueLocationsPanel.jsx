@@ -24,6 +24,7 @@ function LocationRow({ venue, loc, onChanged, onError }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(locationToDraft(loc));
   const [busy, setBusy] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);   // Phase 32.3: Archive shares a spot with Bring back, so it asks first
 
   useEffect(() => setDraft(locationToDraft(loc)), [loc]);
 
@@ -44,6 +45,7 @@ function LocationRow({ venue, loc, onChanged, onError }) {
 
   const toggleArchive = async () => {
     setBusy(true);
+    setConfirmArchive(false);
     try {
       await api.post(`/venues/${venue.id}/locations/${loc.id}/${loc.is_archived ? 'unarchive' : 'archive'}`);
       onChanged();
@@ -78,12 +80,27 @@ function LocationRow({ venue, loc, onChanged, onError }) {
               <Pencil className="w-4 h-4" />
             </button>
           )}
-          <button type="button" onClick={toggleArchive} disabled={busy} title={loc.is_archived ? 'Bring back' : 'Archive'}
+          <button type="button" onClick={loc.is_archived ? toggleArchive : () => setConfirmArchive(true)} disabled={busy || confirmArchive}
+            title={loc.is_archived ? 'Bring back' : 'Archive'}
             className="p-2 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-500/10">
             {loc.is_archived ? <RotateCcw className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
           </button>
         </div>
       </div>
+
+      {confirmArchive && (
+        <div className="mt-2 p-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 flex flex-wrap items-center gap-2">
+          <p className="flex-1 min-w-[12rem] text-xs text-amber-100">
+            Archive <b>{loc.name}</b>? It won't be offered for new events. Events already using it keep it, and you can bring it back later.
+          </p>
+          <button type="button" onClick={() => setConfirmArchive(false)} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">
+            Keep it
+          </button>
+          <button type="button" onClick={toggleArchive} disabled={busy} className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-xs font-bold text-slate-950 disabled:opacity-50">
+            Archive
+          </button>
+        </div>
+      )}
 
       {editing && (
         <div className="mt-3 space-y-3">
@@ -162,7 +179,7 @@ export default function VenueLocationsPanel({ venue, onError }) {
     <div className="space-y-4">
       <p className="text-xs text-slate-400">
         Places you staff besides your own address: client sites, off-site events, other rooms. Pick them on
-        “Post a shift”. Typing a new place there saves it here automatically.
+        “Post an event”. Typing a new place there saves it here automatically.
       </p>
 
       {loading ? (

@@ -20,6 +20,8 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
   const [weeks, setWeeks] = useState(4);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const sourceDraft = event.status === 'draft';               // Phase 29.3: copies of a draft are drafts
+  const [asDraft, setAsDraft] = useState(sourceDraft);
 
   const dates = useMemo(() => {
     if (!date) return [];
@@ -33,8 +35,8 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
     if (dates.length === 0) return setError('Pick a date.');
     setSaving(true);
     try {
-      const res = await api.post(`/events/${event.event_id}/duplicate`, { dates });
-      onDone && onDone(res.data.count);
+      const res = await api.post(`/events/${event.event_id}/duplicate`, { dates, as_draft: asDraft });
+      onDone && onDone(res.data.count, asDraft);
       onClose();
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not copy this event.');
@@ -48,14 +50,14 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
       <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">Cancel</button>
       <button type="button" onClick={submit} disabled={saving}
         className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
-        {saving ? 'Copying…' : `Create ${dates.length} ${dates.length === 1 ? 'copy' : 'copies'}`}
+        {saving ? 'Copying…' : `Create ${dates.length} ${asDraft ? 'draft ' : ''}${dates.length === 1 ? 'copy' : 'copies'}`}
       </button>
     </>
   );
 
   return (
     <ModalShell
-      title="Duplicate shift"
+      title="Duplicate event"
       subtitle={`${event.title} · ${fmtDate(event.start_time, timeZone)} · ${fmtTimeRange(event.start_time, event.end_time, timeZone)}`}
       icon={<Copy className="w-5 h-5 text-emerald-400" />}
       onClose={onClose}
@@ -88,8 +90,16 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
           </div>
         )}
       </div>
+      <label className={`mt-3 flex items-start gap-2 text-xs ${sourceDraft ? 'text-slate-500' : 'text-slate-300'}`}>
+        <input type="checkbox" checked={asDraft} disabled={sourceDraft} onChange={(e) => setAsDraft(e.target.checked)}
+          className="mt-0.5 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+        <span>
+          Create the copies as drafts (workers can't see them until you publish each one)
+          {sourceDraft && <span className="block text-[10px]">This event is a draft, so its copies are drafts too.</span>}
+        </span>
+      </label>
       <p className="text-[11px] text-slate-500 mt-3">
-        Same start time ({timeZone || 'venue'} time), positions, pay, notes and approval settings. Nobody is booked on the copies.
+        Same start time ({timeZone || 'venue'} time), shifts, pay, notes and approval settings. Nobody is booked on the copies.
       </p>
       {dates.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">

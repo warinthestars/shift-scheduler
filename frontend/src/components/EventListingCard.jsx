@@ -1,9 +1,9 @@
 import React from 'react';
-import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star } from 'lucide-react';
+import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star, Lock, CalendarOff, Repeat } from 'lucide-react';
 import PayLabel from './PayLabel';
 import { fmtTimeRange } from '../utils/venueTime';
 import {
-  hoursText, listingPayText, estPayText, STATUS_LABELS, PENDING_STATUSES, BOOKED_STATUSES, whereOf,
+  hoursText, listingPayText, estPayText, statusLabel, PENDING_STATUSES, BOOKED_STATUSES, whereOf,
 } from '../utils/listingFormat';
 
 const MAX_ROWS = 4;
@@ -30,7 +30,7 @@ export function MyRequestPill({ status, role }) {
     : waiting
     ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
     : 'bg-slate-800 text-slate-400 border-slate-700';
-  const text = booked ? `Booked · ${role}` : waiting ? `Requested · ${role}` : STATUS_LABELS[s] || s;
+  const text = booked ? `Booked · ${role}` : waiting ? `Waiting · ${role}` : statusLabel(s);
   return (
     <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border whitespace-nowrap ${cls}`}>
       {text}
@@ -84,6 +84,12 @@ export default function EventListingCard({ listing, onOpen }) {
                 <Star className="w-2.5 h-2.5" /> Your venue
               </span>
             )}
+            {listing.series_more > 0 && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold whitespace-nowrap"
+                title="This event repeats. Open it to request several dates at once.">
+                <Repeat className="w-2.5 h-2.5" /> +{listing.series_more} {listing.series_more === 1 ? 'date' : 'dates'}
+              </span>
+            )}
           </p>
           {(() => {
             const where = whereOf(listing);   // Phase 27: event location if set, else the venue
@@ -133,22 +139,43 @@ export default function EventListingCard({ listing, onOpen }) {
                   <ShieldCheck className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Needs approval" />
                 )}
                 <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
-                {p.my_status && <span className="text-[10px] text-amber-300">• you</span>}
+                {!full && p.missing_certs?.length > 0 && (
+                  <span className="text-[10px] text-slate-400 inline-flex items-center gap-0.5 whitespace-nowrap" title={`Needs ${p.missing_certs.join(', ')}`}>
+                    <Lock className="w-3 h-3" /> needs a certificate
+                  </span>
+                )}
+                {p.my_status && (
+                  <span className={`text-[10px] whitespace-nowrap ${p.my_status === 'dropped' ? 'text-rose-300' : 'text-amber-300'}`}>
+                    • {p.my_status === 'dropped' ? 'you dropped' : 'you'}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
                 <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-slate-200 font-semibold" hiddenText="—" />
                 {est && <span className="hidden sm:inline text-slate-500">{est}</span>}
                 <span className={`font-semibold ${full ? 'text-slate-500' : 'text-emerald-300'}`}>
-                  {full ? 'Full' : `${p.spots_left} open`}
+                  {full ? (p.my_waitlist ? `#${p.my_waitlist.place} in line` : p.waitlist_count ? `Full · ${p.waitlist_count} waiting` : 'Full') : `${p.spots_left} open`}
                 </span>
               </div>
             </div>
           );
         })}
         {extra > 0 && (
-          <div className="px-3 py-1.5 text-[11px] text-slate-400">+{extra} more position{extra === 1 ? '' : 's'}</div>
+          <div className="px-3 py-1.5 text-[11px] text-slate-400">+{extra} more shift{extra === 1 ? '' : 's'}</div>
         )}
       </div>
+
+      {/* Phase 31 / 32.1: the viewer's own availability / time-off blocks */}
+      {listing.time_off && (
+        <p className="mt-2 text-[11px] flex items-center gap-1 text-amber-300">
+          <CalendarOff className="w-3.5 h-3.5 flex-shrink-0" /> During your time off
+        </p>
+      )}
+      {!listing.time_off && listing.availability === 'outside' && (
+        <p className="mt-2 text-[11px] text-slate-400 flex items-center gap-1">
+          <CalendarOff className="w-3.5 h-3.5 flex-shrink-0" /> Outside your usual availability
+        </p>
+      )}
 
       {listing.conflict && (
         <p className="mt-2 text-[11px] text-amber-300 flex items-center gap-1">
@@ -167,7 +194,8 @@ export default function EventListingCard({ listing, onOpen }) {
           {listing.any_instant && <span className="text-emerald-400 font-semibold"> · Instant book</span>}
         </span>
         <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
-          {mine ? 'View details' : 'View & request'}
+          {mine ? 'View details' : listing.dropped_here ? 'Ask to come back'
+            : listing.full ? (listing.positions.some((p) => p.my_waitlist) ? "You're on the waitlist" : 'Join waitlist') : 'View & request'}
           <ChevronRight className="w-4 h-4" />
         </span>
       </div>

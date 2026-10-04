@@ -2,7 +2,7 @@ import csv
 import io
 from uuid import UUID
 from typing import List, Optional, Dict
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
@@ -33,6 +33,26 @@ from src.services.shift_views import to_shift_responses
 from src.services.worker_calendar import has_any_notes, latest_info_update, needs_ack
 from src.services.clock import auto_close_open_entries, late_minutes as clock_late_minutes
 from src.services.locations import load_locations
+from src.services.departments import DEPARTMENTS, guess_department   # Phase 32.2
+from src.services.fit import CERT_TYPES, load_fit, load_requirements, required_for, tz_of, unverified_certs   # Phase 31 + 32
+
+
+def _clean_department(value: Optional[str], name: str) -> str:
+    """Phase 32.2: a known department key; None/blank = guess from the position name."""
+    if value is None or not str(value).strip():
+        return guess_department(name)
+    if value not in DEPARTMENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown department: {value}.")
+    return value
+
+
+def _clean_certs(keys) -> List[str]:
+    """Phase 32: keep known certificate keys, in catalogue order, no duplicates."""
+    wanted = {k for k in (keys or [])}
+    unknown = wanted - set(CERT_TYPES)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown certificate type: {', '.join(sorted(unknown))}.")
+    return [k for k in CERT_TYPES if k in wanted]
 from src.services import activity
 from src.services import admin_audit
 
@@ -235,6 +255,11 @@ async def update_venue_settings(
     try:
         for field, value in data.items():
             setattr(venue, field, value)
+        # Phase 35: every-two-weeks pay with no start date yet -> a period starts this work week
+        if venue.pay_period == "biweekly" and venue.pay_period_anchor is None:
+            from src.services.pay_periods import week_start_for
+            from src.services.fit import tz_of
+            venue.pay_period_anchor = week_start_for(venue, datetime.now(timezone.utc).astimezone(tz_of(venue.timezone)).date())
         await db.commit()
         await db.refresh(venue)
     except HTTPException:
@@ -283,6 +308,7 @@ async def create_venue_position(
     if pos_in.default_rate_max is not None and pos_in.default_rate_max < pos_in.default_rate:
         raise HTTPException(status_code=400, detail="The top of the pay range can't be lower than the bottom.")
     rate_max = pos_in.default_rate_max if (pos_in.default_rate_max and pos_in.default_rate_max > pos_in.default_rate) else None
+    department = _clean_department(pos_in.department, name)                   # Phase 32.2 (400 on unknown)
 
     existing = await db.scalar(
         select(VenuePosition).where(
@@ -301,6 +327,8 @@ async def create_venue_position(
             existing.hide_rate = bool(pos_in.hide_rate)
             existing.tips_eligible = bool(pos_in.tips_eligible)
             existing.tip_pool = bool(pos_in.tips_eligible and pos_in.tip_pool)
+            existing.required_certs = _clean_certs(pos_in.required_certs)      # Phase 32
+            existing.department = department                                    # Phase 32.2
             await db.commit()
             await db.refresh(existing)
         except Exception as e:
@@ -322,6 +350,8 @@ async def create_venue_position(
             tip_pool=bool(pos_in.tips_eligible and pos_in.tip_pool),
             sort_order=int(max_order) + 1,
             is_active=True,
+            required_certs=_clean_certs(pos_in.required_certs),                # Phase 32
+            department=department,                                             # Phase 32.2
         )
         db.add(pos)
         await db.commit()
@@ -364,6 +394,16 @@ async def update_venue_position(
         data["name"] = new_name[:100]
     if "default_rate" in data and (data["default_rate"] is None or data["default_rate"] <= 0):
         raise HTTPException(status_code=400, detail="Default rate must be greater than $0.")
+    if "department" in data:                                                     # Phase 32.2
+        if data["department"] is None:
+            data.pop("department")
+        else:
+            data["department"] = _clean_department(data["department"], data.get("name") or pos.name)
+    if "required_certs" in data:                                                 # Phase 32
+        if data["required_certs"] is None:
+            data.pop("required_certs")
+        else:
+            data["required_certs"] = _clean_certs(data["required_certs"])
 
     try:
         for field, value in data.items():
@@ -426,7 +466,7 @@ async def add_worker_to_whitelist(
     w_res = await db.execute(select(User).where(User.id == wl_in.worker_id))
     worker = w_res.scalar_one_or_none()
     if not worker:
-        raise HTTPException(status_code=404, detail="Worker user not found")
+        raise HTTPException(status_code=404, detail="Person not found.")
 
     existing = await db.scalar(
         select(VenueWhitelist).where(
@@ -508,9 +548,36 @@ async def delete_venue(
                              f"Deleted venue {name}" + (f" and {te_count} time entries" if te_count else ""),
                              target_type="venue", target_id=venue_id)
 
+# Phase 33.1: CSV exports use the venue's local time (not UTC) and can be limited to a date range.
+def _local_str(dt, tz, fmt: str = "%Y-%m-%d %I:%M %p") -> str:
+    if dt is None:
+        return ""
+    dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    return dt.astimezone(tz).strftime(fmt)
+
+
+def _tz_label(tz) -> str:
+    return datetime.now(timezone.utc).astimezone(tz).strftime("%Z") or "venue time"
+
+
+def _slug(name) -> str:
+    import re
+    return (re.sub(r"[^a-z0-9]+", "-", (name or "venue").lower()).strip("-") or "venue")[:40]
+
+
+def _csv_range(start, end, tz):
+    if start is not None and end is not None and end < start:
+        raise HTTPException(status_code=400, detail="Pick an end date on or after the start date.")
+    lo = datetime.combine(start, datetime.min.time(), tzinfo=tz).astimezone(timezone.utc) if start else None
+    hi = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=tz).astimezone(timezone.utc) if end else None
+    return lo, hi
+
+
 @router.get("/{venue_id}/export-hours")
 async def export_venue_hours_csv(
     venue_id: UUID,
+    start: Optional[date] = Query(None, description="Phase 33.1: first day (venue time), optional"),
+    end: Optional[date] = Query(None, description="Phase 33.1: last day (venue time), optional"),
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
@@ -520,7 +587,9 @@ async def export_venue_hours_csv(
     Worker Name, Shift Date, Role, Clock In, Clock Out, Total Hours.
     Return a FastAPI StreamingResponse with media_type="text/csv" and a Content-Disposition header.
     """
-    await verify_venue_manager_access(venue_id, current_user, db)
+    venue = await verify_venue_manager_access(venue_id, current_user, db)
+    vtz = tz_of(venue.timezone)                                             # Phase 33.1: venue-local times
+    lo, hi = _csv_range(start, end, vtz)
 
     query = (
         select(TimeEntry, User, Shift)
@@ -529,19 +598,23 @@ async def export_venue_hours_csv(
         .where(Shift.venue_id == venue_id)
         .order_by(TimeEntry.clock_in_time.desc())
     )
+    if lo is not None:
+        query = query.where(TimeEntry.clock_in_time >= lo)
+    if hi is not None:
+        query = query.where(TimeEntry.clock_in_time < hi)
     result = await db.execute(query)
     records = result.all()
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Worker Name", "Shift Date", "Role", "Clock In", "Clock Out", "Total Hours"])
+    writer.writerow(["Name", "Shift date", "Position", f"Clock in ({_tz_label(vtz)})", f"Clock out ({_tz_label(vtz)})", "Hours"])
 
     for entry, worker, shift in records:
         worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
-        shift_date = shift.start_time.strftime("%Y-%m-%d") if shift.start_time else ""
+        shift_date = _local_str(shift.start_time, vtz, "%Y-%m-%d")
         role = shift.role_type or ""
-        clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
-        clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "In Progress"
+        clock_in = _local_str(entry.clock_in_time, vtz)
+        clock_out = _local_str(entry.clock_out_time, vtz) if entry.clock_out_time else "Still clocked in"
 
         if entry.clock_in_time and entry.clock_out_time:
             diff_seconds = (entry.clock_out_time - entry.clock_in_time).total_seconds()
@@ -562,16 +635,24 @@ async def export_venue_hours_csv(
 @router.get("/{venue_id}/payroll/export")
 async def export_venue_payroll_csv(
     venue_id: UUID,
+    start: Optional[date] = Query(None, description="Phase 33.1: first day (venue time), optional"),
+    end: Optional[date] = Query(None, description="Phase 33.1: last day (venue time), optional"),
+    company: Optional[str] = Query(None, max_length=120, description="Phase 35: only people who work through this company"),
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Phase 19: Hour Tracking & Payroll CSV Export.
     Calculates hours worked for workers at this venue.
     Phase 27: adds work location, clock-in/out location check, late minutes and auto-closed flags.
+    Phase 35: optional company filter; last three columns: Regular hours, Overtime hours, Works through.
+    Phase 35.2: then Own tips, Tip pool share, Tips total: on each booking's first clock-in row, plus a
+    "tips only" row for people with tips but no clock-ins in the file (e.g. on venue payroll). Tips count on
+    the day the shift starts.
     """
-    await verify_venue_manager_access(venue_id, current_user, db)
+    venue = await verify_venue_manager_access(venue_id, current_user, db)
     await auto_close_open_entries(db, venue_id=venue_id)
+    vtz = tz_of(venue.timezone)                                             # Phase 33.1: venue-local times
+    lo, hi = _csv_range(start, end, vtz)
 
     query = (
         select(TimeEntry, User, Shift, ShiftRequest)
@@ -584,14 +665,33 @@ async def export_venue_payroll_csv(
         .where(Shift.venue_id == venue_id)
         .order_by(TimeEntry.clock_in_time.desc())
     )
+    if lo is not None:
+        query = query.where(TimeEntry.clock_in_time >= lo)
+    if hi is not None:
+        query = query.where(TimeEntry.clock_in_time < hi)
     records = (await db.execute(query)).all()
+
+    # Phase 35: staffing company (from the team list) and overtime under the venue's rules
+    companies = dict((await db.execute(
+        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
+            VenueWhitelist.venue_id == venue_id, VenueWhitelist.works_through.isnot(None))
+    )).all())
+    if company:
+        want = company.strip().lower()
+        records = [r for r in records if (companies.get(r[1].id) or "").lower() == want]
+    ot = {}
+    if records:
+        from src.services.pay_periods import overtime_for, local_date
+        days = [local_date(r[0].clock_in_time, vtz) for r in records]
+        ot = await overtime_for(db, venue, {r[1].id for r in records}, min(days), max(days))
 
     entry_ids = [r[0].id for r in records]
     edited_ids = set()
     if entry_ids:
         edited_ids = set((await db.execute(
-            select(distinct(TimeEntryEdit.time_entry_id))
+            select(TimeEntryEdit.time_entry_id)
             .where(TimeEntryEdit.time_entry_id.in_(entry_ids), TimeEntryEdit.action.in_(("edit", "add")))
+            .distinct()
         )).scalars().all())
 
     # Phase 27: where each event was held
@@ -603,8 +703,8 @@ async def export_venue_payroll_csv(
         )).all())
     locations = await load_locations(db, ev_loc.values())
     geo_label = {
-        "on_site": "On site", "outside_geofence": "Outside geofence", "not_checked": "Not checked",
-        "manager": "Manager entry", "auto": "Auto-closed",
+        "on_site": "On site", "outside_geofence": "Outside the area", "not_checked": "Not checked",
+        "manager": "Entered by a manager", "auto": "Clocked out automatically",
     }
 
     def geo_text(status_value, distance):
@@ -616,16 +716,42 @@ async def export_venue_payroll_csv(
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Worker Name", "Email", "Shift Title", "Role", "Date", "Work Location", "Clock In", "Clock Out", "Total Hours",
-        "Hourly Rate", "Gross Pay", "Tips Eligible", "Tip Pool", "Edited",
-        "Clock-In Location Check", "Clock-Out Location Check", "Late (min)", "Auto-Closed",
+        "Name", "Email", "Shift", "Position", "Date", "Work location",
+        f"Clock in ({_tz_label(vtz)})", f"Clock out ({_tz_label(vtz)})", "Hours",
+        "Hourly rate", "Pay before tips", "Gets tips", "Tip pool", "Time changed by a manager",
+        "Clock-in location", "Clock-out location", "Minutes late", "Clocked out automatically",
+        "Regular hours", "Overtime hours", "Works through",                        # Phase 35 (added at the end)
+        "Own tips", "Tip pool share", "Tips total",                               # Phase 35.2 (added at the end)
     ])
+
+    # Phase 35.2: tips per booking; they go on the booking's first clock-in row in this file
+    tip_map = {}
+    if venue.tips_enabled:
+        from src.services.tips import tips_by_request, event_ids_starting
+        if lo is not None or hi is not None:
+            t_lo = lo or datetime(1970, 1, 1, tzinfo=timezone.utc)
+            t_hi = hi or datetime(9999, 1, 1, tzinfo=timezone.utc)
+            eids = await event_ids_starting(db, [venue_id], t_lo, t_hi)
+        else:
+            eids = list((await db.execute(select(Shift.event_id).where(
+                Shift.venue_id == venue_id, Shift.event_id.isnot(None)).distinct())).scalars().all())
+        tip_map = await tips_by_request(db, eids)
+    first_row = {}
+    for entry, _w, _s, req in sorted(records, key=lambda r: r[0].clock_in_time):
+        if req is not None and req.id not in first_row:
+            first_row[req.id] = entry.id
+
+    def tip_cells(req, entry_id):
+        if req is None or first_row.get(req.id) != entry_id or req.id not in tip_map:
+            return ["", "", ""]
+        own, share = tip_map[req.id]
+        return [f"{own:.2f}", f"{share:.2f}", f"{own + share:.2f}"]
 
     for entry, worker, shift, req in records:
         worker_name = f"{worker.first_name} {worker.last_name}".strip() or worker.email
-        shift_date = shift.start_time.strftime("%Y-%m-%d") if shift.start_time else ""
-        clock_in = entry.clock_in_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_in_time else ""
-        clock_out = entry.clock_out_time.strftime("%Y-%m-%d %H:%M:%S") if entry.clock_out_time else "Did not clock out"
+        shift_date = _local_str(shift.start_time, vtz, "%Y-%m-%d")
+        clock_in = _local_str(entry.clock_in_time, vtz)
+        clock_out = _local_str(entry.clock_out_time, vtz) if entry.clock_out_time else "Did not clock out"
         if req is not None and req.pay_rate is not None:
             rate = float(req.pay_rate)
         else:
@@ -647,13 +773,46 @@ async def export_venue_payroll_csv(
             geo_text(entry.clock_out_geo_status, entry.clock_out_distance_m),
             clock_late_minutes(entry.clock_in_time, shift.start_time) or "",
             "Yes" if entry.auto_closed else "No",
+            f"{max(0.0, hours - ot.get(entry.id, 0.0)):.2f}", f"{ot.get(entry.id, 0.0):.2f}",   # Phase 35
+            companies.get(worker.id, ""),
+            *tip_cells(req, entry.id),                                                          # Phase 35.2
         ])
+
+    # Phase 35.2: tips for bookings with no clock-in rows in this file (venue payroll, or never clocked in)
+    missing = [rid for rid in tip_map if rid not in first_row]
+    if missing:
+        q = (select(ShiftRequest, Shift, User).join(Shift, Shift.id == ShiftRequest.shift_id)
+             .join(User, User.id == ShiftRequest.worker_id).where(ShiftRequest.id.in_(missing)))
+        if lo is not None:
+            q = q.where(Shift.start_time >= lo)
+        if hi is not None:
+            q = q.where(Shift.start_time < hi)
+        tip_only = sorted((await db.execute(q)).all(), key=lambda r: r[1].start_time)
+        more = {s.event_id for _r, s, _w in tip_only if s.event_id and s.event_id not in ev_loc}
+        if more:
+            ev_loc.update(dict((await db.execute(
+                select(ShiftEvent.id, ShiftEvent.location_id).where(ShiftEvent.id.in_(more)))).all()))
+            locations = await load_locations(db, ev_loc.values())
+        for req, shift, worker in tip_only:
+            if company and (companies.get(worker.id) or "").lower() != company.strip().lower():
+                continue
+            own, share = tip_map[req.id]
+            loc = locations.get(ev_loc.get(shift.event_id)) if shift.event_id else None
+            writer.writerow([
+                f"{worker.first_name} {worker.last_name}".strip() or worker.email, worker.email or "",
+                shift.title or "", shift.role_type or "", _local_str(shift.start_time, vtz, "%Y-%m-%d"),
+                loc.name if loc is not None else "Venue",
+                "Tips only (no ShiftBoard clock-in)", "", "0.00", "", "0.00",
+                "Yes" if shift.tips_eligible else "No", "Yes" if shift.tip_pool else "No",
+                "", "", "", "", "", "0.00", "0.00", companies.get(worker.id, ""),
+                f"{own:.2f}", f"{share:.2f}", f"{own + share:.2f}",
+            ])
 
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=payroll.csv"}
+        headers={"Content-Disposition": f'attachment; filename="hours-and-pay-{_slug(venue.name)}.csv"'}
     )
 
 @router.get("/{venue_id}/workers", response_model=List[UserBrief])
@@ -791,11 +950,12 @@ REQUESTED_STATUSES = ("pending", "pending_manager_approval")
 @router.get("/{venue_id}/events", response_model=List[VenueEventResponse])
 async def get_venue_events(
     venue_id: UUID,
-    scope: str = Query("upcoming", pattern="^(upcoming|past|all)$"),
+    scope: str = Query("upcoming", pattern="^(upcoming|past|all|drafts)$"),
     current_user: User = Depends(require_manager_or_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
+    Phase 29.3: scope=drafts lists only draft events (any date, soonest first).
     Phase 23: Posted shifts grouped into events. One "Create Shift" submission creates one
     Shift row per role; rows sharing (title, start_time, end_time) are one event.
     Each position lists assigned workers and pending requests.
@@ -808,6 +968,8 @@ async def get_venue_events(
         q = q.where(Shift.end_time >= now_utc).order_by(Shift.start_time.asc(), Shift.role_type.asc())
     elif scope == "past":
         q = q.where(Shift.end_time < now_utc).order_by(Shift.start_time.desc(), Shift.role_type.asc()).limit(500)
+    elif scope == "drafts":
+        q = q.where(func.upper(Shift.status) == "DRAFT").order_by(Shift.start_time.asc(), Shift.role_type.asc())
     else:
         q = q.order_by(Shift.start_time.asc(), Shift.role_type.asc())
     shifts = (await db.execute(q)).scalars().all()
@@ -884,11 +1046,30 @@ async def get_venue_events(
             would_book_again=ratings_by_req[req.id].would_book_again if req.id in ratings_by_req else None,
             rating_review=ratings_by_req[req.id].review if req.id in ratings_by_req else None,
             approval_source=req.approval_source,
+            previous_drop_at=req.previous_drop_at,       # Phase 29.4
+            rebook_reason=req.rebook_reason,
+            outside_department=bool(req.outside_department),   # Phase 32.2
         )
         if person.status in ASSIGNED_STATUSES:
             assigned_by_shift[req.shift_id].append(person)
         else:
             requested_by_shift[req.shift_id].append(person)
+
+    # Phase 29.4: people who dropped a position (the manager can book them back with a reason)
+    dropped_by_shift = defaultdict(list)
+    for req, worker in (await db.execute(
+        select(ShiftRequest, User)
+        .join(User, ShiftRequest.worker_id == User.id)
+        .where(ShiftRequest.shift_id.in_(shift_ids), func.lower(ShiftRequest.status) == "dropped")
+        .order_by(ShiftRequest.dropped_at.desc())
+    )).all():
+        dropped_by_shift[req.shift_id].append(RosterPerson(
+            request_id=req.id, worker_id=worker.id, first_name=worker.first_name or "", last_name=worker.last_name or "",
+            email=worker.email, phone=worker.phone,
+            aggregate_rating=float(worker.aggregate_rating) if worker.aggregate_rating is not None else 5.0,
+            rating_count=int(worker.rating_count or 0), status="dropped", requested_at=req.created_at,
+            dropped_at=req.dropped_at, drop_reason=req.status_reason,
+        ))
 
     event_ids = {s.event_id for s in shifts if s.event_id}
     event_notes, event_cancel = {}, {}
@@ -902,6 +1083,25 @@ async def get_venue_events(
             event_cancel[ev_obj.id] = (ev_obj.cancelled_at is not None, ev_obj.cancel_reason)
     venue_obj = await db.scalar(select(Venue).where(Venue.id == venue_id))
     event_locations = await load_locations(db, [e.location_id for e in event_objs.values()])   # Phase 27
+
+    # Phase 31 + 32: certificate problems and time off for booked people
+    fit_by_worker = await load_fit(db, {p.worker_id for ps in assigned_by_shift.values() for p in ps})
+    requirements = await load_requirements(db, [venue_id])
+    vtz = tz_of(venue_obj.timezone if venue_obj is not None else None)
+    for s in shifts:
+        needed = required_for(requirements, s)
+        for person in assigned_by_shift[s.id]:
+            f = fit_by_worker.get(person.worker_id)
+            if f is None:
+                continue
+            person.cert_issues = f.missing(needed, s.start_time, s.end_time, vtz) + [
+                f"{label} not verified" for label in unverified_certs(needed, f.certs)
+            ]
+            if person.status in ("approved", "confirmed"):                          # Phase 32.1
+                block = f.off_block(s.start_time, s.end_time, vtz)
+                if block is not None:
+                    person.time_off = "blocked"
+                    person.time_off_reason = block.reason
 
     # Phase 26.2: has each booked person read the latest info?
     for s in shifts:
@@ -917,6 +1117,36 @@ async def get_venue_events(
                     seen_at=seen_at, booked_at=booked_at,
                 )
 
+    # Phase 34: who asked for cover, and who is waiting in line for a full position
+    from src.models import CoverRequest, WaitlistEntry
+    cover_by_request = dict((await db.execute(
+        select(CoverRequest.request_id, CoverRequest.status).where(
+            CoverRequest.shift_id.in_(shift_ids), CoverRequest.status.in_(("open", "pending_approval")))
+    )).all())
+    for ps in assigned_by_shift.values():
+        for person in ps:
+            person.cover = cover_by_request.get(person.request_id)
+    # Phase 35: time tracking + staffing company on booked people
+    from src.services.time_tracking import modes_for_requests
+    shift_by_id = {s.id: s for s in shifts}
+    tracking = await modes_for_requests(db, [(r, shift_by_id[r.shift_id]) for r, _u in req_rows if r.shift_id in shift_by_id])
+    companies = dict((await db.execute(
+        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
+            VenueWhitelist.venue_id == venue_id, VenueWhitelist.works_through.isnot(None))
+    )).all())
+    for ps in list(assigned_by_shift.values()) + list(requested_by_shift.values()):
+        for person in ps:
+            person.time_tracking = tracking.get(person.request_id)
+            person.works_through = companies.get(person.worker_id)
+    waitlist_by_shift = defaultdict(list)
+    for e, wu in (await db.execute(
+        select(WaitlistEntry, User).join(User, User.id == WaitlistEntry.worker_id)
+        .where(WaitlistEntry.shift_id.in_(shift_ids), WaitlistEntry.status.in_(("waiting", "offered")))
+        .order_by(WaitlistEntry.created_at.asc(), WaitlistEntry.id.asc())
+    )).all():
+        waitlist_by_shift[e.shift_id].append(
+            f"{wu.first_name or ''} {(wu.last_name or '')[:1]}{'.' if wu.last_name else ''}".strip() or "Someone")
+
     events = {}
     order = []
     for s in shifts:
@@ -925,6 +1155,7 @@ async def get_venue_events(
             events[key] = {
                 "event_key": key,
                 "event_id": s.event_id,
+                "status": (event_objs[s.event_id].status or "published") if s.event_id in event_objs else "published",   # Phase 29.3
                 "title": s.title or "Shift",
                 "start_time": s.start_time,
                 "end_time": s.end_time,
@@ -957,6 +1188,8 @@ async def get_venue_events(
             assigned=assigned_by_shift[s.id],
             requested=requested_by_shift[s.id],
             offers=offers_by_shift[s.id],
+            dropped=dropped_by_shift[s.id],            # Phase 29.4
+            waitlist=waitlist_by_shift[s.id],          # Phase 34
         ))
 
     result = []

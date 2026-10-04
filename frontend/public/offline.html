@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>ShiftBoard · Offline</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #020617; color: #e2e8f0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      main { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 14px; padding: 24px; text-align: center; box-sizing: border-box; }
+      img { width: 72px; height: 72px; border-radius: 18px; }
+      h1 { margin: 0; font-size: 20px; color: #fff; }
+      p { margin: 0; max-width: 320px; font-size: 14px; line-height: 1.5; color: #94a3b8; }
+      button { margin-top: 6px; padding: 12px 22px; border: 0; border-radius: 12px; background: #10b981; color: #020617;
+        font-size: 15px; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/icons/icon-192.png" alt="" />
+      <h1>You're offline</h1>
+      <p>ShiftBoard needs a connection to show your shifts. Check your signal or Wi-Fi, then try again.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

@@ -92,6 +92,23 @@ async def build_timesheet(db: AsyncSession, event: ShiftEvent, venue: Venue) -> 
                 .where(TimeEntryEdit.time_entry_id.in_(entry_ids), TimeEntryEdit.action.in_(EDITED_ACTIONS))
             )).scalars().all())
 
+    # Phase 35: time tracking, company and overtime
+    from src.services.time_tracking import modes_for_requests
+    from src.services.pay_periods import overtime_for, local_date
+    from src.services.fit import tz_of
+    from src.models import VenueWhitelist
+    tracking = await modes_for_requests(db, [(req, by_id[req.shift_id]) for req, _w in rows])
+    companies = dict((await db.execute(
+        select(VenueWhitelist.worker_id, VenueWhitelist.works_through).where(
+            VenueWhitelist.venue_id == venue.id, VenueWhitelist.worker_id.in_([w.id for _r, w in rows] or [None]))
+    )).all()) if rows else {}
+    all_entries = [e for es in entries_map.values() for e in es]
+    ot = {}
+    if all_entries:
+        vtz = tz_of(venue.timezone)
+        days = [local_date(e.clock_in_time, vtz) for e in all_entries]
+        ot = await overtime_for(db, venue, {e.worker_id for e in all_entries}, min(days), max(days))
+
     people = []
     for req, worker in rows:
         s = by_id[req.shift_id]
@@ -125,6 +142,9 @@ async def build_timesheet(db: AsyncSession, event: ShiftEvent, venue: Venue) -> 
             ],
             total_hours=round(total, 2),
             est_pay=round(total * rate, 2),
+            time_tracking=tracking.get(req.id, "shiftboard"),                      # Phase 35
+            works_through=companies.get(worker.id),
+            overtime_hours=round(sum(ot.get(e.id, 0.0) for e in es), 2),
         ))
 
     return EventTimesheet(

@@ -15,6 +15,7 @@ Channel rules
 * Quiet hours delay non-urgent email/SMS until quiet_end (user's timezone). Urgent ones go right away.
 * If the user already read it in the app before a delayed email goes out, that email is skipped.
 """
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
@@ -28,8 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.database import AsyncSessionLocal
-from src.models import Notification, NotificationDelivery, NotificationPreference, User
+from src.models import Notification, NotificationDelivery, NotificationPreference, User, PushSubscription
 from src.auth import normalize_role
+from src.services import webpush                                   # Phase 33
 from src.services.messaging import (
     send_email, send_sms, render_email, render_digest, absolute_link, normalize_phone, sms_available,
 )
@@ -59,6 +61,17 @@ KINDS = {
     "team_joined": ("manager", False),       # Phase 29: someone joined through an invite
     "team_added": ("booking", False),        # Phase 29.1: a manager added you to their team
     "shift_dropped": ("manager", True),      # Phase 29.1: a worker dropped a booked shift
+    "no_show": ("booking", True),            # Phase 30: a manager marked you a no-show
+    "unfilled_soon": ("manager", True),      # Phase 30: spots still open 3 h before start
+    "time_off_conflict": ("manager", True),  # Phase 32.1: a worker blocked off time they're booked for
+    "cert_review": ("booking", False),       # Phase 32: a manager verified / didn't accept a certificate
+    "cert_expiring": ("reminder", False),    # Phase 32: a certificate expires in 30 / 7 days, or today
+    "cover_needed": ("booking", True),       # Phase 34: a teammate needs someone to cover their shift
+    "cover_update": ("booking", False),      # Phase 34: your cover request was taken / approved / not approved
+    "cover_warning": ("booking", True),      # Phase 34: nobody has taken your shift 12 h / 3 h before it starts
+    "cover_manager": ("manager", True),      # Phase 34: managers: cover asked / covered / still uncovered
+    "waitlist_offer": ("booking", True),     # Phase 34: a spot opened and you're next (short time to take it)
+    "waitlist_update": ("booking", False),   # Phase 34: booked / request sent / offer ran out / waitlist closed
     "test": ("test", True),
 }
 NEW_SHIFT_MODES = ("off", "instant", "daily")
@@ -67,6 +80,7 @@ MAX_ATTEMPTS = 5
 DEFAULT_PREFS = dict(
     email_enabled=True, sms_enabled=False, reminders_enabled=True, new_shift_alerts="daily",
     manager_alerts_email=True, quiet_start=None, quiet_end=None, timezone="America/New_York",
+    push_enabled=True,                                    # Phase 33
 )
 
 
@@ -136,6 +150,31 @@ def wants_sms(kind: str, prefs, urgent: bool) -> bool:
     return True
 
 
+def wants_push(kind: str, prefs) -> bool:
+    """Phase 33: phone / browser notifications. Same categories as email, except new shifts only when 'right away'."""
+    if not getattr(prefs, "push_enabled", True):
+        return False
+    category = KINDS.get(kind, ("booking", False))[0]
+    if category == "reminder":
+        return bool(prefs.reminders_enabled)
+    if category == "new_shift":
+        return prefs.new_shift_alerts == "instant"
+    return True
+
+
+def push_payload(n: Notification) -> dict:
+    """Phase 33: what the service worker shows. Kept small (push messages max out around 4 KB)."""
+    lines = [l.strip() for l in (n.body or "").split("\n") if l.strip()]
+    body = " · ".join(lines[:2])
+    return {
+        "title": (n.title or "ShiftBoard")[:120],
+        "body": body[:240],
+        "url": n.link or "/",
+        "tag": str(n.id),
+        "urgent": bool(n.urgent),
+    }
+
+
 def settings_link_for(user: User) -> str:
     role = normalize_role(user.role)
     base = {"worker": "/worker", "venue_manager": "/venue", "platform_admin": "/admin"}.get(role, "/worker")
@@ -162,6 +201,9 @@ async def notify_in(
         return 0
     users = (await db.execute(select(User).where(User.id.in_(ids), User.is_active == True))).scalars().all()
     prefs = await load_prefs(db, [u.id for u in users])
+    with_devices = set((await db.execute(                                   # Phase 33: users with push turned on somewhere
+        select(PushSubscription.user_id).where(PushSubscription.user_id.in_([u.id for u in users])).distinct()
+    )).scalars().all()) if users else set()
     now = datetime.now(timezone.utc)
     title = (title or "")[:200]
     created = 0
@@ -202,6 +244,11 @@ async def notify_in(
                 notification_id=nid, user_id=u.id, channel="sms", digest=False,
                 send_after=release_time(p, now, urgent), created_at=now,
             ))
+        if u.id in with_devices and wants_push(kind, p):                    # Phase 33
+            db.add(NotificationDelivery(
+                notification_id=nid, user_id=u.id, channel="push", digest=False,
+                send_after=release_time(p, now, urgent), created_at=now,
+            ))
     await db.flush()
     return created
 
@@ -212,10 +259,32 @@ async def notify(user_ids, kind: str, title: str, body: Optional[str] = None, li
         async with AsyncSessionLocal() as db:
             n = await notify_in(db, user_ids, kind, title, body, link, **kw)
             await db.commit()
-            return n
+        if n:
+            deliver_soon()        # Phase 33: push (and email / text) go out now instead of at the next minute tick
+        return n
     except Exception:
         logger.exception(f"notify({kind}) failed")
         return 0
+
+
+_background = set()
+
+
+def deliver_soon() -> None:
+    """Phase 33: run the outbox once in the background. Rows are locked (SKIP LOCKED), so this never
+    double-sends with the minute worker. Never raises."""
+    async def _run():
+        try:
+            async with AsyncSessionLocal() as db:
+                await deliver_pending(db)
+        except Exception:
+            logger.exception("deliver_soon failed")
+    try:
+        task = asyncio.get_running_loop().create_task(_run())
+        _background.add(task)
+        task.add_done_callback(_background.discard)
+    except Exception:
+        pass
 
 
 def _sms_text(n: Notification) -> str:
@@ -251,6 +320,7 @@ async def deliver_pending(db: AsyncSession, limit: int = 200) -> int:
         .where(NotificationDelivery.status == "pending", NotificationDelivery.send_after <= now)
         .order_by(NotificationDelivery.created_at.asc())
         .limit(limit)
+        .with_for_update(of=NotificationDelivery, skip_locked=True)     # Phase 33: two senders never take the same row
     )).all()
     if not rows:
         return 0
@@ -269,6 +339,13 @@ async def deliver_pending(db: AsyncSession, limit: int = 200) -> int:
             ok, err = await send_email(u.email, n.title, text, html_body)
         elif d.channel == "sms":
             ok, err = await send_sms(u.phone or "", _sms_text(n))
+        elif d.channel == "push":                                          # Phase 33
+            reached, err = await webpush.send_to_user(db, u.id, push_payload(n), urgent=bool(n.urgent))
+            if reached == 0 and err == "No devices turned on":
+                d.status = "skipped"
+                d.last_error = err
+                continue
+            ok = reached > 0
         else:
             ok, err = False, f"Unknown channel {d.channel}"
         _mark(d, ok, err, now)

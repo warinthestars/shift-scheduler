@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { UserPlus, Search, Send, Check, AlertTriangle, Clock } from 'lucide-react';
+import { UserPlus, Search, Send, Check, AlertTriangle, Clock, Lock, CalendarOff, BadgeCheck, Briefcase } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import RatingBadge from './RatingBadge';
@@ -44,7 +44,8 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
     };
   }, [position.shift_id, debouncedQ]);
 
-  const selectable = (c) => (c.available || c.requested_this) && !c.offered;
+  const selectable = (c) => (c.available || c.requested_this) && !c.offered && !(c.dropped_at && !c.requested_this)   // Phase 29.4
+    && !(c.missing_certs || []).length && c.time_off !== 'blocked';                                                // Phase 32 / 32.1
   const toggle = (c) => {
     if (!selectable(c)) return;
     setSelected((prev) => {
@@ -54,11 +55,27 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
     });
   };
 
-  const assign = async (c) => {
+  const [reasonFor, setReasonFor] = useState(null);   // Phase 29.4: candidate who dropped this event
+  const [reason, setReason] = useState('');
+  const [warnFor, setWarnFor] = useState(null);       // Phase 31 + 32: "Assign anyway?" for this candidate
+
+  const assign = async (c, why = null, confirmed = false) => {
+    // Phase 31 + 32: missing certificates, time off or outside their availability -> ask first
+    if (!confirmed && warningsOf(c).length) {
+      setWarnFor(c.worker_id);
+      return;
+    }
+    setWarnFor(null);
+    // Phase 29.4: someone who dropped this event needs a reason (unless they asked back themselves)
+    if (c.dropped_at && !c.requested_this && why === null) {
+      setReasonFor(c.worker_id);
+      setReason('');
+      return;
+    }
     setBusy(`assign-${c.worker_id}`);
     setError('');
     try {
-      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id });
+      const res = await api.post(`/shifts/${position.shift_id}/assign`, { worker_id: c.worker_id, reason: why || undefined });
       onDone(res.data.message);
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not assign.');
@@ -214,6 +231,34 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
                         <AlertTriangle className="w-3 h-3" /> {c.reason}
                       </div>
                     )}
+                    {c.dropped_at && (
+                      <div className="text-[11px] text-rose-300 mt-0.5">
+                        Dropped this event on {new Date(c.dropped_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        {c.drop_reason ? ` · “${c.drop_reason}”` : ''}. {c.requested_this ? 'They asked to come back.' : 'Assign needs a reason; offers skip them.'}
+                      </div>
+                    )}
+                    <FitChips c={c} />
+                    {warnFor === c.worker_id && (
+                      <div className="mt-2 p-2 rounded-lg border border-amber-500/40 bg-amber-500/5 flex flex-wrap items-center gap-2 w-full">
+                        <span className="text-xs text-amber-200 flex-1 min-w-[12rem]">
+                          Assign anyway? {warningsOf(c).join(' · ')}.
+                        </span>
+                        <button type="button" onClick={() => assign(c, null, true)} disabled={busy !== null}
+                          className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold disabled:opacity-40">Assign anyway</button>
+                        <button type="button" onClick={() => setWarnFor(null)} className="text-xs text-slate-400 hover:text-white">Cancel</button>
+                      </div>
+                    )}
+                    {reasonFor === c.worker_id && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 w-full">
+                        <input autoFocus value={reason} onChange={(e) => setReason(e.target.value.slice(0, 500))}
+                          onKeyDown={(e) => e.key === 'Enter' && reason.trim().length >= 5 && assign(c, reason.trim(), true)}
+                          placeholder="Why are you booking them back?"
+                          className="flex-1 min-w-[12rem] px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500" />
+                        <button type="button" onClick={() => assign(c, reason.trim(), true)} disabled={reason.trim().length < 5 || busy !== null}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40">Book back</button>
+                        <button type="button" onClick={() => setReasonFor(null)} className="text-xs text-slate-400 hover:text-white">Cancel</button>
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -244,4 +289,40 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
       </div>
     </ModalShell>
   );
+}
+
+
+/** Phase 31 + 32: what a manager should know before booking this person. */
+export function warningsOf(c) {
+  const out = [];
+  if ((c.missing_certs || []).length) out.push(`Missing ${c.missing_certs.join(', ')}`);
+  if (c.availability === 'outside') out.push('Outside their availability');
+  if (c.department_match === 'outside') out.push('Outside the departments they work');   // Phase 32.2
+  return out;
+}
+
+function FitChips({ c }) {
+  const chip = 'px-1.5 py-0.5 rounded text-[10px] font-semibold border inline-flex items-center gap-0.5';
+  const items = [];
+  (c.missing_certs || []).forEach((m) => items.push(
+    <span key={`m-${m}`} className={`${chip} bg-rose-500/10 text-rose-300 border-rose-500/30`}><Lock className="w-3 h-3" /> No {m}</span>,
+  ));
+  (c.unverified_certs || []).forEach((m) => items.push(
+    <span key={`u-${m}`} className={`${chip} bg-sky-500/10 text-sky-300 border-sky-500/30`}><BadgeCheck className="w-3 h-3" /> {m} not verified</span>,
+  ));
+  if (c.time_off === 'blocked') items.push(   // Phase 32.1: their time-off block (can't be assigned or offered)
+    <span key="off" className={`${chip} bg-rose-500/10 text-rose-300 border-rose-500/30`}>
+      <CalendarOff className="w-3 h-3" /> Time off{c.time_off_reason ? `: ${c.time_off_reason}` : ''}
+    </span>,
+  );
+  if (c.department_match === 'outside') items.push(   // Phase 32.2
+    <span key="dept" className={`${chip} bg-amber-500/10 text-amber-300 border-amber-500/30`}><Briefcase className="w-3 h-3" /> Other department</span>,
+  );
+  if (c.availability === 'outside') items.push(
+    <span key="av" className={`${chip} bg-slate-800 text-slate-300 border-slate-700`}><CalendarOff className="w-3 h-3" /> Outside their availability</span>,
+  );
+  if (c.availability === 'fits') items.push(
+    <span key="fit" className={`${chip} bg-emerald-500/10 text-emerald-300 border-emerald-500/30`}><Check className="w-3 h-3" /> Available</span>,
+  );
+  return items.length ? <div className="flex flex-wrap gap-1 mt-1">{items}</div> : null;
 }

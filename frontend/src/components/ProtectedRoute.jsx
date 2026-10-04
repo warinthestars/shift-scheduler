@@ -33,9 +33,13 @@ export default function ProtectedRoute({ children, allowedRoles = [] }) {
           <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 mb-4">
             <ShieldAlert className="w-12 h-12" />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Access Denied</h1>
+          <h1 className="text-2xl font-bold text-white mb-2">This page isn't for your account</h1>
           <p className="text-sm text-slate-400 max-w-md text-center mb-6">
-            Your account role (<span className="text-emerald-400 font-semibold">{user?.role}</span>) does not have permission to view this view. Required role: {allowedRoles.join(' or ')}.
+            {allowedRoles.map((r) => String(r).toLowerCase()).includes('venue_manager') && !allowedRoles.map((r) => String(r).toLowerCase()).includes('worker')
+              ? 'This page is for venue managers.'
+              : allowedRoles.map((r) => String(r).toLowerCase()).every((r) => r === 'platform_admin')
+              ? 'This page is for ShiftBoard admins.'
+              : 'Your account can’t open this page.'} Head back to your own page instead.
           </p>
           <Link
             to={
@@ -48,7 +52,7 @@ export default function ProtectedRoute({ children, allowedRoles = [] }) {
             className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center space-x-2 border border-slate-700 transition"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Go to My Dashboard</span>
+            <span>Go to my page</span>
           </Link>
         </div>
       );

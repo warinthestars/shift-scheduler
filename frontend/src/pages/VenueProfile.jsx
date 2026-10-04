@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, MapPin, Phone, ExternalLink, Info, Users, Calendar, Clock, Building2, Check, AlertCircle,
+  ArrowLeft, MapPin, Phone, ExternalLink, Info, Users, Calendar, Clock, Building2, Check, AlertCircle, Globe,
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -11,15 +11,26 @@ import { VenueAvatar } from './VenuesDirectory';
 import { fmtDate, fmtTimeRange } from '../utils/venueTime';
 import EventListingModal from '../components/EventListingModal';
 
+// Phase 34.6: the venue's website. Only http(s) links are ever rendered (the server checks this too).
+function websiteHref(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
+}
+function websiteLabel(url) {
+  return url.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+}
+
 const MY_STATUS = {
-  pending: { label: 'Requested', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
-  pending_manager_approval: { label: 'Requested', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
-  approved: { label: "You're booked", cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
-  confirmed: { label: "You're booked", cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  pending: { label: 'Waiting for approval', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  pending_manager_approval: { label: 'Waiting for approval', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  approved: { label: 'Booked', cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  confirmed: { label: 'Booked', cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
   checked_in: { label: 'Clocked in', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/30' },
   completed: { label: 'Worked', cls: 'bg-slate-700/40 text-slate-300 border-slate-600/40' },
   rejected: { label: 'Not selected', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
-  dropped: { label: 'Released', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  dropped: { label: 'You dropped this', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  no_show: { label: 'Marked no-show', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/30' },        // Phase 33.1
+  removed: { label: 'Removed by manager', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
+  cancelled: { label: 'Cancelled by venue', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
   transferred: { label: 'Handed off', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
   withdrawn: { label: 'Withdrawn', cls: 'bg-slate-800 text-slate-400 border-slate-700' },
 };
@@ -106,6 +117,14 @@ export default function VenueProfile() {
                 {profile.phone && (
                   <a href={`tel:${profile.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400">
                     <Phone className="w-4 h-4" /> {profile.phone}
+                  </a>
+                )}
+                {websiteHref(profile.website_url) && (
+                  <a href={websiteHref(profile.website_url)} target="_blank" rel="noopener noreferrer nofollow"
+                    className="inline-flex items-center gap-1 hover:text-emerald-400 min-w-0" title="Opens the venue's website">
+                    <Globe className="w-4 h-4 flex-shrink-0" />
+                    <span className="truncate max-w-[16rem]">{websiteLabel(profile.website_url)}</span>
+                    <ExternalLink className="w-3 h-3 flex-shrink-0" />
                   </a>
                 )}
               </div>

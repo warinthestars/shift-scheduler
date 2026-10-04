@@ -132,6 +132,25 @@ async def build_team(
         vr[wid] = (round(float(avg), 2) if avg is not None else None, int(n), int(yes), int(no))
     rel = await compute_reliability(db, ids)
 
+    # Phase 32: verified, in-date certificates (chips on the Team list) and ones waiting for a check
+    from src.models import WorkerCertification
+    cert_ok, cert_wait = {}, {}
+    if users:
+        today = datetime.now(timezone.utc).date()
+        for c in (await db.execute(
+            select(WorkerCertification).where(WorkerCertification.worker_id.in_(list(users)))
+        )).scalars().all():
+            if c.expires_on is not None and c.expires_on < today:
+                continue
+            if c.status == "verified":
+                cert_ok.setdefault(c.worker_id, []).append(c.cert_type)
+            elif c.status == "unverified":
+                cert_wait[c.worker_id] = cert_wait.get(c.worker_id, 0) + 1
+
+    # Phase 35: time tracking (team members' venue default + this person's setting) and staffing company
+    from src.services.time_tracking import resolve
+    venue_mode = await db.scalar(select(Venue.team_time_tracking).where(Venue.id == venue_id))
+
     out = []
     for wid, u in users.items():
         row = rows.get(wid)
@@ -161,6 +180,11 @@ async def build_team(
             would_book_again_no=no,
             reliability=WorkerReliability(worker_id=wid, **r) if r else None,
             added_at=row.created_at if row is not None else None,
+            certs=sorted(cert_ok.get(wid, [])),
+            cert_attention=cert_wait.get(wid, 0),
+            time_tracking=row.time_tracking if row is not None else None,              # Phase 35
+            effective_time_tracking=resolve(venue_mode, row),
+            works_through=row.works_through if row is not None else None,
         ))
     out.sort(key=lambda m: ((m.first_name or "").lower(), (m.last_name or "").lower()))
     return out
@@ -324,6 +348,15 @@ async def update_member(
             row.positions = _clean_positions(data["positions"])
         if "notes" in data:
             row.notes = (data["notes"] or "").strip()[:2000] or None
+        # Phase 35: time tracking + staffing company (upcoming bookings follow; started ones keep what applied)
+        if "time_tracking" in data:
+            tt = (data["time_tracking"] or "venue").strip().lower()
+            if tt not in ("venue", "payroll", "shiftboard"):
+                raise HTTPException(status_code=400, detail="Choose how this person's time is tracked.")
+            row.time_tracking = None if tt == "venue" else tt
+        if "works_through" in data:
+            from src.services.time_tracking import clean_company
+            row.works_through = clean_company(data["works_through"])
 
         if new_status == "blocked":
             # Waiting requests at this venue are declined; open offers are withdrawn.
@@ -356,6 +389,15 @@ async def update_member(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not save: {e}")
 
+    if "time_tracking" in data or "works_through" in data:                          # Phase 35
+        bits = []
+        if "time_tracking" in data:
+            bits.append({"payroll": "time tracked by the venue's payroll", "shiftboard": "clocks in with ShiftBoard"}
+                        .get(row.time_tracking, "time tracking follows the venue setting"))
+        if "works_through" in data:
+            bits.append(f"works through {row.works_through}" if row.works_through else "no staffing company")
+        await activity.for_worker("team_tracking", venue_id, worker_id, current_user.id,
+                                  "{name}: " + ", ".join(bits).replace("{", "{{").replace("}", "}}"))
     if new_status is not None:
         await activity.for_worker(
             "team_status", venue_id, worker_id, current_user.id,
@@ -782,4 +824,22 @@ async def person_profile(
         .where(ShiftRequest.worker_id == worker_id, Shift.venue_id != venue_id,
                func.lower(ShiftRequest.status).in_(WORKED_STATUSES))
     ) or 0)
-    return WorkerProfile(member=member, history=history, pending_here=pending_here, other_venues=other_venues)
+    # Phase 31 + 32: profile, certificates, availability, time off. Private contact details only for
+    # people connected to this venue (not a stranger found through search).
+    from src.models import WorkerCertification
+    from src.services.profile import cert_items, block_items, availability_of, upcoming_blocks
+    connected = member.status != "none"
+    certs = await cert_items(db, list((await db.execute(
+        select(WorkerCertification).where(WorkerCertification.worker_id == worker_id)
+    )).scalars().all()))
+    # Phase 32.1: their time-off blocks (reason only; the private note never leaves the worker's own screens)
+    time_off = await block_items(db, list(await upcoming_blocks(db, worker_id)), owner=False, venue_id=venue_id)
+    return WorkerProfile(
+        member=member, history=history, pending_here=pending_here, other_venues=other_venues,
+        bio=user.bio, avatar_url=user.avatar_url, skills=list(user.skills or []),
+        departments=list(user.departments or []),                   # Phase 32.2
+        emergency_contact_name=user.emergency_contact_name if connected else None,
+        emergency_contact_phone=user.emergency_contact_phone if connected else None,
+        certifications=certs, availability=await availability_of(db, worker_id),
+        time_off=time_off if connected else [],
+    )

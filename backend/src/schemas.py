@@ -167,6 +167,7 @@ class VenueBase(BaseModel):
     logo_url: Optional[str] = None
     timezone: str = "America/New_York"
     phone: Optional[str] = None
+    website_url: Optional[str] = None       # Phase 34.6
     arrival_instructions: Optional[str] = None
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
@@ -176,6 +177,18 @@ class VenueBase(BaseModel):
     geofence_buffer_meters: int = 150       # Phase 27
     clock_in_early_minutes: int = 30        # Phase 27
     auto_clock_out_hours: int = 2           # Phase 27
+    allow_public_cover: bool = True         # Phase 34
+    team_time_tracking: str = "shiftboard"  # Phase 35: shiftboard | payroll (team members' default)
+    ot_weekly_hours: Optional[float] = 40   # Phase 35: None = off
+    ot_daily_hours: Optional[float] = None  # Phase 35: None = off
+    work_week_start: int = 0                # Phase 35: 0 = Monday ... 6 = Sunday
+    pay_period: str = "weekly"              # Phase 35: weekly | biweekly | semimonthly | monthly
+    pay_period_anchor: Optional[date] = None  # Phase 35: biweekly only
+    pay_period_approval: bool = True        # Phase 35: approve and lock each pay period
+    tips_enabled: bool = True               # Phase 35.2: managers enter tips per event
+    tip_pool_split: str = "hours"           # Phase 35.2: hours | equal
+    tip_pool_payroll: bool = True           # Phase 35.2: venue-payroll people share tip pools (scheduled hours)
+    tips_shown_to_workers: bool = True      # Phase 35.2: workers see their tips in Hours & pay
 
 class VenueCreate(BaseModel):
     name: str
@@ -188,6 +201,7 @@ class VenueCreate(BaseModel):
     logo_url: Optional[str] = None
     timezone: Optional[str] = "America/New_York"
     phone: Optional[str] = None
+    website_url: Optional[str] = Field(None, max_length=500)          # Phase 34.6
     arrival_instructions: Optional[str] = None
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
@@ -212,6 +226,7 @@ class VenueUpdateSettings(BaseModel):
     logo_url: Optional[str] = None
     timezone: Optional[str] = None
     phone: Optional[str] = None
+    website_url: Optional[str] = Field(None, max_length=500)          # Phase 34.6: "" clears it
     arrival_instructions: Optional[str] = None
     dress_code: Optional[str] = None
     default_shift_notes: Optional[str] = None
@@ -221,6 +236,18 @@ class VenueUpdateSettings(BaseModel):
     geofence_buffer_meters: Optional[int] = None      # Phase 27
     clock_in_early_minutes: Optional[int] = None      # Phase 27
     auto_clock_out_hours: Optional[int] = None        # Phase 27
+    allow_public_cover: Optional[bool] = None         # Phase 34
+    team_time_tracking: Optional[str] = None          # Phase 35
+    ot_weekly_hours: Optional[float] = None           # Phase 35: send null to turn it off
+    ot_daily_hours: Optional[float] = None            # Phase 35: send null to turn it off
+    work_week_start: Optional[int] = None             # Phase 35
+    pay_period: Optional[str] = None                  # Phase 35
+    pay_period_anchor: Optional[date] = None          # Phase 35
+    pay_period_approval: Optional[bool] = None        # Phase 35
+    tips_enabled: Optional[bool] = None               # Phase 35.2
+    tip_pool_split: Optional[str] = None              # Phase 35.2: hours | equal
+    tip_pool_payroll: Optional[bool] = None           # Phase 35.2
+    tips_shown_to_workers: Optional[bool] = None      # Phase 35.2
 
 class VenueResponse(VenueBase):
     id: UUID
@@ -352,6 +379,10 @@ class ShiftRequestResponse(BaseModel):
     status_reason: Optional[str] = None
     pay_rate: Optional[float] = None
     notes: Optional[str] = None         # Phase 26.1: the worker's note with the request
+    dropped_at: Optional[datetime] = None            # Phase 29.4
+    previous_drop_at: Optional[datetime] = None      # Phase 29.4: asking back / rebooked after dropping this event
+    rebook_reason: Optional[str] = None              # Phase 29.4
+    outside_department: bool = False                 # Phase 32.2: asked for a shift outside their departments
     shift: Optional[ShiftResponse] = None
     worker: Optional[UserBrief] = None
 
@@ -372,12 +403,13 @@ class ShiftRequestStatusUpdate(BaseModel):
     status: str = Field(description="Must be APPROVED or REJECTED")
 
 class CheckInRequest(BaseModel):
-    latitude: float
-    longitude: float
+    # Phase 34.5: same limits as ClockBody (these legacy routes build a ClockBody from them)
+    latitude: float = Field(..., ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(..., ge=-180, le=180, allow_inf_nan=False)
 
 class CheckOutRequest(BaseModel):
-    latitude: float
-    longitude: float
+    latitude: float = Field(..., ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(..., ge=-180, le=180, allow_inf_nan=False)
 
 # ------------------------------------------------------------------------------
 # Time Tracking Schemas
@@ -418,6 +450,7 @@ class ShiftTransferResponse(BaseModel):
     to_worker_id: UUID
     status: str
     notes: Optional[str] = None              # Phase 29.1: the note with the hand-off (was never sent)
+    cover_request_id: Optional[UUID] = None  # Phase 34: this hand-off came from a cover post
     created_at: datetime
     updated_at: datetime
     shift: Optional[ShiftResponse] = None
@@ -479,6 +512,18 @@ class RosterPerson(BaseModel):
     would_book_again: Optional[bool] = None
     rating_review: Optional[str] = None
     approval_source: Optional[str] = None   # Phase 29: e.g. manager_assign, offer
+    dropped_at: Optional[datetime] = None        # Phase 29.4: when they dropped (dropped list)
+    drop_reason: Optional[str] = None            # Phase 29.4: what they said when dropping
+    previous_drop_at: Optional[datetime] = None  # Phase 29.4: came back / asking back after a drop
+    rebook_reason: Optional[str] = None          # Phase 29.4
+    cert_issues: List[str] = []                  # Phase 32: e.g. "Alcohol server card (expired)", "Food handler card not verified"
+    time_off: Optional[str] = None               # Phase 32.1: 'blocked' when a time-off block overlaps this shift
+    time_off_reason: Optional[str] = None        # Phase 32.1: the block's reason (managers see it)
+    outside_department: bool = False             # Phase 32.2: their request is outside their departments
+    cover: Optional[str] = None                  # Phase 34: open | pending_approval (they asked for cover)
+    time_tracking: Optional[str] = None          # Phase 35: shiftboard | payroll (booked people)
+    works_through: Optional[str] = None          # Phase 35: staffing company, from the team list
+
 
 
 class EventPosition(BaseModel):
@@ -498,11 +543,14 @@ class EventPosition(BaseModel):
     assigned: List[RosterPerson] = []
     requested: List[RosterPerson] = []
     offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
+    dropped: List[RosterPerson] = []         # Phase 29.4: people who dropped this position (can be booked back)
+    waitlist: List[str] = []                 # Phase 34: names in line order ("Ana R.")
 
 
 class VenueEventResponse(BaseModel):
     event_key: str
     event_id: Optional[UUID] = None
+    status: str = "published"                # Phase 29.3: draft | published
     location_name: Optional[str] = None      # Phase 27: None = venue address
     cancelled: bool = False
     cancel_reason: Optional[str] = None
@@ -526,6 +574,8 @@ class VenuePositionCreate(BaseModel):
     hide_rate: bool = False
     tips_eligible: bool = False
     tip_pool: bool = False
+    required_certs: List[str] = []           # Phase 32: cert type keys (services/fit.py CERT_TYPES)
+    department: Optional[str] = None         # Phase 32.2: None = guessed from the name
 
 
 class VenuePositionUpdate(BaseModel):
@@ -537,6 +587,8 @@ class VenuePositionUpdate(BaseModel):
     tip_pool: Optional[bool] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
+    required_certs: Optional[List[str]] = None   # Phase 32
+    department: Optional[str] = None             # Phase 32.2
 
 
 class VenuePositionResponse(BaseModel):
@@ -550,6 +602,8 @@ class VenuePositionResponse(BaseModel):
     tip_pool: bool
     sort_order: int
     is_active: bool
+    required_certs: List[str] = []           # Phase 32
+    department: str = "general"              # Phase 32.2
 
     class Config:
         from_attributes = True
@@ -591,6 +645,7 @@ class VenueProfileResponse(BaseModel):
     description: Optional[str] = None
     logo_url: Optional[str] = None
     phone: Optional[str] = None
+    website_url: Optional[str] = None        # Phase 34.6
     timezone: str = "America/New_York"
     lat: float
     lng: float
@@ -689,9 +744,11 @@ class ListingLocation(BaseModel):
 
 
 class ClockBody(BaseModel):
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    accuracy_m: Optional[float] = None
+    # Phase 34.5: the server does the distance check, so the numbers must be real coordinates.
+    # NaN / Infinity / out-of-range values are refused (422) instead of crashing the distance math (500).
+    latitude: Optional[float] = Field(None, ge=-90, le=90, allow_inf_nan=False)
+    longitude: Optional[float] = Field(None, ge=-180, le=180, allow_inf_nan=False)
+    accuracy_m: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
 
 
 class ClockResult(BaseModel):
@@ -729,6 +786,7 @@ class EventCreate(BaseModel):
     geofence_mode: str = "venue_default"     # Phase 27: venue_default | on | off
     location_staff_notes: Optional[str] = None          # Phase 27: event-specific, confirmed staff only
     positions: List[EventPositionInput]
+    publish: bool = True                     # Phase 29.3: False = save as a draft (workers can't see it)
 
 
 class EventUpdate(BaseModel):
@@ -776,6 +834,8 @@ class EventDetail(BaseModel):
     location_staff_notes: Optional[str] = None          # Phase 27
     cancelled: bool = False
     cancel_reason: Optional[str] = None
+    status: str = "published"                           # Phase 29.3: draft | published
+    published_at: Optional[datetime] = None             # Phase 29.3
     positions: List[EventDetailPosition]
 
 
@@ -801,6 +861,7 @@ class ReasonBody(BaseModel):
 
 class DuplicateEventRequest(BaseModel):
     dates: List[date]
+    as_draft: bool = False                   # Phase 29.3: copies of a draft are always drafts
 
 
 class DuplicateEventResult(BaseModel):
@@ -848,6 +909,10 @@ class TimesheetPerson(BaseModel):
     entries: List[TimeEntryRow]
     total_hours: float
     est_pay: float
+    time_tracking: str = "shiftboard"        # Phase 35: payroll = the venue's own system tracks their time
+    works_through: Optional[str] = None      # Phase 35
+    overtime_hours: float = 0                # Phase 35: part of total_hours that is overtime (venue rules)
+
 
 
 class EventTimesheet(BaseModel):
@@ -880,6 +945,15 @@ class ListingVenue(BaseModel):
     default_shift_notes: Optional[str] = None
 
 
+class ListingWaitlist(BaseModel):
+    """Phase 34: the viewer's place on a full position's waitlist."""
+    entry_id: UUID
+    status: str                                # waiting | offered
+    place: int = 1                             # 1 = next in line
+    auto_book: bool = True                     # True = book me (or send my request) as soon as a spot opens
+    offer_expires_at: Optional[datetime] = None
+
+
 class ListingPosition(BaseModel):
     shift_id: UUID
     role_type: str
@@ -897,7 +971,15 @@ class ListingPosition(BaseModel):
     est_pay_max: Optional[float] = None
     my_status: Optional[str] = None            # viewer's request status on this position
     my_status_reason: Optional[str] = None
+    my_dropped_at: Optional[datetime] = None   # Phase 29.4: the viewer dropped this position
     staff_notes: Optional[str] = None          # Phase 26.2: only when the viewer is booked here (or manages)
+    required_certs: List[str] = []             # Phase 32: labels of what this position needs
+    department: str = "general"                # Phase 32.2: foh | bar | kitchen | tech | security | ops | general
+    department_match: str = "not_set"          # Phase 32.2: match | outside | not_set (for THIS viewer)
+    missing_certs: List[str] = []              # Phase 32: what the VIEWER is missing (non-empty = can't request)
+    waitlist_count: int = 0                    # Phase 34: people waiting for this position (live entries)
+    my_waitlist: Optional[ListingWaitlist] = None   # Phase 34: the viewer's place in line
+    can_waitlist: bool = False                 # Phase 34: full, and the viewer could join the waitlist
 
 
 class ListingMyRequest(BaseModel):
@@ -935,6 +1017,14 @@ class EventListing(BaseModel):
     cancel_reason: Optional[str] = None
     started: bool = False
     can_request: bool = True
+    dropped_here: Optional[datetime] = None           # Phase 29.4: viewer dropped a position in this event -> asking back needs a reason + approval
+    availability: str = "not_set"                     # Phase 31: fits | outside | not_set (the viewer's weekly availability)
+    time_off: Optional[str] = None                    # Phase 32.1: 'blocked' = overlaps one of the viewer's time-off blocks
+    department_match: str = "not_set"                 # Phase 32.2: match if any open position fits the viewer's departments
+    series_id: Optional[UUID] = None                  # Phase 32.3: set when this event was copied to other dates
+    series: List["EventListing"] = []                 # Phase 32.3: single-event view only: the series' other upcoming dates
+    series_more: int = 0                              # Phase 32.3: list view: how many other dates of this series are listed too
+    full: bool = False                                # Phase 34: no open spots (shown so people can join a waitlist)
 
 
 class PositionRequestBody(BaseModel):
@@ -989,6 +1079,8 @@ class WorkerCalendarItem(BaseModel):
     clocked_in: bool = False
     cancelled: bool = False
     cancel_reason: Optional[str] = None
+    time_tracking: str = "shiftboard"             # Phase 35: payroll = clock in with the venue's own system
+
 
 
 class WorkerCalendarResponse(BaseModel):
@@ -1030,6 +1122,7 @@ class NotificationPreferencesResponse(BaseModel):
     reminders_enabled: bool = True
     new_shift_alerts: str = "daily"          # off | instant | daily
     manager_alerts_email: bool = True
+    push_enabled: bool = True                # Phase 33: phone / browser notifications (on the devices you turned on)
     quiet_start: Optional[int] = None        # hour 0-23
     quiet_end: Optional[int] = None
     timezone: str = "America/New_York"
@@ -1041,12 +1134,53 @@ class NotificationPreferencesResponse(BaseModel):
     discoverable: str = "private"            # Phase 29.1: private | venues | everyone
 
 
+class PushKeys(BaseModel):
+    """Phase 33: from the browser's PushSubscription.toJSON().keys"""
+    p256dh: str = Field(..., max_length=200)
+    auth: str = Field(..., max_length=100)
+
+
+class PushSubscribeBody(BaseModel):
+    provider: str = "webpush"                          # Phase 33.0.1: webpush | fcm
+    endpoint: Optional[str] = Field(None, max_length=2000)   # webpush
+    keys: Optional[PushKeys] = None                          # webpush
+    token: Optional[str] = Field(None, max_length=4096)      # fcm: from firebase getToken()
+    device_label: Optional[str] = Field(None, max_length=120)
+
+
+class PushUnsubscribeBody(BaseModel):
+    endpoint: str = Field(..., max_length=4096)              # the Web Push URL, or the Firebase token
+
+
+class PushDevice(BaseModel):
+    id: UUID
+    provider: str = "webpush"                          # Phase 33.0.1
+    device_label: Optional[str] = None
+    created_at: datetime
+    last_success_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+
+
+class PushConfigResponse(BaseModel):
+    public_key: str                          # VAPID application server key (base64url) for pushManager.subscribe
+    devices: List[PushDevice] = []
+    provider: str = "webpush"                # Phase 33.0.1: the route new devices use (fcm when Firebase messaging is set up)
+    fcm_vapid_key: Optional[str] = None      # Phase 33.0.1: Firebase "Web Push certificate" key, for getToken()
+    fcm_config: Optional[dict] = None        # Phase 33.0.1: the public Firebase web config, for initializeApp()
+
+
+class PushTestResult(BaseModel):
+    reached: int
+    error: Optional[str] = None
+
+
 class NotificationPreferencesUpdate(BaseModel):
     email_enabled: Optional[bool] = None
     sms_enabled: Optional[bool] = None
     reminders_enabled: Optional[bool] = None
     new_shift_alerts: Optional[str] = None
     manager_alerts_email: Optional[bool] = None
+    push_enabled: Optional[bool] = None      # Phase 33
     quiet_start: Optional[int] = None
     quiet_end: Optional[int] = None
     clear_quiet_hours: bool = False
@@ -1081,12 +1215,19 @@ class TeamMember(BaseModel):
     would_book_again_no: int = 0
     reliability: Optional[WorkerReliability] = None
     added_at: Optional[datetime] = None
+    certs: List[str] = []                    # Phase 32: cert keys that are verified and in date
+    cert_attention: int = 0                  # Phase 32: certificates waiting for a check (not verified yet)
+    time_tracking: Optional[str] = None      # Phase 35: this person's setting: payroll | shiftboard | None = venue setting
+    effective_time_tracking: str = "shiftboard"   # Phase 35: what applies to their next booking
+    works_through: Optional[str] = None      # Phase 35: staffing company / agency
 
 
 class TeamMemberUpdate(BaseModel):
     status: Optional[str] = None             # active | removed | blocked
     positions: Optional[List[str]] = None
     notes: Optional[str] = None
+    time_tracking: Optional[str] = None      # Phase 35: payroll | shiftboard | venue (or null) = use the venue setting
+    works_through: Optional[str] = Field(None, max_length=120)   # Phase 35: "" clears it
 
 
 class TeamMemberUpdateResult(BaseModel):
@@ -1228,10 +1369,19 @@ class AssignCandidate(BaseModel):
     requested_this: bool = False             # has a waiting request on this position (assign = approve it)
     offered: bool = False                    # has a pending offer for this position
     venue_shifts: int = 0
+    dropped_at: Optional[datetime] = None    # Phase 29.4: dropped this event; Assign needs a reason, offers are skipped
+    drop_reason: Optional[str] = None
+    availability: str = "not_set"            # Phase 31: fits | outside | not_set
+    time_off: Optional[str] = None           # Phase 32.1: 'blocked' (can't be assigned / offered)
+    time_off_reason: Optional[str] = None    # Phase 32.1: the block's reason
+    department_match: str = "not_set"        # Phase 32.2: match | outside | not_set
+    missing_certs: List[str] = []            # Phase 32: labels (offers skip them; Assign asks first)
+    unverified_certs: List[str] = []         # Phase 32: on file but no manager has checked them
 
 
 class AssignRequest(BaseModel):
     worker_id: UUID
+    reason: Optional[str] = Field(None, max_length=500)   # Phase 29.4: required to book back someone who dropped this event
 
 
 class AssignResult(BaseModel):
@@ -1338,6 +1488,15 @@ class WorkerProfile(BaseModel):
     history: List[WorkerHistoryItem] = []    # this venue only, newest first
     pending_here: int = 0                    # waiting requests at this venue
     other_venues: int = 0                    # other venues they've worked at (count only)
+    bio: Optional[str] = None                                     # Phase 32
+    avatar_url: Optional[str] = None
+    skills: List[str] = []                                        # "positions I work" from their profile
+    departments: List[str] = []                                   # Phase 32.2: departments they picked
+    emergency_contact_name: Optional[str] = None                  # only for people on the team / booked here
+    emergency_contact_phone: Optional[str] = None
+    certifications: List["CertificationItem"] = []
+    availability: List["AvailabilityWindow"] = []                 # Phase 31
+    time_off: List["TimeOffBlockItem"] = []                       # Phase 32.1: upcoming blocks (no private notes)
 
 
 class TeamSummary(BaseModel):
@@ -1513,11 +1672,16 @@ class AdminDeliveryStats(BaseModel):
 
 
 class AdminSystem(BaseModel):
+    app_version: str = ""                    # Phase 34.5: the server's version (backend/src/version.py)
     app_base_url: str = ""
     app_base_url_ok: bool = False
     email_provider: str = "console"
     email_from: str = ""
     email_ready: bool = False
+    push_route: str = "webpush"              # Phase 33.0.1: fcm | webpush (what new devices use)
+    push_firebase_missing: List[str] = []    # Phase 33.0.1: what Firebase messaging still needs
+    push_firebase_error: Optional[str] = None
+    push_devices: int = 0
     sms_provider: str = "off"
     sms_ready: bool = False
     firebase: str = "off"                    # real | mock | off
@@ -1550,3 +1714,582 @@ class AdminDelivery(BaseModel):
 
 class AdminTestEmail(BaseModel):
     to: EmailStr
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.3: Event templates
+# ------------------------------------------------------------------------------
+class EventTemplatePosition(BaseModel):
+    role_type: str
+    capacity: int = 1
+    hourly_rate: float
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    tip_pool: bool = False
+    role_notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    approval_mode: str = "venue_default"
+
+
+class EventTemplateInput(BaseModel):
+    name: str                                # what managers pick from ("Friday Jazz")
+    title: str                               # the event name it fills in
+    start_local: str                         # 'HH:MM' venue time
+    end_local: str                           # 'HH:MM'; earlier than start = ends the next day
+    notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    location_id: Optional[UUID] = None       # a saved venue location (None = venue address)
+    geofence_mode: str = "venue_default"
+    location_staff_notes: Optional[str] = None
+    positions: List[EventTemplatePosition]
+
+
+class EventTemplateResponse(BaseModel):
+    id: UUID
+    venue_id: UUID
+    name: str
+    title: str
+    start_local: str
+    end_local: str
+    overnight: bool = False                  # end_local is on the next day
+    notes: Optional[str] = None
+    staff_notes: Optional[str] = None
+    location: Optional[VenueLocationResponse] = None
+    geofence_mode: str = "venue_default"
+    location_staff_notes: Optional[str] = None
+    positions: List[EventTemplatePosition]
+    created_by_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SaveAsTemplateRequest(BaseModel):
+    name: str
+
+
+# ------------------------------------------------------------------------------
+# Phase 29.4: Drops
+# ------------------------------------------------------------------------------
+class DropShiftBody(BaseModel):
+    reason: Optional[str] = Field(None, max_length=500)   # optional; managers see it
+
+
+# ------------------------------------------------------------------------------
+# Phase 30: Manager "Tonight" board
+# ------------------------------------------------------------------------------
+class TonightPerson(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    phone: Optional[str] = None
+    request_status: str                          # approved | confirmed | checked_in | completed | no_show
+    clock_state: str                             # upcoming | due | late | in | done | missed | no_show | payroll (Phase 35)
+    clock_in_time: Optional[datetime] = None     # first clock-in
+    clock_out_time: Optional[datetime] = None    # last clock-out (when done)
+    late_minutes: int = 0                        # late: minutes past start right now; in/done: recorded lateness
+    geo_flag: bool = False                       # clocked in outside the geofence
+    manager_clock: bool = False                  # a manager entered the clock-in
+    info_seen: Optional[bool] = None             # None = nothing to read
+    previous_drop_at: Optional[datetime] = None  # Phase 29.4 re-booked after a drop
+
+
+class TonightPosition(BaseModel):
+    shift_id: UUID
+    role_type: str
+    capacity: int
+    spots_filled: int
+    open_spots: int
+    pending_requests: int = 0
+    pending_offers: int = 0
+    people: List[TonightPerson] = []
+
+
+class TonightEvent(BaseModel):
+    event_key: str
+    event_id: Optional[UUID] = None
+    title: str
+    start_time: datetime
+    end_time: datetime
+    location_name: Optional[str] = None
+    state: str                                   # upcoming | live | ended
+    clock_in_opens_at: datetime
+    positions: List[TonightPosition] = []
+    booked: int = 0
+    clocked_in: int = 0
+    done: int = 0
+    late: int = 0
+    missed: int = 0
+    no_show: int = 0
+    unread: int = 0
+    open_spots: int = 0
+
+
+class TonightAlert(BaseModel):
+    kind: str                                    # late | missed | open_spot | unread | geo
+    severity: str                                # high | medium | low
+    text: str
+    event_id: Optional[UUID] = None
+    event_key: Optional[str] = None
+    shift_id: Optional[UUID] = None
+    request_id: Optional[UUID] = None
+    worker_id: Optional[UUID] = None
+
+
+class WeekEvent(BaseModel):
+    event_key: str
+    event_id: Optional[UUID] = None
+    title: str
+    start_time: datetime
+    end_time: datetime
+    status: str = "published"                    # draft | published
+    capacity: int = 0
+    filled: int = 0
+    requested: int = 0
+    open_spots: int = 0
+    unread: int = 0
+
+
+class WeekDay(BaseModel):
+    date: str                                    # YYYY-MM-DD in the venue's time zone
+    label: str                                   # Today | Tomorrow | Wed
+    events: List[WeekEvent] = []
+    capacity: int = 0
+    filled: int = 0
+    time_off: List[str] = []                     # Phase 32.1: team members with time off that day ("Sam Taylor (5:00 PM – 11:00 PM)")
+
+
+class TonightResponse(BaseModel):
+    venue_id: UUID
+    timezone: str
+    now: datetime
+    date: str                                    # today's YYYY-MM-DD (venue time)
+    events: List[TonightEvent] = []
+    alerts: List[TonightAlert] = []
+    counts: dict = {}
+    week: List[WeekDay] = []
+
+
+class NoShowResult(BaseModel):
+    detail: str
+    spot_reopened: bool = False
+
+
+# ------------------------------------------------------------------------------
+# Phase 31: Availability & time off
+# ------------------------------------------------------------------------------
+class AvailabilityWindow(BaseModel):
+    weekday: int = Field(..., ge=0, le=6)            # 0 = Monday ... 6 = Sunday
+    start_local: str                                 # 'HH:MM'
+    end_local: str                                   # 'HH:MM' or '24:00'; earlier than start = runs past midnight
+
+
+class AvailabilityUpdate(BaseModel):
+    windows: List[AvailabilityWindow] = []           # [] = clear (no availability set)
+
+
+class TimeOffBlockInput(BaseModel):
+    """Phase 32.1: a block of time off the worker sets. No approval."""
+    all_day: bool = True
+    start_date: date
+    end_date: Optional[date] = None              # one-off: last day (default = start_date). Repeating: until (None = no end)
+    start_local: Optional[str] = None            # 'HH:MM' when all_day is False
+    end_local: Optional[str] = None              # 'HH:MM' or '24:00'; at/before start = runs past midnight
+    repeat: str = "none"                         # none | weekly | biweekly
+    weekdays: List[int] = []                     # repeating: 0 = Monday ... 6 = Sunday (default: start_date's weekday)
+    reason: Optional[str] = Field(None, max_length=200)          # managers see this
+    private_note: Optional[str] = Field(None, max_length=500)    # only the worker sees this
+
+
+class TimeOffBlockItem(BaseModel):
+    id: UUID
+    worker_id: UUID
+    worker_name: Optional[str] = None
+    all_day: bool = True
+    start_date: date
+    end_date: Optional[date] = None
+    start_local: Optional[str] = None
+    end_local: Optional[str] = None
+    repeat: str = "none"
+    weekdays: List[int] = []
+    reason: Optional[str] = None
+    private_note: Optional[str] = None           # only in the worker's own views
+    summary: str = ""                            # "Every Tue & Thu, 5:00 PM – 11:00 PM"
+    active: bool = True                          # False once it's over
+    conflicts: List[str] = []                    # booked shifts inside the block (next 90 days)
+    created_at: datetime
+
+
+# ------------------------------------------------------------------------------
+# Phase 32: Profile & certifications
+# ------------------------------------------------------------------------------
+class CertTypeInfo(BaseModel):
+    key: str
+    label: str
+    hint: Optional[str] = None
+    expires: bool = True
+
+
+class CertificationItem(BaseModel):
+    id: UUID
+    cert_type: str
+    label: str
+    number: Optional[str] = None
+    issued_on: Optional[date] = None
+    expires_on: Optional[date] = None
+    file_id: Optional[UUID] = None
+    status: str                                      # unverified | verified | rejected
+    verified_at: Optional[datetime] = None
+    verified_by_name: Optional[str] = None
+    verified_venue_name: Optional[str] = None
+    review_note: Optional[str] = None
+    expired: bool = False
+    expiring_soon: bool = False                      # within 30 days
+
+
+class CertificationUpsert(BaseModel):
+    number: Optional[str] = Field(None, max_length=100)
+    issued_on: Optional[date] = None
+    expires_on: Optional[date] = None
+    file_id: Optional[UUID] = None                   # from POST /api/me/files
+    remove_file: bool = False
+
+
+class CertReview(BaseModel):
+    status: str                                      # verified | rejected
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class FileUploadResult(BaseModel):
+    id: UUID
+    url: str
+    content_type: str
+    size_bytes: int
+
+
+class MyProfile(BaseModel):
+    id: UUID
+    email: str
+    role: str
+    first_name: str = ""
+    last_name: str = ""
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    skills: List[str] = []
+    departments: List[str] = []                      # Phase 32.2
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    discoverable: str = "private"
+    availability: List[AvailabilityWindow] = []
+    time_off: List[TimeOffBlockItem] = []        # Phase 32.1
+    certifications: List[CertificationItem] = []
+    cert_types: List[CertTypeInfo] = []
+    missing: List[str] = []                          # phone | photo | emergency_contact | availability | departments
+    department_options: List["DepartmentInfo"] = []  # Phase 32.2: the catalogue
+
+
+class DepartmentInfo(BaseModel):
+    key: str
+    label: str
+    short: str
+    examples: str
+
+
+class MyProfileUpdate(BaseModel):
+    first_name: Optional[str] = Field(None, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
+    phone: Optional[str] = Field(None, max_length=30)
+    bio: Optional[str] = Field(None, max_length=600)
+    skills: Optional[List[str]] = None
+    departments: Optional[List[str]] = None          # Phase 32.2: foh | bar | kitchen | tech | security | ops
+    emergency_contact_name: Optional[str] = Field(None, max_length=100)
+    emergency_contact_phone: Optional[str] = Field(None, max_length=30)
+
+
+
+# ------------------------------------------------------------------------------
+# Phase 33.1: a worker's own hours & pay
+# ------------------------------------------------------------------------------
+class EarningsShift(BaseModel):
+    entry_id: UUID
+    shift_id: UUID
+    request_id: Optional[UUID] = None
+    event_title: str
+    venue_id: UUID
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    role_type: str
+    clock_in_time: datetime
+    clock_out_time: Optional[datetime] = None
+    in_progress: bool = False                # still clocked in (counts 0 h until clock-out)
+    hours: float = 0
+    rate: float = 0
+    rate_custom: bool = False                # the manager set this person's rate for the shift
+    pay: float = 0                           # hours x rate, before tips and taxes
+    tips_eligible: bool = False
+    auto_closed: bool = False                # clocked out automatically
+    edited: bool = False                     # a manager changed the times
+    tips: float = 0                          # Phase 35.2: this shift's tips (on its first clock-in)
+
+
+class EarningsVenue(BaseModel):
+    venue_id: UUID
+    name: str
+    hours: float = 0
+    pay: float = 0
+    shifts: int = 0
+    tips: float = 0                          # Phase 35.2
+
+
+class EarningsTip(BaseModel):
+    """Phase 35.2: tips for one of my shifts (own tips + my share of the tip pool)."""
+    request_id: UUID
+    event_title: str
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    role_type: str
+    start_time: datetime
+    own: float = 0
+    pool_share: float = 0
+    total: float = 0
+
+
+class EarningsUpcoming(BaseModel):
+    shifts: int = 0                          # booked, not started, inside the period
+    hours: float = 0
+    est_pay: float = 0
+
+
+class EarningsResponse(BaseModel):
+    period: str                              # week | last_week | month | last_month | custom
+    label: str                               # "This week"
+    start_date: date
+    end_date: date
+    timezone: str
+    total_hours: float = 0
+    total_pay: float = 0
+    shifts_worked: int = 0
+    in_progress: int = 0
+    any_tips: bool = False
+    venues: List[EarningsVenue] = []
+    shifts: List[EarningsShift] = []         # newest first
+    upcoming: EarningsUpcoming = EarningsUpcoming()
+    payroll_shifts: int = 0                  # Phase 35: shifts in the period tracked by a venue's own payroll (not counted here)
+    payroll_venues: List[str] = []           # Phase 35
+    total_tips: float = 0                    # Phase 35.2: tips for shifts starting in the period (venues that show them)
+    tips: List[EarningsTip] = []             # Phase 35.2
+
+
+
+
+# ------------------------------------------------------------------------------------------------
+# Phase 34: cover requests + waitlists
+# ------------------------------------------------------------------------------------------------
+class CoverPostBody(BaseModel):
+    request_id: UUID
+    audience: str = "team"                   # team | public
+    note: Optional[str] = Field(None, max_length=300)
+
+
+class CoverListing(BaseModel):
+    cover_id: UUID
+    shift_id: UUID
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    venue_id: UUID
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    start_time: datetime
+    end_time: datetime
+    hours: float = 0
+    hourly_rate: Optional[float] = None      # None = hidden
+    hourly_rate_max: Optional[float] = None
+    hide_rate: bool = False
+    tips_eligible: bool = False
+    from_first_name: str
+    note: Optional[str] = None
+    audience: str = "team"                   # what actually applies (public falls back to team if the venue turned it off)
+    on_team: bool = False
+    can_take: bool = False
+    problem: Optional[str] = None            # why the viewer can't take it
+    booking: str = "approval"                # instant | approval (for THIS viewer)
+    take_note: Optional[str] = None          # e.g. "Your waiting request for Server at this event will be withdrawn."
+    department_match: str = "not_set"
+    created_at: datetime
+
+
+class CoverMine(BaseModel):
+    cover_id: UUID
+    request_id: UUID
+    shift_id: UUID
+    status: str                              # open | pending_approval
+    audience: str
+    note: Optional[str] = None
+    taker_first_name: Optional[str] = None
+    created_at: datetime
+
+
+class CoverPostResult(BaseModel):
+    cover_id: UUID
+    message: str
+
+
+class CoverTakeResult(BaseModel):
+    status: str                              # covered | pending_approval
+    message: str
+    request_id: Optional[UUID] = None        # the taker's booking when covered
+
+
+class WaitlistJoinBody(BaseModel):
+    shift_id: UUID
+    auto_book: bool = True
+
+
+class WaitlistMine(BaseModel):
+    entry_id: UUID
+    shift_id: UUID
+    event_id: Optional[UUID] = None
+    title: str
+    role_type: str
+    venue_name: str
+    venue_timezone: str = "America/New_York"
+    start_time: datetime
+    end_time: datetime
+    status: str                              # waiting | offered
+    place: int = 1
+    auto_book: bool = True
+    offer_expires_at: Optional[datetime] = None
+
+
+class WaitlistActionResult(BaseModel):
+    status: str                              # waiting | booked | requested | passed | left
+    message: str
+    entry_id: Optional[UUID] = None
+    request_id: Optional[UUID] = None
+
+
+# ------------------------------------------------------------------------------------------------
+# Phase 35: Pay periods
+# ------------------------------------------------------------------------------------------------
+class PayPeriodPerson(BaseModel):
+    worker_id: UUID
+    name: str
+    email: Optional[str] = None
+    works_through: Optional[str] = None
+    shifts: int = 0
+    hours: float = 0
+    regular_hours: float = 0
+    overtime_hours: float = 0
+    pay: float = 0                           # hours x rate (overtime premium not added; that's the payroll's job)
+    open_entries: int = 0                    # still clocked in / never clocked out
+    edited_entries: int = 0
+    outside_area: int = 0
+    auto_closed: int = 0
+    tips: float = 0                          # Phase 35.2: own tips + pool shares for shifts starting in the period
+
+
+class PayPeriodPayrollPerson(BaseModel):
+    worker_id: UUID
+    name: str
+    shifts: int = 0
+    scheduled_hours: float = 0               # from the posted times (their real hours are in the venue's payroll)
+    tips: float = 0                          # Phase 35.2
+
+
+class PayPeriodSummary(BaseModel):
+    start_date: date
+    end_date: date
+    label: str
+    state: str                               # current | ready | approved | not_required | empty (nobody worked)
+    can_approve: bool = False
+    blocked_reason: Optional[str] = None     # why it can't be approved yet
+    people: int = 0
+    total_hours: float = 0
+    overtime_hours: float = 0
+    total_pay: float = 0
+    total_tips: float = 0                    # Phase 35.2
+    open_entries: int = 0
+    payroll_people: int = 0
+    payroll_shifts: int = 0
+    approved_at: Optional[datetime] = None
+    approved_by: Optional[str] = None
+    last_reopened_at: Optional[datetime] = None
+    last_reopen_reason: Optional[str] = None
+
+
+class PayPeriodDetail(PayPeriodSummary):
+    rows: List[PayPeriodPerson] = []
+    payroll_rows: List[PayPeriodPayrollPerson] = []
+
+
+class PayPeriodList(BaseModel):
+    pay_period: str
+    approval_on: bool
+    overtime_text: str                       # "Over 40 h a week" / "Off"
+    timezone: str
+    companies: List[str] = []                # for the company filter
+    periods: List[PayPeriodSummary] = []
+
+
+class PayPeriodReopenBody(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+# ------------------------------------------------------------------------------------------------
+# Phase 35.2: Tips per event
+# ------------------------------------------------------------------------------------------------
+class TipPerson(BaseModel):
+    request_id: UUID
+    worker_id: UUID
+    name: str
+    role_type: str
+    tips_eligible: bool = False              # the position gets tips (own tips can be entered)
+    in_pool: bool = False                    # shares the event's tip pool
+    time_tracking: str = "shiftboard"        # payroll = hours below are the scheduled hours
+    basis_hours: float = 0                   # hours used for an hours split
+    individual: float = 0                    # own tips
+    pool_share: float = 0
+    total: float = 0
+
+
+class EventTips(BaseModel):
+    event_id: UUID
+    title: str
+    start_time: datetime
+    timezone: str
+    enabled: bool = True                     # venues.tips_enabled
+    can_edit: bool = False
+    blocked_reason: Optional[str] = None     # why it can't be edited (not started / cancelled / locked / tips off)
+    locked: bool = False                     # in an approved pay period
+    split: str = "hours"                     # this event's pool split: hours | equal
+    venue_split: str = "hours"               # the venue default
+    pool_payroll: bool = True                # venue-payroll people share the pool
+    pool_amount: float = 0
+    note: Optional[str] = None
+    fell_back_equal: bool = False            # hours split, but nobody in the pool has hours yet -> shared equally
+    pool_unshared: bool = False              # a pool is set but nobody is in a tip-pool position
+    total_individual: float = 0
+    total_tips: float = 0
+    people: List[TipPerson] = []
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
+class TipAmountIn(BaseModel):
+    request_id: UUID
+    amount: Optional[float] = None           # None or 0 = no own tips
+
+
+class EventTipsUpdate(BaseModel):
+    pool_amount: Optional[float] = None      # None = leave as it is
+    split: Optional[str] = None              # hours | equal; None = leave as it is
+    note: Optional[str] = Field(None, max_length=300)
+    individual: List[TipAmountIn] = []       # only the people listed change
+
+
+WorkerProfile.model_rebuild()
+EventListing.model_rebuild()   # Phase 32.3: series is a list of EventListing
+MyProfile.model_rebuild()

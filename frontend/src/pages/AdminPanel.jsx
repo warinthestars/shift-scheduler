@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Shield, LayoutDashboard, Building2, Users, History, Server, UserPlus, Plus } from 'lucide-react';
 import api from '../api/client';
+import { APP_VERSION } from '../utils/version';   // Phase 34.5
 import VenueSettingsModal from '../components/VenueSettingsModal';
 import AdminOverview from '../components/admin/AdminOverview';
 import AdminVenues, { AdminVenueDrawer } from '../components/admin/AdminVenues';
@@ -68,7 +69,11 @@ export default function AdminPanel() {
                 <Shield className="w-7 h-7" />
               </div>
               <div>
-                <h1 className="text-2xl font-black text-white">Platform admin</h1>
+                <h1 className="text-2xl font-black text-white flex items-center gap-2">
+                  Platform admin
+                  <span title="Web app version (details on the System tab)"
+                    className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">v{APP_VERSION}</span>
+                </h1>
                 <p className="text-xs text-slate-400 mt-0.5">Every venue, every account, and the health of the platform.</p>
               </div>
             </div>

@@ -2,6 +2,8 @@
 Phase 29.1: The venue activity log.
 
   GET /api/venues/{venue_id}/activity?category=&limit=30&before=<iso>
+Phase 30:
+  GET /api/venues/{venue_id}/tonight   (the manager's Today / This week board)
 """
 from datetime import datetime
 from typing import List, Optional
@@ -13,10 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import User, VenueActivity
-from src.schemas import ActivityItem
+from src.schemas import ActivityItem, TonightResponse
 from src.auth import require_manager_or_admin
 from src.routers.venues import verify_venue_manager_access
 from src.services.activity import CATEGORIES, person
+from src.services.tonight import build_tonight
 
 router = APIRouter(prefix="/api/venues", tags=["Activity"])
 
@@ -49,3 +52,14 @@ async def venue_activity(
         )
         for r in rows
     ]
+
+
+@router.get("/{venue_id}/tonight", response_model=TonightResponse)
+async def venue_tonight(
+    venue_id: UUID,
+    current_user: User = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Phase 30: today's shifts with live clock status, alerts, and the week at a glance."""
+    venue = await verify_venue_manager_access(venue_id, current_user, db)
+    return await build_tonight(db, venue)

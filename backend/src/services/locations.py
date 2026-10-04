@@ -53,7 +53,7 @@ def fmt_distance(meters: float) -> str:
 def validate_geofence_mode(mode: Optional[str]) -> str:
     m = (mode or "venue_default").lower()
     if m not in GEOFENCE_MODES:
-        raise HTTPException(status_code=400, detail="Location check must be venue_default, on, or off.")
+        raise HTTPException(status_code=400, detail="Choose whether to check location at clock-in.")
     return m
 
 
@@ -193,7 +193,7 @@ async def update_location(db: AsyncSession, loc: VenueLocation, data: VenueLocat
     if (new_lat, new_lng) != (loc.lat, loc.lng):
         changes.append("map pin moved" if new_lat is not None else "map pin removed")
     if new_radius != loc.radius_meters:
-        changes.append("check-in radius changed")
+        changes.append("clock-in area changed")
     if new_notes != loc.notes:
         changes.append("location notes updated")
 

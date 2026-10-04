@@ -1,4 +1,17 @@
-version: '3.8'
+# ------------------------------------------------------------------------------
+# Phase 35.1.1: settings live in THREE files (each has a .template next to it):
+#   .env                          ordinary settings, NO secrets (ports, names, providers, URLs, switches)
+#   .secrets/stack.env            stack secrets: database / Redis passwords, login signing key,
+#                                 super-admin password, tunnel token
+#   .secrets/integrations.env     outside-service keys: email, texts, push, file storage
+# Who gets what:
+#   database, redis, cloudflared  -> .secrets/stack.env only (never the integration keys)
+#   backend                       -> all three
+#   frontend                      -> nothing
+# ${...} below is only used for NON-secret values from .env. Secrets are never put in
+# ${...}: Compose would read them from .env only, which is how secrets ended up there before.
+# .secrets/ also holds the Firebase files and is mounted read-only into the backend.
+# ------------------------------------------------------------------------------
 
 services:
   # ----------------------------------------------------------------------------
@@ -8,14 +21,12 @@ services:
     image: postgres:16-alpine
     container_name: shiftboard-database
     restart: unless-stopped
+    # POSTGRES_PASSWORD comes from .secrets/stack.env. Don't add it under environment: (that would win and be blank).
     env_file:
-      - path: ./.env
-        required: false
-      - path: ./.secrets/.secrets.env
-        required: false
+      - path: ./.secrets/stack.env
+        required: true
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-shiftboard_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB:-shiftboard}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -37,14 +48,18 @@ services:
     image: redis:7-alpine
     container_name: shiftboard-redis
     restart: unless-stopped
-    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD:-shiftboard_redis_pass}"]
+    # REDIS_PASSWORD comes from .secrets/stack.env; the container's shell reads it ($$ = not a Compose ${...}).
+    env_file:
+      - path: ./.secrets/stack.env
+        required: true
+    command: ["sh", "-c", "exec redis-server /usr/local/etc/redis/redis.conf --requirepass \"$${REDIS_PASSWORD:?REDIS_PASSWORD is not set in .secrets/stack.env}\""]
     volumes:
       - redis_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-shiftboard_redis_pass}", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -53,6 +68,14 @@ services:
 
   # ----------------------------------------------------------------------------
   # Backend API (Python / FastAPI)
+  #
+  # The background worker runs INSIDE this container: the FastAPI lifespan in
+  # backend/src/main.py starts it with asyncio.create_task() (no separate service).
+  # Every minute it sends reminders and alerts, runs cover requests and waitlists,
+  # auto clocks-out, and delivers email / text / push. A Redis lock makes sure only
+  # one process runs each tick. Health: Admin -> System -> Background worker.
+  # Set NOTIFICATIONS_WORKER_ENABLED=false (in .env) only if you
+  # add extra API replicas that should not run it.
   # ----------------------------------------------------------------------------
   backend:
     build:
@@ -62,21 +85,18 @@ services:
     restart: unless-stopped
     env_file:
       - path: ./.env
-        required: false
-      - path: ./backend/.env
-        required: false
-      - path: ./.secrets/.secrets.env
-        required: false
+        required: true
+      - path: ./.secrets/stack.env
+        required: true
+      - path: ./.secrets/integrations.env
+        required: true
+    # These win over the files: how the backend reaches the other containers (always 5432 / 6379
+    # inside the Docker network; POSTGRES_PORT / REDIS_PORT in .env are only the ports on your computer).
+    # backend/src/config.py builds the database and Redis addresses from these + the passwords.
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-shiftboard_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_HOST=database
-      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
-      - POSTGRES_DB=${POSTGRES_DB:-shiftboard}
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-shiftboard_user}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-shiftboard}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-shiftboard_redis_pass}@redis:6379/0
-      - SUPER_ADMIN_USERNAME=${SUPER_ADMIN_USERNAME:-demo_admin@shiftboard.com}
-      - SUPER_ADMIN_PASSWORD=${SUPER_ADMIN_PASSWORD:-SuperSecretDemo123!}
+      - POSTGRES_PORT=5432
+      - REDIS_HOST=redis
     volumes:
       - ./backend:/app
       - ./.secrets:/app/secrets:ro
@@ -92,6 +112,8 @@ services:
 
   # ----------------------------------------------------------------------------
   # Frontend PWA (Vite Dev Server with Hot-Reloading)
+  # Needs no settings: the app calls /api on its own address (vite.config.js forwards it to
+  # backend:8000) and gets the Firebase web config from the backend at runtime.
   # ----------------------------------------------------------------------------
   frontend:
     build:
@@ -99,12 +121,6 @@ services:
       dockerfile: Dockerfile
     container_name: shiftboard-frontend
     restart: unless-stopped
-    env_file:
-      - path: ./frontend/.env
-        required: false
-    environment:
-      - VITE_API_BASE_URL=
-      - VITE_BACKEND_URL=http://backend:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -123,10 +139,11 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: shiftboard-cloudflared
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    # cloudflared reads TUNNEL_TOKEN from .secrets/stack.env by itself.
     env_file:
-      - path: ./.secrets/.secrets.env
-        required: false
+      - path: ./.secrets/stack.env
+        required: true
+    command: tunnel --no-autoupdate run
     volumes:
       - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
       - ./.secrets:/etc/cloudflared/secrets:ro

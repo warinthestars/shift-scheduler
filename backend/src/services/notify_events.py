@@ -24,7 +24,8 @@ from src.database import AsyncSessionLocal
 from src.models import (
     Shift, ShiftEvent, ShiftRequest, ShiftTransfer, User, Venue, VenueManager, VenueLocation, ShiftOffer,
 )
-from src.services.notify import notify_in
+from src.services.notify import notify_in, deliver_soon
+from src.services.messaging import team_name                    # Phase 33.0.1
 from src.services.team import _team_filter
 
 logger = logging.getLogger("shiftboard.notify_events")
@@ -103,6 +104,7 @@ async def _run(label: str, fn, *args) -> None:
         async with AsyncSessionLocal() as db:
             await fn(db, *args)
             await db.commit()
+        deliver_soon()       # Phase 33.0.1: push / email / text go out now, not at the next minute tick
     except Exception:
         logger.exception(f"notification hook '{label}' failed")
 
@@ -120,6 +122,11 @@ async def _request_pending(db: AsyncSession, request_id) -> None:
         return
     title = f"{person(worker)} requested {shift.role_type}"
     body = f"{event.title if event else shift.title} · {when_text(shift.start_time, venue)}"
+    if req.previous_drop_at is not None:                      # Phase 29.4: asking back after a drop
+        title = f"{person(worker)} dropped this earlier and is asking back · {shift.role_type}"
+        body += "\nThey dropped this event earlier. It needs your approval."
+    if req.outside_department:                                # Phase 32.2
+        body += "\nThis is outside the departments they work, so it needs your approval."
     if req.notes:
         body += f"\n“{req.notes}”"
     await notify_in(
@@ -144,7 +151,7 @@ async def _request_decided(db: AsyncSession, request_id, approved: bool) -> None
     if approved:
         await notify_in(
             db, [req.worker_id], "request_approved",
-            f"You're confirmed: {shift.role_type} · {name}",
+            f"You're booked: {shift.role_type} · {name}",
             f"{when_text(shift.start_time, venue)} at {place_text(venue, location)}. "
             "Open the shift for arrival info and notes.",
             worker_shift_link(req.id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id,
@@ -153,7 +160,7 @@ async def _request_decided(db: AsyncSession, request_id, approved: bool) -> None
         await notify_in(
             db, [req.worker_id], "request_denied",
             f"Not selected: {shift.role_type} · {name}",
-            f"{when_text(shift.start_time, venue)}. You can request a different position or another shift.",
+            f"{when_text(shift.start_time, venue)}. You can request another shift at this event, or a different event.",
             worker_event_link(shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id,
         )
 
@@ -271,6 +278,28 @@ async def removed(request_id) -> None:
     await _run("removed", _removed, request_id)
 
 
+async def _no_show_marked(db: AsyncSession, request_id) -> None:
+    """Phase 30: tell the worker they were marked a no-show (so they can speak up if it's wrong)."""
+    req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
+    if req is None:
+        return
+    shift, venue, event, _ = await _shift_bundle(db, req.shift_id)
+    if shift is None:
+        return
+    reason = f"\nNote from your manager: {req.status_reason}" if req.status_reason else ""
+    await notify_in(
+        db, [req.worker_id], "no_show",
+        f"Marked as a no-show: {shift.role_type} · {event.title if event else shift.title}",
+        f"{when_text(shift.start_time, venue)}. If you were there, message your manager so they can fix your hours.{reason}",
+        worker_shift_link(req.id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=req.id, urgent=True,
+        dedupe_key=f"noshow:{req.id}",
+    )
+
+
+async def no_show_marked(request_id) -> None:
+    await _run("no_show_marked", _no_show_marked, request_id)
+
+
 # ---------------------------------------------------------------------------------------------
 # Hand-offs (transfers)
 # ---------------------------------------------------------------------------------------------
@@ -280,6 +309,10 @@ async def _transfer_changed(db: AsyncSession, transfer_id) -> None:
         return
     shift, venue, event, location = await _shift_bundle(db, t.shift_id)
     if shift is None:
+        return
+    if t.cover_request_id:                        # Phase 34: came from a cover post (its own wording)
+        from src.services import notify_cover
+        await notify_cover.transfer_decided_in(db, t)
         return
     frm = await db.scalar(select(User).where(User.id == t.from_worker_id))
     to = await db.scalar(select(User).where(User.id == t.to_worker_id))
@@ -311,7 +344,7 @@ async def _transfer_changed(db: AsyncSession, transfer_id) -> None:
         to_req = await db.scalar(select(ShiftRequest).where(
             ShiftRequest.shift_id == shift.id, ShiftRequest.worker_id == t.to_worker_id))
         await notify_in(db, [t.to_worker_id], "request_approved",
-                        f"You're confirmed: {shift.role_type} · {event.title if event else shift.title}",
+                        f"You're booked: {shift.role_type} · {event.title if event else shift.title}",
                         f"{when_text(shift.start_time, venue)} at {place_text(venue, location)} "
                         f"(handed off from {person(frm)}). Open the shift for arrival info and notes.",
                         worker_shift_link(to_req.id) if to_req else "/worker?tab=schedule",
@@ -483,7 +516,7 @@ async def _team_added(db: AsyncSession, venue_id, worker_id) -> None:
         return
     await notify_in(
         db, [worker_id], "team_added",
-        f"You're on the {venue.name} team",
+        f"You're on the {team_name(venue.name)} team",           # Phase 33.0.1: no "the The Hippodrome"
         f"A manager at {venue.name} added you to their team. You'll see their shifts first and get alerts when they post new ones.",
         "/worker", venue_id=venue_id, dedupe_key=f"team-added:{venue_id}:{worker_id}:{datetime.now(timezone.utc).date()}",
     )
@@ -504,11 +537,77 @@ async def _shift_dropped(db: AsyncSession, request_id) -> None:
     await notify_in(
         db, await manager_ids(db, shift.venue_id), "shift_dropped",
         f"{person(worker)} dropped {shift.role_type} · {event.title if event else shift.title}",
-        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event.",
+        f"{when_text(shift.start_time, venue)}. The spot is open again. Assign or offer it to someone from the event."
+        + (f"\nTheir reason: “{req.status_reason}”" if req.status_reason else ""),          # Phase 29.4
         manager_link(shift.venue_id, shift.event_id), venue_id=shift.venue_id, event_id=shift.event_id,
-        request_id=req.id, urgent=is_soon(shift.start_time), dedupe_key=f"dropped:{req.id}",
+        request_id=req.id, urgent=is_soon(shift.start_time),
+        dedupe_key=f"dropped:{req.id}:{int(_as_utc(req.dropped_at).timestamp()) if req.dropped_at else 0}",
     )
 
 
 async def shift_dropped(request_id) -> None:
     await _run("shift_dropped", _shift_dropped, request_id)
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 32.1: time-off blocks   /   Phase 32: certificates
+# ---------------------------------------------------------------------------------------------
+def _days_text(t) -> str:
+    a = t.start_date.strftime("%a %b %-d")
+    return a if t.end_date == t.start_date else f"{a} – {t.end_date.strftime('%a %b %-d')}"
+
+
+async def _time_off_conflicts(db: AsyncSession, block_id) -> None:
+    """Phase 32.1: a worker blocked off time that overlaps shifts they're booked on.
+    Tells each venue's managers (once per block version per shift) and logs it; the booking itself is untouched."""
+    from src.models import TimeOffBlock
+    from src.services.time_off import BlockSpec, summary
+    from src.services.profile import block_conflicts, conflict_label
+    from src.services.activity import record_in
+    b = await db.scalar(select(TimeOffBlock).where(TimeOffBlock.id == block_id))
+    if b is None:
+        return
+    spec = BlockSpec.of(b)
+    worker = await db.scalar(select(User).where(User.id == b.worker_id))
+    stamp = int(_as_utc(b.updated_at).timestamp() * 1000) if b.updated_at else 0
+    for req, shift, venue in (await block_conflicts(db, b.worker_id, [spec])).get(b.id, []):
+        what = conflict_label(shift, venue, with_venue=False)
+        why = f" · “{b.reason}”" if b.reason else ""
+        sent = await notify_in(
+            db, await manager_ids(db, venue.id), "time_off_conflict",
+            f"{person(worker)} blocked off time they're booked for",
+            f"{what}\nTheir time off: {summary(spec)}{why}\nThey're still booked. Talk to them, or find cover.",
+            manager_link(venue.id, shift.event_id), venue_id=venue.id, event_id=shift.event_id, request_id=req.id,
+            dedupe_key=f"tob:{b.id}:{shift.id}:{stamp}",
+        )
+        if sent:
+            await record_in(db, venue.id, "time_off_conflict",
+                            f"{person(worker)} blocked off time during their shift: {what}{why}",
+                            event_id=shift.event_id, request_id=req.id, worker_id=b.worker_id)
+
+
+async def time_off_conflicts(block_id) -> None:
+    await _run("time_off_conflicts", _time_off_conflicts, block_id)
+
+
+async def _cert_reviewed(db: AsyncSession, cert_id) -> None:
+    from src.models import WorkerCertification
+    from src.services.fit import cert_label
+    c = await db.scalar(select(WorkerCertification).where(WorkerCertification.id == cert_id))
+    if c is None or c.status not in ("verified", "rejected"):
+        return
+    venue = await db.scalar(select(Venue).where(Venue.id == c.verified_venue_id)) if c.verified_venue_id else None
+    label = cert_label(c.cert_type)
+    if c.status == "verified":
+        title, body = f"{label} verified", f"Checked by {venue.name if venue else 'a venue'}."
+    else:
+        title = f"{label} wasn't accepted"
+        body = f"{venue.name if venue else 'A venue'} says: “{c.review_note}”. Update it on your profile."
+    await notify_in(
+        db, [c.worker_id], "cert_review", title, body, "/profile?tab=certificates",
+        venue_id=c.verified_venue_id, dedupe_key=f"cert-r:{c.id}:{int(c.verified_at.timestamp()) if c.verified_at else 0}",
+    )
+
+
+async def cert_reviewed(cert_id) -> None:
+    await _run("cert_reviewed", _cert_reviewed, cert_id)
