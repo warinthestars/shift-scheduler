@@ -1,399 +1,390 @@
-# Phase 35.3.1: Demo Data Script for PowerShell (v0.35.5)
+# Phase 35.4: Dev and Prod Stacks on One Computer (v0.35.6)
 
-**Why:** ShiftBoard is deployed from both Linux and Windows. Phase 35.3 added `deploy_test_data.sh` for bash; this phase adds the same script for PowerShell, and fixes one stray line at the end of the bash script.
+**Why:** a second ShiftBoard stack (prod) has to run on the same computer as the existing one (dev). Today that fails, because `docker-compose.yaml` gives every container a fixed name (`shiftboard-backend`, ...) and one fixed port (`5173`), and Docker allows each name and each port only once per computer. This phase removes the fixed names and the fixed port, so each stack is kept apart by its own stack name and its own ports, both set in that stack's `.env`.
 
 ## What changes
-* **NEW `deploy_test_data.ps1`** (repository root): the PowerShell twin of `deploy_test_data.sh`.
-  * Same commands (`load`, `reset`, `clear`, `status`; no command = `load`), same options (`--start`, `--demo-copy`, `-y`, `-h`, and every loader option passed through), same checks, same messages.
-  * It works in Windows PowerShell 5.1 and PowerShell 7. It switches to its own folder to run Docker and puts the caller back afterwards.
-  * It never runs `down`, never deletes a volume, never reads a settings file, and changes no PowerShell or Windows setting.
-* **FIX `deploy_test_data.sh`:** in the repo, the file ends with a stray line of three backticks (the Markdown fence was copied in with the script). Bash runs the load and then reports a syntax error on that line and exits with code 2. The line is removed, and the header now points Windows users to the `.ps1`.
-* `docs/DEPLOYMENT.md`, README, CHANGELOG and `agy_system_instructions.md` describe both scripts.
-* **Version 0.35.5.** `frontend/package.json` and `backend/src/version.py` are both bumped, and the CHANGELOG and README updates are included below. **This covers the standing directive for this phase, so don't bump again.**
-* **No database, API or frontend change besides the version.**
+* **`docker-compose.yaml`:** all five `container_name:` lines are removed, and the fixed `"5173:5173"` port becomes a setting (`PORT_FRONTEND_VITE`, default 5173).
+  * Compose then names each container `<stack name>-<service>-1` and puts the stack name in front of the network and the volumes too.
+  * The stack name is `COMPOSE_PROJECT_NAME` in `.env`. Not set = the folder's name, which is what the existing stack already uses, **so the existing stack keeps its database volume and its ports with no change to its `.env`.**
+  * The frontend keeps its old name `shiftboard-frontend` as a name on its own stack's network, so a Cloudflare tunnel that points at `http://shiftboard-frontend:5173` keeps working.
+* **NEW `docker-compose.demo.yaml`:** Phase 35.3 described this file, and the scripts and docs use it, but it is not in the repository. It is created here, without container names.
+* **`.env.template`:** documents `COMPOSE_PROJECT_NAME` (commented out) and adds `PORT_FRONTEND_VITE=5173`.
+* `docs/DEPLOYMENT.md` gets section E (two stacks on one computer); README, CHANGELOG and `agy_system_instructions.md` are updated.
+* **Version 0.35.6.** `frontend/package.json` and `backend/src/version.py` are both bumped, and the CHANGELOG and README updates are included below. **This covers the standing directive for this phase, so don't bump again.**
+* **No database, API, backend code or frontend code change besides the version.** No schema change, so nothing is wiped: there is no `docker compose down -v` in this phase.
 
 ## 0. Rules for this phase
-* Touch only the 8 files named below. Nothing in `backend/` except `backend/src/version.py`; nothing in `frontend/` except `frontend/package.json`; no settings file (`.env`, anything in `.secrets/`).
-* **Do NOT run either script, do NOT run any `docker compose` command, and do NOT run `Set-ExecutionPolicy` or change any other system setting.** Andrew runs the scripts himself (Part R).
-* **Code fences are not file content.** In this prompt every file and every Find / Replace block is wrapped in lines of three backticks. Those lines are Markdown. Never write them into a file. This is the mistake that Edit 2 of A2 cleans up.
-  - `deploy_test_data.ps1`: the first line is `# ----...` (a `#` and dashes) and the **last line is `exit $script:ExitCode`**.
-  - `deploy_test_data.sh`: after A2 the first line is `#!/usr/bin/env bash` and the **last line is `fi`**.
-  - When you finish, open both files and confirm the last lines. Neither file contains a line of backticks.
-* `deploy_test_data.ps1` is plain ASCII. Save it as UTF-8 without BOM; either line ending works. `deploy_test_data.sh` keeps LF line endings (never CRLF).
-* **EDITS:** each edit is an exact *Find* → *Replace with*; every *Find* appears **exactly once** in the current file; apply them in order.
-* **Verification.** All 7 edited files were checked against your repo and match (0.35.4 is fully applied, apart from the stray line in `deploy_test_data.sh`).
-  - **`deploy_test_data.ps1`** was run in PowerShell 7.4 through 18 cases with a stand-in `docker` command that recorded every call and ran the real loader against a real Postgres:
-    - `load`, `status`, `reset`, `clear`, on the normal stack and with `--demo-copy`, called from a different folder; the caller's folder is restored
-    - options with spaces passed through intact; a bad option's error and exit code passed back
-    - a second `load` refused, with the hint to use `reset`
-    - `reset` continued on "yes", stopped on "no", and refused without `-y` when there is no terminal
-    - backend not running (with and without `--start`), backend never ready (times out and shows the last error), Docker not running, file not in the repository root
-    - a CRLF copy runs the same
-    - The recorded Docker calls are the same ones the bash script makes.
-  - PSScriptAnalyzer: no parse errors, and no syntax that Windows PowerShell 5.1 can't run (`PSUseCompatibleSyntax` for 5.1 and 7.0). Its only notes are about `Write-Host`, which is intended for a console script.
-  - **It was not run in Windows PowerShell 5.1 itself, on Windows, or against a real Docker daemon.** The first run there is the first real run.
-  - **`deploy_test_data.sh`** after A2: `bash -n` and ShellCheck clean, and the full `load` / `status` / `clear` cycle re-run.
+* Touch only the 9 files named below. Nothing in `backend/` except `backend/src/version.py`; nothing in `frontend/` except `frontend/package.json`.
+* **Never open, read, print or edit a real settings file:** `.env`, anything in `.secrets/` that isn't a `.template`, or any `*.bak`. Andrew sets up each stack's `.env` himself (Part R).
+* **Do NOT run any `docker` or `docker compose` command** (no `up`, `down`, `config`, `ps`). A live stack with testers' data may be running on this computer, and a command in the wrong folder acts on the wrong stack. Andrew runs everything himself (Part R).
+* `COMPOSE_PROJECT_NAME` and `PORT_FRONTEND_VITE` are read by Docker Compose only. **Don't add them to `backend/src/config.py`** or to `backend/.env.template`.
+* Don't add a top-level `name:` to either compose file, don't rename the services, the network (`shiftboard-network`) or the volumes (`postgres_data`, `redis_data`), and don't add `name:` under the network or the volumes. Renaming a volume would detach the existing database.
+* Don't change `deploy_test_data.sh` or `deploy_test_data.ps1`. They already work with a named stack.
+* **Code fences are not file content.** Every file and every Find / Replace block in this prompt is wrapped in fence lines of three or four backticks. The outer fence lines are Markdown; never write them into a file. Where a block is wrapped in **four** backticks, the three-backtick lines inside it ARE content and must be written.
+* **Line endings:** keep each file's existing line endings. On this computer `docker-compose.yaml` has Windows (CRLF) line endings and the other edited files have LF. Create `docker-compose.demo.yaml` with LF.
+* **EDITS:** each edit is an exact *Find* → *Replace with*; every *Find* appears **exactly once** in the current file; apply them in order. If a *Find* doesn't match, stop and report it. Don't improvise a different edit.
+* **Verification.** All 21 edits below were replayed by a script against the files in your repo (0.35.5), and each *Find* matched exactly once. The two resulting compose files were then rendered with `docker compose config` (Compose v5.5.1):
+  - **the existing stack, `.env` unchanged:** stack name = the folder name, the same network, the same volumes (`<folder>_postgres_data`, `<folder>_redis_data`) and the same ports (80, 5173, 8000, 5432, 6379) as before this phase. Compared with the render of the current file, the only differences are the missing container names and the frontend's extra network name.
+  - **a second stack** with `COMPOSE_PROJECT_NAME=shiftboard-prod` and the ports from Part R: its own name, network and volumes.
+  - **the demo copy** (`-p shiftboard-demo` with both files), from either folder: its own name, network and volumes, no tunnel, and `-p` wins over `COMPOSE_PROJECT_NAME` in `.env`.
+  - Across the three, no port on this computer is used twice, and no service has a container name.
+  - A second clone in a folder with the **same name** and no `COMPOSE_PROJECT_NAME` renders with the first stack's name. That is why Part R checks the name before the first start.
+  - **Nothing was started.** `config` only renders the files. No container was run, and Docker's handling of the renamed containers on a live stack was not exercised. The first real `up` is Andrew's.
 
   Don't "improve" them.
 
 ---
 
-# PART A: The scripts and the guide
+# PART A: The compose files and the settings template
 
-## A1. NEW FILE `deploy_test_data.ps1`
-In the repository root, next to `deploy_test_data.sh`. Create it; don't run it. **The last line of the file is `exit $script:ExitCode`.**
-
-```powershell
-# ------------------------------------------------------------------------------
-# deploy_test_data.ps1: put the ShiftBoard demo data into the database (Phase 35.3.1)
-#
-# The PowerShell twin of deploy_test_data.sh: same commands, same options, same
-# checks. Use this one on Windows (or anywhere PowerShell runs) and the .sh one
-# on Linux / macOS. Keep the two files in step.
-#
-# Runs the Docker commands for you, from the folder this file is in (the
-# repository root), so it works no matter where you call it from:
-#
-#   .\deploy_test_data.ps1                  load the demo data into the running stack
-#   .\deploy_test_data.ps1 status           show what's loaded (changes nothing)
-#   .\deploy_test_data.ps1 reset            remove the demo data and load it again, dated from now
-#   .\deploy_test_data.ps1 clear            remove the demo data only
-#
-# Its own options (they can go anywhere after the command):
-#   --demo-copy    use the separate demo copy (docker-compose.demo.yaml, project
-#                  "shiftboard-demo") instead of the normal stack
-#   --start        if the stack isn't running, start it first (docker compose up -d --build)
-#   -y, --yes      don't ask before reset / clear
-#   -h, --help     show this text
-#
-# Everything else is passed to the loader unchanged:
-#   --weeks-back 8  --weeks-ahead 3  --seed 35  --password 'Demo12345!'
-#   --manager-email you@yourdomain.com      (repeatable)
-#
-# Examples:
-#   .\deploy_test_data.ps1 load --weeks-back 12 --manager-email you@yourdomain.com
-#   .\deploy_test_data.ps1 load --demo-copy --start
-#   .\deploy_test_data.ps1 reset -y
-#
-# If Windows says "running scripts is disabled on this system", run it this way
-# (this allows only this one run and changes no setting):
-#   powershell -ExecutionPolicy Bypass -File .\deploy_test_data.ps1 load
-#
-# It only ever adds or removes the demo venues and the accounts ending in
-# @demo.example.com. It never runs "down", never deletes a volume, and never
-# reads a settings file. Works in Windows PowerShell 5.1 and PowerShell 7.
-# See docs/DEPLOYMENT.md.
-# ------------------------------------------------------------------------------
-
-# Docker writes progress to the error stream. With 'Stop', Windows PowerShell 5.1
-# would treat the first such line as a failure, so results are checked with
-# $LASTEXITCODE instead.
-$ErrorActionPreference = 'Continue'
-
-$DemoProject = 'shiftboard-demo'
-$DemoFile = 'docker-compose.demo.yaml'
-$WaitSeconds = 180
-if ("$env:WAIT_SECONDS" -match '^\d+$') { $WaitSeconds = [int]$env:WAIT_SECONDS }
-
-function Show-Usage {
-    # the comment block at the top of this file, without the "# " prefix
-    Get-Content -LiteralPath $PSCommandPath |
-        Select-Object -Skip 1 -First 38 |
-        ForEach-Object { $_ -replace '^# ?', '' } |
-        Write-Host
-}
-
-function Write-Err([string]$Message) { [Console]::Error.WriteLine($Message) }
-
-# ---- what was asked for ----------------------------------------------------
-$rest = @($args | ForEach-Object { "$_" })
-$action = 'load'
-if ($rest.Count -gt 0 -and @('load', 'reset', 'clear', 'status') -contains $rest[0]) {
-    $action = $rest[0].ToLower()
-    $rest = @($rest | Select-Object -Skip 1)
-}
-
-$demoCopy = $false
-$start = $false
-$assumeYes = $false
-$showHelp = $false
-$loaderArgs = @()
-foreach ($a in $rest) {
-    switch -Regex ($a) {
-        '^(--demo-copy|-DemoCopy)$' { $demoCopy = $true; break }
-        '^(--start|-Start)$'        { $start = $true; break }
-        '^(-y|--yes|-Yes)$'         { $assumeYes = $true; break }
-        '^(-h|--help|-Help|-\?)$'   { $showHelp = $true; break }
-        default                     { $loaderArgs += $a }
-    }
-}
-
-if ($showHelp) {
-    Show-Usage
-    exit 0
-}
-
-$script:ExitCode = 0
-
-function Invoke-Deploy {
-    # ---- checks --------------------------------------------------------------
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        throw 'docker was not found. Install Docker (Docker Desktop on Windows / macOS) first.'
-    }
-    & docker compose version *> $null
-    if ($LASTEXITCODE -ne 0) { throw "'docker compose' is not available. Docker Compose v2 is needed." }
-    & docker info *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Docker isn't running. Start Docker, then run this again." }
-
-    $mainFile = ''
-    foreach ($f in @('docker-compose.yaml', 'docker-compose.yml')) {
-        if (Test-Path -LiteralPath $f -PathType Leaf) { $mainFile = $f; break }
-    }
-    if (-not $mainFile) { throw "No docker-compose.yaml in $((Get-Location).Path). This file belongs in the repository root." }
-    if (-not (Test-Path -LiteralPath 'backend/src/demo_data.py' -PathType Leaf)) {
-        throw 'backend/src/demo_data.py is missing. Apply Phase 35.3 first.'
-    }
-
-    if ($demoCopy) {
-        if (-not (Test-Path -LiteralPath $DemoFile -PathType Leaf)) { throw "$DemoFile is missing. Apply Phase 35.3 first." }
-        $dc = @('compose', '-p', $DemoProject, '-f', $mainFile, '-f', $DemoFile)
-        $where = "the separate demo copy ($DemoProject)"
-    }
-    else {
-        $dc = @('compose')
-        $where = 'the normal stack'
-    }
-    $dcText = 'docker ' + ($dc -join ' ')
-
-    # ---- make sure the stack is up -------------------------------------------
-    Write-Host "Target: $where"
-    $services = @(& docker @dc ps --status running --services 2>$null | ForEach-Object { "$_".Trim() })
-    if ($services -notcontains 'backend') {
-        if ($start) {
-            Write-Host "The backend isn't running. Starting the stack: $dcText up -d --build"
-            & docker @dc up -d --build
-            if ($LASTEXITCODE -ne 0) { throw "Starting the stack failed (exit code $LASTEXITCODE)." }
-        }
-        else {
-            throw "The backend isn't running in $where.`nStart it with:   $dcText up -d --build`nor run this again with --start."
-        }
-    }
-
-    # The loader needs the tables, which the backend creates when it starts. "status"
-    # only reads, so it is the readiness check.
-    Write-Host "Waiting for the backend and the database (up to ${WaitSeconds}s)..."
-    $waited = 0
-    $last = @()
-    while ($true) {
-        $last = @(& docker @dc exec -T backend python -m src.demo_data status 2>&1 | ForEach-Object { "$_" })
-        if ($LASTEXITCODE -eq 0) { break }
-        if ($waited -ge $WaitSeconds) {
-            $last | ForEach-Object { Write-Err $_ }
-            throw "The backend didn't answer within ${WaitSeconds}s. Check: $dcText logs backend"
-        }
-        Start-Sleep -Seconds 3
-        $waited += 3
-    }
-
-    if ($action -eq 'status') {
-        $last | ForEach-Object { Write-Host $_ }
-        return
-    }
-
-    # ---- reset / clear remove things, so ask first -----------------------------
-    if ($action -eq 'reset' -or $action -eq 'clear') {
-        $last | ForEach-Object { Write-Host $_ }
-        Write-Host ''
-        Write-Host "'$action' deletes the five demo venues and every account ending in @demo.example.com,"
-        Write-Host 'including anything testers did inside those venues. Your own venues and accounts are not touched.'
-        if (-not $assumeYes) {
-            $redirected = $false
-            try { $redirected = [Console]::IsInputRedirected } catch { $redirected = $false }
-            if ($redirected -or -not [Environment]::UserInteractive) {
-                throw "Not asking for confirmation because this isn't an interactive terminal. Add -y to go ahead."
-            }
-            $answer = Read-Host 'Type yes to continue'
-            if ($answer -cne 'yes') { throw 'Stopped. Nothing was changed.' }
-        }
-    }
-
-    # ---- do it ---------------------------------------------------------------
-    Write-Host ''
-    & docker @dc exec -T backend python -m src.demo_data $action @loaderArgs | Out-Host
-    $rc = $LASTEXITCODE
-    if ($rc -ne 0) {
-        if ($action -eq 'load') {
-            Write-Host ''
-            Write-Err 'If the demo data is already loaded, use:  .\deploy_test_data.ps1 reset'
-        }
-        $script:ExitCode = $rc
-        return
-    }
-
-    if ($action -ne 'clear') {
-        Write-Host ''
-        if ($demoCopy) {
-            Write-Host 'Web app (demo copy): http://localhost:5183 (unless you changed DEMO_PORT_FRONTEND in .env)'
-        }
-        else {
-            Write-Host 'Open the web app the way you normally do and sign in with one of the logins above.'
-        }
-    }
-}
-
-# Work from this file's folder, and put the caller back where they were afterwards.
-Push-Location -LiteralPath $PSScriptRoot
-try {
-    Invoke-Deploy
-}
-catch {
-    Write-Err ("ERROR: " + $_.Exception.Message)
-    $script:ExitCode = 1
-}
-finally {
-    Pop-Location
-}
-exit $script:ExitCode
-```
-
----
-
-## A2. `deploy_test_data.sh` (EDITS)
-Two changes: the header comment, and the stray last line. Keep LF line endings.
+## A1. `docker-compose.yaml` (EDITS)
+Seven edits. After them, the text `container_name:` does not appear anywhere in the file.
 
 **Edit 1.** Find:
-```bash
-# It only ever adds or removes the demo venues and the accounts ending in
-# @demo.example.com. It never runs "down", never deletes a volume, and never
-# reads a settings file. On Windows run it from Git Bash or WSL.
-# See docs/DEPLOYMENT.md.
+```yaml
+# .secrets/ also holds the Firebase files and is mounted read-only into the backend.
 # ------------------------------------------------------------------------------
 ```
 Replace with:
-```bash
-# It only ever adds or removes the demo venues and the accounts ending in
-# @demo.example.com. It never runs "down", never deletes a volume, and never
-# reads a settings file. On Windows use deploy_test_data.ps1 (the same thing for
-# PowerShell), or run this one from Git Bash or WSL. Keep the two files in step.
-# See docs/DEPLOYMENT.md.
+```yaml
+# .secrets/ also holds the Firebase files and is mounted read-only into the backend.
+#
+# Phase 35.4: several stacks can run on one computer (for example dev and prod).
+#   * No service has a fixed container name. Compose names each container
+#     <stack name>-<service>-1 and puts the stack name in front of the network and the
+#     volumes, so two stacks never share a container, a network or a database volume.
+#   * The stack name is COMPOSE_PROJECT_NAME in .env. Not set = the name of this folder.
+#   * Every port on your computer comes from .env. Each stack needs its own.
+#   Never give a service a fixed container name again, and never write a fixed number on the
+#   left side of a "ports:" line. See docs/DEPLOYMENT.md, section E.
 # ------------------------------------------------------------------------------
-```
-
-**Edit 2.** Delete the **last line** of the file. That line is nothing but three backtick characters: a Markdown code fence that was copied into the file by mistake in Phase 35.3. Delete only that line.
-
-After this edit the last two lines of the file are `  fi` and `fi`, and no line in the file contains a backtick fence.
-
----
-
-## A3. `docs/DEPLOYMENT.md` (EDITS)
-Section C (the Shortcut) and one sentence in section D.
-
-**Edit 1.** Find:
-```markdown
-```
-
-**Shortcut:** `deploy_test_data.sh` in the repository root runs these commands for you. It checks that Docker and the backend are running, waits for the database, and then loads:
-
-```bash
-```
-Replace with:
-```markdown
-```
-
-**Shortcut:** two scripts in the repository root run these commands for you. They do the same thing and take the same options; use whichever fits the computer you're on. Each one checks that Docker and the backend are running, waits for the database, and then loads.
-
-Linux, macOS, Git Bash or WSL (`deploy_test_data.sh`):
-
-```bash
 ```
 
 **Edit 2.** Find:
-```markdown
-```
-
-* It works from any folder, because it switches to the folder it is in before running Docker.
-* Loader options (the table under **Options** below) go after the command and are passed through unchanged.
-* Its own options are `--start` (start the stack first if it isn't running), `--demo-copy` (use the separate copy from setup D) and `-y`.
-* It never runs `down`, never deletes a volume, and never reads a settings file.
-* On Windows, run it from Git Bash or WSL. In PowerShell, use the `docker compose` commands directly.
-
-It prints the logins when it finishes:
+```yaml
+    image: postgres:16-alpine
+    container_name: shiftboard-database
+    restart: unless-stopped
 ```
 Replace with:
-```markdown
-```
-
-Windows PowerShell (`deploy_test_data.ps1`):
-
-```powershell
-.\deploy_test_data.ps1                    # the same as "load"
-.\deploy_test_data.ps1 status
-.\deploy_test_data.ps1 reset              # asks first; add -y to skip the question
-.\deploy_test_data.ps1 clear
-.\deploy_test_data.ps1 load --weeks-back 12 --manager-email you@yourdomain.com
-```
-
-* They work from any folder, because each switches to the folder it is in before running Docker. The PowerShell one puts you back where you were when it finishes.
-* Loader options (the table under **Options** below) go after the command and are passed through unchanged.
-* Their own options are `--start` (start the stack first if it isn't running), `--demo-copy` (use the separate copy from setup D) and `-y`.
-* They never run `down`, never delete a volume, and never read a settings file.
-* If Windows says *running scripts is disabled on this system*, run it this way. It allows this one run only and changes no setting:
-  `powershell -ExecutionPolicy Bypass -File .\deploy_test_data.ps1 load`
-* The PowerShell script works in Windows PowerShell 5.1 and PowerShell 7 (`pwsh ./deploy_test_data.ps1` on Linux or macOS).
-* The two scripts must stay in step: a change to one goes into the other.
-
-It prints the logins when it finishes:
+```yaml
+    image: postgres:16-alpine
+    restart: unless-stopped
 ```
 
 **Edit 3.** Find:
-```markdown
-```
-
-Or both steps in one: `bash deploy_test_data.sh load --demo-copy --start`. Add `--demo-copy` to `status`, `reset` and `clear` as well.
-
-| | Normal stack | Demo copy |
+```yaml
+    image: redis:7-alpine
+    container_name: shiftboard-redis
+    restart: unless-stopped
 ```
 Replace with:
-```markdown
+```yaml
+    image: redis:7-alpine
+    restart: unless-stopped
 ```
 
-Or both steps in one: `bash deploy_test_data.sh load --demo-copy --start` (PowerShell: `.\deploy_test_data.ps1 load --demo-copy --start`). Add `--demo-copy` to `status`, `reset` and `clear` as well.
+**Edit 4.** Find:
+```yaml
+      dockerfile: Dockerfile
+    container_name: shiftboard-backend
+    restart: unless-stopped
+```
+Replace with:
+```yaml
+      dockerfile: Dockerfile
+    restart: unless-stopped
+```
 
-| | Normal stack | Demo copy |
+**Edit 5.** Find:
+```yaml
+      dockerfile: Dockerfile
+    container_name: shiftboard-frontend
+    restart: unless-stopped
+```
+Replace with:
+```yaml
+      dockerfile: Dockerfile
+    restart: unless-stopped
+```
+
+**Edit 6.** Find:
+```yaml
+    ports:
+      - "5173:5173"
+      - "${PORT_FRONTEND:-80}:5173"
+    depends_on:
+      - backend
+    networks:
+      - shiftboard-network
+```
+Replace with:
+```yaml
+    # Two ports on your computer reach the same Vite server (5173 inside the container).
+    ports:
+      - "${PORT_FRONTEND_VITE:-5173}:5173"
+      - "${PORT_FRONTEND:-80}:5173"
+    depends_on:
+      - backend
+    # "shiftboard-frontend" was this container's fixed name before Phase 35.4. It stays as a name
+    # on this stack's own network, so a Cloudflare tunnel that points at
+    # http://shiftboard-frontend:5173 keeps working. Each stack has its own network, so the
+    # same name in two stacks doesn't clash.
+    networks:
+      shiftboard-network:
+        aliases:
+          - shiftboard-frontend
+```
+
+**Edit 7.** Find:
+```yaml
+    image: cloudflare/cloudflared:latest
+    container_name: shiftboard-cloudflared
+    restart: unless-stopped
+```
+Replace with:
+```yaml
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
 ```
 
 ---
 
-## A4. `agy_system_instructions.md` (EDITS)
-One tree line and one sentence added to rule 8. Leave the Standing rules section exactly as it is.
+## A2. NEW FILE `docker-compose.demo.yaml`
+In the repository root, next to `docker-compose.yaml`. It does not exist yet; create it. (If it does exist, replace its whole content with this.) The first line is `# ----...` and the **last line is `    profiles: ["tunnel-not-used-by-demo"]`**. `!override` is written exactly as shown, with no quotes.
+
+```yaml
+# ------------------------------------------------------------------------------
+# A SECOND, separate copy of ShiftBoard for demo data (Phase 35.3; file added in 35.4).
+#
+# It runs next to your normal stack with its own database, so nothing you or your
+# testers have entered is touched. Same code, same settings files, different ports:
+#
+#   web app   http://localhost:5183        API docs  http://localhost:8010/docs
+#   Postgres  localhost:5442               Redis     localhost:6389
+#
+# Start it (from the repository root):
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build
+# Load the demo data into it:
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml exec backend python -m src.demo_data load
+# Stop it / throw it away completely (-v deletes ONLY the demo copy's database):
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml down
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml down -v
+#
+# "-p shiftboard-demo" is the stack name. It is what keeps the copy separate (its own
+# containers, network and volumes), and it wins over COMPOSE_PROJECT_NAME in .env.
+# Never run these commands without it. See docs/DEPLOYMENT.md, section D.
+# The copy is always called shiftboard-demo, so run it from one folder only.
+# Needs Docker Compose 2.24 or newer (for "!override").
+# ------------------------------------------------------------------------------
+services:
+  database:
+    ports: !override
+      - "${DEMO_POSTGRES_PORT:-5442}:5432"
+
+  redis:
+    ports: !override
+      - "${DEMO_REDIS_PORT:-6389}:6379"
+
+  backend:
+    ports: !override
+      - "${DEMO_PORT_BACKEND:-8010}:8000"
+    # The demo copy never sends real email or texts, and its links point at itself.
+    environment:
+      - EMAIL_PROVIDER=console
+      - SMS_PROVIDER=off
+      - APP_BASE_URL=http://localhost:${DEMO_PORT_FRONTEND:-5183}
+
+  frontend:
+    ports: !override
+      - "${DEMO_PORT_FRONTEND:-5183}:5173"
+
+  # The Cloudflare tunnel belongs to the normal stack. It is NOT started for the demo copy
+  # (two tunnels with the same token would split your visitors between the two).
+  cloudflared:
+    profiles: ["tunnel-not-used-by-demo"]
+```
+
+---
+
+## A3. `.env.template` (EDITS)
+
+**Edit 1.** Find:
+```bash
+# Upgrading? Run scripts/consolidate_env.py once (see README).
+# ==============================================================================
+```
+Replace with:
+```bash
+# Upgrading? Run scripts/consolidate_env.py once (see README).
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Stack name (only matters when more than one stack runs on this computer)
+# ------------------------------------------------------------------------------
+# Docker Compose puts this name in front of every container, the network and the volumes,
+# for example shiftboard-prod-backend-1 and shiftboard-prod_postgres_data.
+# Not set = the name of this folder.
+#   * One stack on this computer: leave it commented out.
+#   * A second stack (for example prod next to dev): remove the "# " and give it its own name
+#     here AND its own ports below, BEFORE its first "docker compose up".
+#     See docs/DEPLOYMENT.md, section E.
+#   * Never change it on a stack that already has data. The database volume is found by this
+#     name, so a new name starts with an empty database (the old one is kept, not deleted).
+# COMPOSE_PROJECT_NAME=shiftboard-prod
+```
+
+**Edit 2.** Find:
+```bash
+PORT_BACKEND=8000
+PORT_FRONTEND=80
+# The Cloudflare tunnel token (TUNNEL_TOKEN) is in .secrets/stack.env
+```
+Replace with:
+```bash
+# Each stack on this computer needs its own five ports: POSTGRES_PORT and REDIS_PORT above and
+# the three below. A second stack could use 5433, 6380, 8001, 8080 and 5174.
+PORT_BACKEND=8000
+# The web app is published on two ports. Both reach the same Vite server.
+PORT_FRONTEND=80
+PORT_FRONTEND_VITE=5173
+# The Cloudflare tunnel token (TUNNEL_TOKEN) is in .secrets/stack.env.
+# Each stack needs its OWN tunnel and token: one token in two stacks splits visitors between them.
+```
+
+---
+
+# PART B: Guides
+
+## B1. `docs/DEPLOYMENT.md` (EDITS)
+A new row in the first table, one bullet in section D, the new section E, and two rows in Troubleshooting.
 
 **Edit 1.** Find:
 ```markdown
-├── docs/DEPLOYMENT.md       # deploying with or without demo data
-├── deploy_test_data.sh      # runs the demo data loader's Docker commands (LF line endings)
-├── .env                     # ordinary settings, NO secrets. Ignored by git.
-├── .env.template            # documents every ordinary setting
+| **D. Full demo data in a separate copy** | The same, but in its own database so your current data and testers aren't affected. | [D](#d-full-demo-data-in-a-separate-copy) |
 ```
 Replace with:
 ```markdown
-├── docs/DEPLOYMENT.md       # deploying with or without demo data
-├── deploy_test_data.sh      # runs the demo data loader's Docker commands (LF line endings)
-├── deploy_test_data.ps1     # the same for Windows PowerShell; keep the two in step
-├── .env                     # ordinary settings, NO secrets. Ignored by git.
-├── .env.template            # documents every ordinary setting
+| **D. Full demo data in a separate copy** | The same, but in its own database so your current data and testers aren't affected. | [D](#d-full-demo-data-in-a-separate-copy) |
+| **E. Two stacks on one computer** | A second, fully separate ShiftBoard (for example prod next to dev) with its own code, settings, database and public address. | [E](#e-two-stacks-on-one-computer-for-example-dev-and-prod) |
+```
+
+**Edit 2.** The *Replace with* block is wrapped in four backticks; the three-backtick lines inside it are content. Find:
+```markdown
+* Needs Docker Compose 2.24 or newer (`docker compose version`).
+
+---
+
+## Saving and restoring a snapshot
+```
+Replace with:
+````markdown
+* Needs Docker Compose 2.24 or newer (`docker compose version`).
+* The copy is always called `shiftboard-demo`, whichever folder you start it from. With two stacks on one computer (setup E), run the copy from one folder only.
+
+---
+
+## E. Two stacks on one computer (for example dev and prod)
+
+Use this to run a second, fully separate ShiftBoard next to the one you already have. Each stack has its own folder, code, settings files, database, ports and public address.
+
+What keeps them apart:
+
+| | Where it comes from | Example: first stack (dev) | Example: second stack (prod) |
+| :--- | :--- | :--- | :--- |
+| Stack name | `COMPOSE_PROJECT_NAME` in that folder's `.env`. Not set = the folder's name. | `shift-scheduler` | `shiftboard-prod` |
+| Containers | `<stack name>-<service>-1` | `shift-scheduler-backend-1` | `shiftboard-prod-backend-1` |
+| Database volume | `<stack name>_postgres_data` | `shift-scheduler_postgres_data` | `shiftboard-prod_postgres_data` |
+| Ports on this computer | `.env` in that folder | 80, 5173, 8000, 5432, 6379 | 8080, 5174, 8001, 5433, 6380 |
+| Public address | that folder's own Cloudflare tunnel (`TUNNEL_TOKEN`) | its own | its own |
+
+Every `docker compose` command acts on the stack whose folder you are in.
+
+### The stack you already have
+
+* Its `.env` doesn't need to change, as long as its folder keeps its name.
+* After updating to 0.35.6, run `docker compose up -d` in its folder once. The containers are re-created under their new names (`<stack name>-backend-1` and so on). The data is kept. Don't run `down`.
+* `docker compose ls` shows its stack name. To make sure the name never changes (for example if the folder is renamed), put that exact name in its `.env`: `COMPOSE_PROJECT_NAME=<the name docker compose ls shows>`.
+* **Never give a stack that has data a different name.** The database volume is found by the stack name, so a new name starts with an empty database. Nothing is deleted: put the old name back and the data is there again.
+* Commands of your own that use the old container names (`docker exec shiftboard-backend ...`) become `docker compose exec backend ...`.
+
+### Setting up the second stack
+
+1. Clone the repository into a second folder, for example `shift-scheduler-prod`.
+2. In that folder, copy the templates and fill them in (see *Steps every setup starts with*). Give it its own `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY` and `SUPER_ADMIN_PASSWORD`.
+3. In its `.env`, set the name and five free ports **before the first start**:
+   ```
+   COMPOSE_PROJECT_NAME=shiftboard-prod
+   POSTGRES_PORT=5433
+   REDIS_PORT=6380
+   PORT_BACKEND=8001
+   PORT_FRONTEND=8080
+   PORT_FRONTEND_VITE=5174
+   ```
+   For a real (non-demo) stack also set `APP_BASE_URL` to its public address, `SUPER_ADMIN_USERNAME`, `SEED_DEMO_ACCOUNTS=false` and `SHOW_DEMO_LOGINS=false` (setup A).
+4. Give it its own Cloudflare tunnel: create a second tunnel, put its token in this folder's `.secrets/stack.env` as `TUNNEL_TOKEN`, and point the tunnel's public hostname at `http://frontend:5173`. **Never use one token in two stacks**: Cloudflare would split visitors between them.
+5. Check the name before starting. This prints `name: shiftboard-prod`:
+   ```bash
+   docker compose config | grep "^name:"            # PowerShell: docker compose config | Select-String "^name:"
+   ```
+   If it prints the first stack's name, stop: starting now would replace the first stack's containers and use its database.
+6. Start it and check:
+   ```bash
+   docker compose up -d --build
+   docker compose ls            # two stacks, both "running"
+   ```
+
+### Things to know
+
+* `http://frontend:5173` in a tunnel means "the frontend of the tunnel's own stack", so both tunnels can use the same address.
+* The public hostname must be listed under `allowedHosts` in `frontend/vite.config.js`, or the web app answers "Blocked request".
+* For Firebase sign-in, add the second public hostname in the Firebase Console under Authentication → Settings → Authorized domains.
+* `docker compose down -v` deletes the database of the stack whose folder you are in, and only that one.
+* Both stacks run the same kind of containers (Vite dev server, auto-reloading API). The second stack runs whatever code is checked out in its folder; update it there with `git pull` and `docker compose up -d --build`.
+
+---
+
+## Saving and restoring a snapshot
+````
+
+**Edit 3.** Find:
+```markdown
+| `service "backend" is not running` | Start the stack first: `docker compose up -d`. |
+```
+Replace with:
+```markdown
+| `service "backend" is not running` | Start the stack first: `docker compose up -d`. |
+| `Bind for 0.0.0.0:5432 failed: port is already allocated` (any port) | Another stack on this computer already uses that port. Give this stack its own ports in `.env` (section E). |
+| A second stack shows the first stack's data, or starting it replaced the first stack's containers | Both folders have the same stack name. Set `COMPOSE_PROJECT_NAME` in the second folder's `.env` (section E), then run `docker compose up -d --force-recreate` in the first folder and then in the second. |
+```
+
+---
+
+## B2. `agy_system_instructions.md` (EDITS)
+One tree line, and rule 9 added after rule 8. Leave the Standing rules section exactly as it is.
+
+**Edit 1.** Find:
+```markdown
+├── docker-compose.yaml      # reads .env + .secrets/stack.env + .secrets/integrations.env (Phase 35.1.1)
+```
+Replace with:
+```markdown
+├── docker-compose.yaml      # reads .env + .secrets/stack.env + .secrets/integrations.env. No container names, no fixed ports (Phase 35.4)
 ```
 
 **Edit 2.** Find:
 ```markdown
-6. **Don't touch `.secrets/*` in `.gitignore`** (ignoring `.secrets/` itself untracks the templates).
-7. Changing settings needs `docker compose up -d --force-recreate`, NOT `down -v` (that deletes the database).
-8. **Demo data (Phase 35.3):** `backend/src/demo_data.py` builds the full demo data set with the models. When a phase adds a table or a required column, update it in the same phase so `python -m src.demo_data load` still works. Demo accounts always end in `@demo.example.com`; never give them real addresses.
+`deploy_test_data.sh` (bash) and `deploy_test_data.ps1` (PowerShell) run the loader and must behave the same: a change to one goes into the other in the same phase.
 ```
 Replace with:
 ```markdown
-6. **Don't touch `.secrets/*` in `.gitignore`** (ignoring `.secrets/` itself untracks the templates).
-7. Changing settings needs `docker compose up -d --force-recreate`, NOT `down -v` (that deletes the database).
-8. **Demo data (Phase 35.3):** `backend/src/demo_data.py` builds the full demo data set with the models. When a phase adds a table or a required column, update it in the same phase so `python -m src.demo_data load` still works. Demo accounts always end in `@demo.example.com`; never give them real addresses. `deploy_test_data.sh` (bash) and `deploy_test_data.ps1` (PowerShell) run the loader and must behave the same: a change to one goes into the other in the same phase.
+`deploy_test_data.sh` (bash) and `deploy_test_data.ps1` (PowerShell) run the loader and must behave the same: a change to one goes into the other in the same phase.
+9. **Several stacks on one computer (Phase 35.4):** dev and prod run side by side from two folders, kept apart by the stack name (`COMPOSE_PROJECT_NAME` in each folder's `.env`; not set = the folder's name) and by their own ports.
+   * Never add `container_name:` to a service, and never add a top-level `name:` or a `name:` under a network or volume in a compose file.
+   * Never write a fixed number on the left side of a `ports:` line. A new published port is a `${NAME:-default}` setting, documented in `.env.template`.
+   * Never rename a service, the network or a volume: the database volume is found by `<stack name>_postgres_data`.
+   * Refer to a container as `docker compose exec <service>`, never by a container name.
+   * Never run `docker compose` yourself on this computer: a command in the wrong folder acts on the wrong stack.
 ```
 
 ---
@@ -406,7 +397,7 @@ Replace with:
 ```json
   "name": "shiftboard-frontend",
   "private": true,
-  "version": "0.35.4",
+  "version": "0.35.5",
   "type": "module",
   "scripts": {
 ```
@@ -414,7 +405,7 @@ Replace with:
 ```json
   "name": "shiftboard-frontend",
   "private": true,
-  "version": "0.35.5",
+  "version": "0.35.6",
   "type": "module",
   "scripts": {
 ```
@@ -427,46 +418,50 @@ Replace with:
 ```python
 container is still running an old build.
 """
-APP_VERSION = "0.35.4"
+APP_VERSION = "0.35.5"
 ```
 Replace with:
 ```python
 container is still running an old build.
 """
-APP_VERSION = "0.35.5"
+APP_VERSION = "0.35.6"
 ```
 
 ---
 
 ## V3. `CHANGELOG.md` (EDIT)
-The new section goes above `[0.35.4]`.
+The new section goes above `[0.35.5]`.
 
 **Edit 1.** Find:
 ```markdown
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
-## [0.35.4] - 2026-10-02 - Phase 35.3: Demo data and deployment guide
+## [0.35.5] - 2026-10-02 - Phase 35.3.1: Demo data script for PowerShell
 ```
 Replace with:
 ```markdown
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
-## [0.35.5] - 2026-10-02 - Phase 35.3.1: Demo data script for PowerShell
-
-### Added
-- **`deploy_test_data.ps1`** in the repository root: the PowerShell twin of `deploy_test_data.sh`, for deploying from Windows (`.\deploy_test_data.ps1 [load | reset | clear | status]`).
-  - Same commands, options, checks and messages as the bash script: `--start`, `--demo-copy`, `-y`, and every loader option passed through.
-  - Works in Windows PowerShell 5.1 and PowerShell 7, and puts you back in the folder you started in.
-
-### Fixed
-- `deploy_test_data.sh` ended with a stray code-fence line, which made bash report a syntax error after a successful load. The line is removed.
+## [0.35.6] - 2026-10-04 - Phase 35.4: Dev and prod stacks on one computer
 
 ### Changed
-- `docs/DEPLOYMENT.md`, README and `agy_system_instructions.md` describe both scripts.
+- **`docker-compose.yaml` no longer gives containers fixed names.** Compose names them `<stack name>-<service>-1` and puts the stack name in front of the network and the volumes, so several stacks can run on one computer.
+  - The stack name is `COMPOSE_PROJECT_NAME` in `.env`. Not set = the folder's name, as before, so an existing stack keeps its database volume.
+  - After updating, `docker compose up -d` re-creates the containers under their new names. The data is kept.
+  - Commands that used a container name (`docker exec shiftboard-backend ...`) become `docker compose exec backend ...`.
+- The web app's second port on your computer (5173) is now a setting, `PORT_FRONTEND_VITE`, so no port is fixed any more.
+- The frontend keeps `shiftboard-frontend` as a name on its own stack's network, so a Cloudflare tunnel that points at that name keeps working.
 
-## [0.35.4] - 2026-10-02 - Phase 35.3: Demo data and deployment guide
+### Added
+- `COMPOSE_PROJECT_NAME` (commented out) and `PORT_FRONTEND_VITE` in `.env.template`.
+- `docs/DEPLOYMENT.md`, section E: running two stacks (for example dev and prod) on one computer.
+
+### Fixed
+- `docker-compose.demo.yaml` was described in 0.35.4 but missing from the repository, so `--demo-copy` stopped with "docker-compose.demo.yaml is missing". The file is added.
+
+## [0.35.5] - 2026-10-02 - Phase 35.3.1: Demo data script for PowerShell
 ```
 
 ---
@@ -475,69 +470,104 @@ The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD -
 
 **Edit 1.** Find:
 ```markdown
-backend/src/demo_data.py   the full demo data loader: python -m src.demo_data load | reset | clear | status
-deploy_test_data.sh        runs the loader's Docker commands for you: bash deploy_test_data.sh [load | reset | clear | status]
-docker-compose.demo.yaml   a separate demo copy of the stack (own database, other ports)
-docs/DEPLOYMENT.md         deploying with or without demo data
+| Web app | http://localhost:5173 (also on `PORT_FRONTEND`, default 80) |
 ```
 Replace with:
 ```markdown
-backend/src/demo_data.py   the full demo data loader: python -m src.demo_data load | reset | clear | status
-deploy_test_data.sh        runs the loader's Docker commands for you: bash deploy_test_data.sh [load | reset | clear | status]
-deploy_test_data.ps1       the same for Windows PowerShell: .\deploy_test_data.ps1 [load | reset | clear | status]
-docker-compose.demo.yaml   a separate demo copy of the stack (own database, other ports)
-docs/DEPLOYMENT.md         deploying with or without demo data
+| Web app | http://localhost:5173 (`PORT_FRONTEND_VITE`) and http://localhost (`PORT_FRONTEND`, default 80) |
 ```
 
 **Edit 2.** Find:
 ```markdown
-| Clean (real use) | `SEED_DEMO_ACCOUNTS=false`, `SHOW_DEMO_LOGINS=false` in `.env` |
-| Starter demo accounts | the default: the accounts in the table above |
-| Full demo data | `bash deploy_test_data.sh` (or `docker compose exec backend python -m src.demo_data load`): five venues, about 115 people, weeks of history, something live today. `reset` refreshes the dates, `clear` removes exactly the demo data. |
-| Full demo data in a separate copy | `docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build`, then the same loader inside it (or both in one: `bash deploy_test_data.sh load --demo-copy --start`). Its own database, on http://localhost:5183. |
+| Full demo data in a separate copy | `docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build`, then the same loader inside it (or both in one: `bash deploy_test_data.sh load --demo-copy --start`, or `.\deploy_test_data.ps1 load --demo-copy --start`). Its own database, on http://localhost:5183. |
 
 **Everyday commands**
 ```
 Replace with:
 ```markdown
-| Clean (real use) | `SEED_DEMO_ACCOUNTS=false`, `SHOW_DEMO_LOGINS=false` in `.env` |
-| Starter demo accounts | the default: the accounts in the table above |
-| Full demo data | `bash deploy_test_data.sh` on Linux / macOS, `.\deploy_test_data.ps1` in Windows PowerShell (or `docker compose exec backend python -m src.demo_data load`): five venues, about 115 people, weeks of history, something live today. `reset` refreshes the dates, `clear` removes exactly the demo data. |
 | Full demo data in a separate copy | `docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build`, then the same loader inside it (or both in one: `bash deploy_test_data.sh load --demo-copy --start`, or `.\deploy_test_data.ps1 load --demo-copy --start`). Its own database, on http://localhost:5183. |
+| Two stacks on one computer (dev + prod) | A second clone in its own folder, with its own `COMPOSE_PROJECT_NAME` and ports in its `.env`, its own secrets and its own Cloudflare tunnel. See `docs/DEPLOYMENT.md`, section E. |
 
 **Everyday commands**
 ```
 
+**Edit 3.** Find:
+```markdown
+* After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
+```
+Replace with:
+```markdown
+* After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
+* **Stack name and ports (since 0.35.6).** No container has a fixed name: Compose names them `<stack name>-<service>-1`, and the network and volumes start with the stack name too. The stack name is `COMPOSE_PROJECT_NAME` in `.env` (not set = the folder's name), and every port on your computer is a setting. That is what lets two stacks (dev and prod) run on one computer. Never change the name of a stack that has data: the database volume is found by it.
+```
+
+**Edit 4.** Find:
+```markdown
+| :--- | :--- |
+| Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
+```
+Replace with:
+```markdown
+| :--- | :--- |
+| Stack name and ports | `COMPOSE_PROJECT_NAME` (only for a second stack on one computer), `POSTGRES_PORT`, `REDIS_PORT`, `PORT_BACKEND`, `PORT_FRONTEND`, `PORT_FRONTEND_VITE` (read by Docker Compose, not by the app) |
+| Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
+```
+
 ---
 
-# PART R: For Andrew: using it (AGY: don't run any of this)
+# PART R: For Andrew: deploying prod next to dev (AGY: don't run any of this)
 
-No database change, so no SQL and no rebuild. Restart the frontend once so it shows 0.35.5: `docker compose restart frontend`.
+No database change, so no SQL and no wipe. **Never run `docker compose down -v` for this.**
 
-**Windows PowerShell** (from any folder):
-```powershell
-.\deploy_test_data.ps1                           # load into the running stack
-.\deploy_test_data.ps1 status
-.\deploy_test_data.ps1 reset                     # asks first; -y skips the question
-.\deploy_test_data.ps1 clear
-.\deploy_test_data.ps1 load --demo-copy --start  # start the separate copy and load it
-```
+### 1. The dev stack (the one that's running now)
+1. Before pulling, note its stack name: `docker compose ls`. It is the dev folder's name (probably `shift-scheduler`).
+2. Open the dev tunnel in Cloudflare Zero Trust → Networks → Tunnels → Public hostname and look at the service address:
+   - `http://frontend:5173` or `http://shiftboard-frontend:5173`: both keep working.
+   - an address with this computer's IP or `localhost` and a port: it keeps working, because dev keeps its ports.
+3. Pull this phase into the dev folder, then run `docker compose up -d` there. The containers are re-created as `<stack name>-backend-1` and so on. The database is the same volume as before.
+4. Optional, and recommended: pin the name so a renamed folder can't detach the database. Add this line to dev's `.env`, using exactly the name from step 1: `COMPOSE_PROJECT_NAME=shift-scheduler`.
+5. Dev's ports stay as they are. You don't need to add `PORT_FRONTEND_VITE` to dev's `.env`; it defaults to 5173.
 
-If Windows says *running scripts is disabled on this system*, use this form. It allows that one run only and changes no setting:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\deploy_test_data.ps1 load
-```
+Dev can be updated before or after prod is started. Prod doesn't depend on it.
 
-**Linux:** `bash deploy_test_data.sh ...` with the same commands and options.
+### 2. The prod stack
+1. Clone the repository into a second folder (for example `shift-scheduler-prod`) at this phase's commit or later.
+2. Copy the four templates and fill them in. Use new values for `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY` and `SUPER_ADMIN_PASSWORD` in prod's `.secrets/stack.env`; don't copy dev's file.
+3. In prod's `.env`:
+   ```
+   COMPOSE_PROJECT_NAME=shiftboard-prod
+   POSTGRES_PORT=5433
+   REDIS_PORT=6380
+   PORT_BACKEND=8001
+   PORT_FRONTEND=8080
+   PORT_FRONTEND_VITE=5174
+   APP_BASE_URL=https://<prod's public address>
+   SUPER_ADMIN_USERNAME=<your admin email>
+   SEED_DEMO_ACCOUNTS=false
+   SHOW_DEMO_LOGINS=false
+   ENV=production
+   DEBUG=false
+   ```
+4. Create a **second Cloudflare tunnel** for prod. Put its token in prod's `.secrets/stack.env` as `TUNNEL_TOKEN` and point its public hostname at `http://frontend:5173`. Never reuse dev's token.
+5. Check prod's public hostname is in `allowedHosts` in `frontend/vite.config.js`. Today the list is: `dev-scheduler.jaccollective.com`, `shiftboard.local`, `dev-scheduler-local.jaccollective.com`, `dev.shift-up.team`, `shift-up.team`, `dev-local.shift-up.team`. A hostname that isn't there needs a one-line phase.
+6. Add prod's hostname to Firebase Console → Authentication → Settings → Authorized domains.
+7. In the prod folder, check the name **before** the first start:
+   ```bash
+   docker compose config | grep "^name:"            # PowerShell: docker compose config | Select-String "^name:"
+   ```
+   It must print `name: shiftboard-prod`. If it prints dev's name, stop and fix `.env` first.
+8. Start it: `docker compose up -d --build`
 
 ### Checklist
-1. Admin → System: *Web app 0.35.5 · Server 0.35.5*.
-2. The last line of `deploy_test_data.sh` is `fi`, and the last line of `deploy_test_data.ps1` is `exit $script:ExitCode`.
-3. Windows: `.\deploy_test_data.ps1 status` prints what's loaded and your own venue and account counts, then `$LASTEXITCODE` is 0.
-4. Linux: `bash deploy_test_data.sh status; echo $?` prints the same and ends with 0 (no "unexpected EOF" message).
+1. `docker compose ls` lists two stacks, dev's name and `shiftboard-prod`, both running.
+2. `docker ps --format "table {{.Names}}\t{{.Ports}}"` shows ten containers: five starting with dev's stack name and five starting with `shiftboard-prod-`. No port appears twice.
+3. `docker volume ls` shows `<dev's name>_postgres_data` and `shiftboard-prod_postgres_data`.
+4. Dev: sign in at the dev address. The testers' venues and people are still there, and Admin → System shows *Web app 0.35.6 · Server 0.35.6*.
+5. Prod: sign in at the prod address as the new admin. Admin → Venues is empty and Admin → People lists only you.
+6. In the repo: `docker-compose.demo.yaml` exists, and searching `docker-compose.yaml` for `container_name:` finds nothing.
 
 ---
 
 **"CRITICAL SYSTEM DIRECTIVE: Starting immediately, upon the successful completion of any future phase or feature implementation, you must autonomously bump the version number in `frontend/package.json`, append a bulleted summary of changes to `CHANGELOG.md`, and update `README.md` if the architecture changed. Do not ask for permission to do this."**
 
-(For this phase, Part V already does all three for 0.35.5. Apply it as written and don't bump again.)
+(For this phase, Part V already does all three for 0.35.6. Apply it as written and don't bump again.)

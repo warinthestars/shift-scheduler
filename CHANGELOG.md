@@ -4,6 +4,23 @@ All notable changes to ShiftBoard. The format follows [Keep a Changelog](https:/
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.35.6] - 2026-10-04 - Phase 35.4: Dev and prod stacks on one computer
+
+### Changed
+- **`docker-compose.yaml` no longer gives containers fixed names.** Compose names them `<stack name>-<service>-1` and puts the stack name in front of the network and the volumes, so several stacks can run on one computer.
+  - The stack name is `COMPOSE_PROJECT_NAME` in `.env`. Not set = the folder's name, as before, so an existing stack keeps its database volume.
+  - After updating, `docker compose up -d` re-creates the containers under their new names. The data is kept.
+  - Commands that used a container name (`docker exec shiftboard-backend ...`) become `docker compose exec backend ...`.
+- The web app's second port on your computer (5173) is now a setting, `PORT_FRONTEND_VITE`, so no port is fixed any more.
+- The frontend keeps `shiftboard-frontend` as a name on its own stack's network, so a Cloudflare tunnel that points at that name keeps working.
+
+### Added
+- `COMPOSE_PROJECT_NAME` (commented out) and `PORT_FRONTEND_VITE` in `.env.template`.
+- `docs/DEPLOYMENT.md`, section E: running two stacks (for example dev and prod) on one computer.
+
+### Fixed
+- `docker-compose.demo.yaml` was described in 0.35.4 but missing from the repository, so `--demo-copy` stopped with "docker-compose.demo.yaml is missing". The file is added.
+
 ## [0.35.5] - 2026-10-02 - Phase 35.3.1: Demo data script for PowerShell
 
 ### Added
