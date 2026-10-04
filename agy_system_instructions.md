@@ -20,7 +20,7 @@ You must structure the project as follows. **CRITICAL:** Create a `.env.template
 ```text
 /shift-scheduler
 ├── .gitignore               # MUST ignore .env, .env.*, .secrets/* (NOT ".secrets/"), node_modules, etc.
-├── docker-compose.yaml      # reads .env + .secrets/stack.env + .secrets/integrations.env (Phase 35.1.1)
+├── docker-compose.yaml      # reads .env + .secrets/stack.env + .secrets/integrations.env. No container names, no fixed ports (Phase 35.4)
 ├── docker-compose.demo.yaml # optional separate demo copy of the stack (Phase 35.3)
 ├── docs/DEPLOYMENT.md       # deploying with or without demo data
 ├── deploy_test_data.sh      # runs the demo data loader's Docker commands (LF line endings)
@@ -101,3 +101,9 @@ The project rules that always apply are in README.md → "Working on the code" (
 6. **Don't touch `.secrets/*` in `.gitignore`** (ignoring `.secrets/` itself untracks the templates).
 7. Changing settings needs `docker compose up -d --force-recreate`, NOT `down -v` (that deletes the database).
 8. **Demo data (Phase 35.3):** `backend/src/demo_data.py` builds the full demo data set with the models. When a phase adds a table or a required column, update it in the same phase so `python -m src.demo_data load` still works. Demo accounts always end in `@demo.example.com`; never give them real addresses. `deploy_test_data.sh` (bash) and `deploy_test_data.ps1` (PowerShell) run the loader and must behave the same: a change to one goes into the other in the same phase.
+9. **Several stacks on one computer (Phase 35.4):** dev and prod run side by side from two folders, kept apart by the stack name (`COMPOSE_PROJECT_NAME` in each folder's `.env`; not set = the folder's name) and by their own ports.
+   * Never add `container_name:` to a service, and never add a top-level `name:` or a `name:` under a network or volume in a compose file.
+   * Never write a fixed number on the left side of a `ports:` line. A new published port is a `${NAME:-default}` setting, documented in `.env.template`.
+   * Never rename a service, the network or a volume: the database volume is found by `<stack name>_postgres_data`.
+   * Refer to a container as `docker compose exec <service>`, never by a container name.
+   * Never run `docker compose` yourself on this computer: a command in the wrong folder acts on the wrong stack.

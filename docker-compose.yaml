@@ -11,6 +11,15 @@
 # ${...} below is only used for NON-secret values from .env. Secrets are never put in
 # ${...}: Compose would read them from .env only, which is how secrets ended up there before.
 # .secrets/ also holds the Firebase files and is mounted read-only into the backend.
+#
+# Phase 35.4: several stacks can run on one computer (for example dev and prod).
+#   * No service has a fixed container name. Compose names each container
+#     <stack name>-<service>-1 and puts the stack name in front of the network and the
+#     volumes, so two stacks never share a container, a network or a database volume.
+#   * The stack name is COMPOSE_PROJECT_NAME in .env. Not set = the name of this folder.
+#   * Every port on your computer comes from .env. Each stack needs its own.
+#   Never give a service a fixed container name again, and never write a fixed number on the
+#   left side of a "ports:" line. See docs/DEPLOYMENT.md, section E.
 # ------------------------------------------------------------------------------
 
 services:
@@ -19,7 +28,6 @@ services:
   # ----------------------------------------------------------------------------
   database:
     image: postgres:16-alpine
-    container_name: shiftboard-database
     restart: unless-stopped
     # POSTGRES_PASSWORD comes from .secrets/stack.env. Don't add it under environment: (that would win and be blank).
     env_file:
@@ -46,7 +54,6 @@ services:
   # ----------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
-    container_name: shiftboard-redis
     restart: unless-stopped
     # REDIS_PASSWORD comes from .secrets/stack.env; the container's shell reads it ($$ = not a Compose ${...}).
     env_file:
@@ -81,7 +88,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: shiftboard-backend
     restart: unless-stopped
     env_file:
       - path: ./.env
@@ -119,25 +125,30 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: shiftboard-frontend
     restart: unless-stopped
     volumes:
       - ./frontend:/app
       - /app/node_modules
+    # Two ports on your computer reach the same Vite server (5173 inside the container).
     ports:
-      - "5173:5173"
+      - "${PORT_FRONTEND_VITE:-5173}:5173"
       - "${PORT_FRONTEND:-80}:5173"
     depends_on:
       - backend
+    # "shiftboard-frontend" was this container's fixed name before Phase 35.4. It stays as a name
+    # on this stack's own network, so a Cloudflare tunnel that points at
+    # http://shiftboard-frontend:5173 keeps working. Each stack has its own network, so the
+    # same name in two stacks doesn't clash.
     networks:
-      - shiftboard-network
+      shiftboard-network:
+        aliases:
+          - shiftboard-frontend
 
   # ----------------------------------------------------------------------------
   # Cloudflare Tunnel (Zero-Trust Inbound Ingress)
   # ----------------------------------------------------------------------------
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: shiftboard-cloudflared
     restart: unless-stopped
     # cloudflared reads TUNNEL_TOKEN from .secrets/stack.env by itself.
     env_file:

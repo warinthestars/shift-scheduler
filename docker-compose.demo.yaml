@@ -1,0 +1,49 @@
+# ------------------------------------------------------------------------------
+# A SECOND, separate copy of ShiftBoard for demo data (Phase 35.3; file added in 35.4).
+#
+# It runs next to your normal stack with its own database, so nothing you or your
+# testers have entered is touched. Same code, same settings files, different ports:
+#
+#   web app   http://localhost:5183        API docs  http://localhost:8010/docs
+#   Postgres  localhost:5442               Redis     localhost:6389
+#
+# Start it (from the repository root):
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build
+# Load the demo data into it:
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml exec backend python -m src.demo_data load
+# Stop it / throw it away completely (-v deletes ONLY the demo copy's database):
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml down
+#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml down -v
+#
+# "-p shiftboard-demo" is the stack name. It is what keeps the copy separate (its own
+# containers, network and volumes), and it wins over COMPOSE_PROJECT_NAME in .env.
+# Never run these commands without it. See docs/DEPLOYMENT.md, section D.
+# The copy is always called shiftboard-demo, so run it from one folder only.
+# Needs Docker Compose 2.24 or newer (for "!override").
+# ------------------------------------------------------------------------------
+services:
+  database:
+    ports: !override
+      - "${DEMO_POSTGRES_PORT:-5442}:5432"
+
+  redis:
+    ports: !override
+      - "${DEMO_REDIS_PORT:-6389}:6379"
+
+  backend:
+    ports: !override
+      - "${DEMO_PORT_BACKEND:-8010}:8000"
+    # The demo copy never sends real email or texts, and its links point at itself.
+    environment:
+      - EMAIL_PROVIDER=console
+      - SMS_PROVIDER=off
+      - APP_BASE_URL=http://localhost:${DEMO_PORT_FRONTEND:-5183}
+
+  frontend:
+    ports: !override
+      - "${DEMO_PORT_FRONTEND:-5183}:5173"
+
+  # The Cloudflare tunnel belongs to the normal stack. It is NOT started for the demo copy
+  # (two tunnels with the same token would split your visitors between the two).
+  cloudflared:
+    profiles: ["tunnel-not-used-by-demo"]

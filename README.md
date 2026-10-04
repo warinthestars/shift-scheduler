@@ -267,7 +267,7 @@ docker compose logs -f backend
 
 | Service | Address |
 | :--- | :--- |
-| Web app | http://localhost:5173 (also on `PORT_FRONTEND`, default 80) |
+| Web app | http://localhost:5173 (`PORT_FRONTEND_VITE`) and http://localhost (`PORT_FRONTEND`, default 80) |
 | API + docs | http://localhost:8000/docs |
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:6379` |
@@ -291,6 +291,7 @@ Change these before anyone else can reach the app. For a real deployment set `SE
 | Starter demo accounts | the default: the accounts in the table above |
 | Full demo data | `bash deploy_test_data.sh` on Linux / macOS, `.\deploy_test_data.ps1` in Windows PowerShell (or `docker compose exec backend python -m src.demo_data load`): five venues, about 115 people, weeks of history, something live today. `reset` refreshes the dates, `clear` removes exactly the demo data. |
 | Full demo data in a separate copy | `docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build`, then the same loader inside it (or both in one: `bash deploy_test_data.sh load --demo-copy --start`, or `.\deploy_test_data.ps1 load --demo-copy --start`). Its own database, on http://localhost:5183. |
+| Two stacks on one computer (dev + prod) | A second clone in its own folder, with its own `COMPOSE_PROJECT_NAME` and ports in its `.env`, its own secrets and its own Cloudflare tunnel. See `docs/DEPLOYMENT.md`, section E. |
 
 **Everyday commands**
 ```bash
@@ -315,6 +316,7 @@ docker compose down -v && docker compose up -d --build                          
 * **Secrets are never written as `${...}` in `docker-compose.yaml`** (Compose would only look for them in `.env`). Each container reads them from its `env_file`; Redis reads its password in its own start command.
 * The backend builds the database and Redis addresses itself (`backend/src/config.py`). `POSTGRES_PORT` / `REDIS_PORT` are only the ports on your computer; containers always use 5432 / 6379.
 * After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
+* **Stack name and ports (since 0.35.6).** No container has a fixed name: Compose names them `<stack name>-<service>-1`, and the network and volumes start with the stack name too. The stack name is `COMPOSE_PROJECT_NAME` in `.env` (not set = the folder's name), and every port on your computer is a setting. That is what lets two stacks (dev and prod) run on one computer. Never change the name of a stack that has data: the database volume is found by it.
 * **Two files stay in `.secrets/`** because they aren't `KEY=VALUE` text: `firebase-web-config.js` (Firebase web config, sent to the browser by the backend) and `firebase_service_account.json` (FCM push).
 * **The frontend needs no settings.** It reads no `VITE_` variables: it calls `/api` on its own address (Vite forwards it to the backend) and gets the Firebase web config from the backend at runtime.
 * **Other templates:** `backend/.env.template` is for running the API outside Docker (local `uvicorn`). Docker never reads `backend/.env`, `frontend/.env` or `.secrets/.secrets.env`.
@@ -324,6 +326,7 @@ The main settings:
 
 | Area | Settings |
 | :--- | :--- |
+| Stack name and ports | `COMPOSE_PROJECT_NAME` (only for a second stack on one computer), `POSTGRES_PORT`, `REDIS_PORT`, `PORT_BACKEND`, `PORT_FRONTEND`, `PORT_FRONTEND_VITE` (read by Docker Compose, not by the app) |
 | Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
 | Sign-in | `SECRET_KEY` (signs every login; must be set; in `stack.env`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS`, `SEED_DEMO_ACCOUNTS` (`false` = clean install, no starter demo accounts) |
 | Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |

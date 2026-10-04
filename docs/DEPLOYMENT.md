@@ -15,6 +15,7 @@ Pick the setup you want:
 | **B. Starter accounts only** | Quick local development. This is what you get by default. | [B](#b-starter-demo-accounts-only-the-default) |
 | **C. Full demo data in your current stack** | Showing or testing a busy system, next to whatever is already there. | [C](#c-full-demo-data-in-your-current-stack) |
 | **D. Full demo data in a separate copy** | The same, but in its own database so your current data and testers aren't affected. | [D](#d-full-demo-data-in-a-separate-copy) |
+| **E. Two stacks on one computer** | A second, fully separate ShiftBoard (for example prod next to dev) with its own code, settings, database and public address. | [E](#e-two-stacks-on-one-computer-for-example-dev-and-prod) |
 
 ---
 
@@ -222,6 +223,67 @@ Or both steps in one: `bash deploy_test_data.sh load --demo-copy --start` (Power
 * Delete it completely, database included: the same command with `down -v`. With `-p shiftboard-demo` this deletes only the copy's database.
 * Different ports: set `DEMO_PORT_FRONTEND`, `DEMO_PORT_BACKEND`, `DEMO_POSTGRES_PORT` or `DEMO_REDIS_PORT` in `.env`.
 * Needs Docker Compose 2.24 or newer (`docker compose version`).
+* The copy is always called `shiftboard-demo`, whichever folder you start it from. With two stacks on one computer (setup E), run the copy from one folder only.
+
+---
+
+## E. Two stacks on one computer (for example dev and prod)
+
+Use this to run a second, fully separate ShiftBoard next to the one you already have. Each stack has its own folder, code, settings files, database, ports and public address.
+
+What keeps them apart:
+
+| | Where it comes from | Example: first stack (dev) | Example: second stack (prod) |
+| :--- | :--- | :--- | :--- |
+| Stack name | `COMPOSE_PROJECT_NAME` in that folder's `.env`. Not set = the folder's name. | `shift-scheduler` | `shiftboard-prod` |
+| Containers | `<stack name>-<service>-1` | `shift-scheduler-backend-1` | `shiftboard-prod-backend-1` |
+| Database volume | `<stack name>_postgres_data` | `shift-scheduler_postgres_data` | `shiftboard-prod_postgres_data` |
+| Ports on this computer | `.env` in that folder | 80, 5173, 8000, 5432, 6379 | 8080, 5174, 8001, 5433, 6380 |
+| Public address | that folder's own Cloudflare tunnel (`TUNNEL_TOKEN`) | its own | its own |
+
+Every `docker compose` command acts on the stack whose folder you are in.
+
+### The stack you already have
+
+* Its `.env` doesn't need to change, as long as its folder keeps its name.
+* After updating to 0.35.6, run `docker compose up -d` in its folder once. The containers are re-created under their new names (`<stack name>-backend-1` and so on). The data is kept. Don't run `down`.
+* `docker compose ls` shows its stack name. To make sure the name never changes (for example if the folder is renamed), put that exact name in its `.env`: `COMPOSE_PROJECT_NAME=<the name docker compose ls shows>`.
+* **Never give a stack that has data a different name.** The database volume is found by the stack name, so a new name starts with an empty database. Nothing is deleted: put the old name back and the data is there again.
+* Commands of your own that use the old container names (`docker exec shiftboard-backend ...`) become `docker compose exec backend ...`.
+
+### Setting up the second stack
+
+1. Clone the repository into a second folder, for example `shift-scheduler-prod`.
+2. In that folder, copy the templates and fill them in (see *Steps every setup starts with*). Give it its own `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY` and `SUPER_ADMIN_PASSWORD`.
+3. In its `.env`, set the name and five free ports **before the first start**:
+   ```
+   COMPOSE_PROJECT_NAME=shiftboard-prod
+   POSTGRES_PORT=5433
+   REDIS_PORT=6380
+   PORT_BACKEND=8001
+   PORT_FRONTEND=8080
+   PORT_FRONTEND_VITE=5174
+   ```
+   For a real (non-demo) stack also set `APP_BASE_URL` to its public address, `SUPER_ADMIN_USERNAME`, `SEED_DEMO_ACCOUNTS=false` and `SHOW_DEMO_LOGINS=false` (setup A).
+4. Give it its own Cloudflare tunnel: create a second tunnel, put its token in this folder's `.secrets/stack.env` as `TUNNEL_TOKEN`, and point the tunnel's public hostname at `http://frontend:5173`. **Never use one token in two stacks**: Cloudflare would split visitors between them.
+5. Check the name before starting. This prints `name: shiftboard-prod`:
+   ```bash
+   docker compose config | grep "^name:"            # PowerShell: docker compose config | Select-String "^name:"
+   ```
+   If it prints the first stack's name, stop: starting now would replace the first stack's containers and use its database.
+6. Start it and check:
+   ```bash
+   docker compose up -d --build
+   docker compose ls            # two stacks, both "running"
+   ```
+
+### Things to know
+
+* `http://frontend:5173` in a tunnel means "the frontend of the tunnel's own stack", so both tunnels can use the same address.
+* The public hostname must be listed under `allowedHosts` in `frontend/vite.config.js`, or the web app answers "Blocked request".
+* For Firebase sign-in, add the second public hostname in the Firebase Console under Authentication → Settings → Authorized domains.
+* `docker compose down -v` deletes the database of the stack whose folder you are in, and only that one.
+* Both stacks run the same kind of containers (Vite dev server, auto-reloading API). The second stack runs whatever code is checked out in its folder; update it there with `git pull` and `docker compose up -d --build`.
 
 ---
 
@@ -263,3 +325,5 @@ docker compose start backend
 | `--manager-email ...: no such account, skipped` | That person hasn't signed in or been created yet. Create them (Admin → People), then run `reset` with the option again. |
 | A demo login is refused | The password is whatever `--password` was at the last load (`Demo12345!` by default). Demo accounts use the email + password form, not Google. |
 | `service "backend" is not running` | Start the stack first: `docker compose up -d`. |
+| `Bind for 0.0.0.0:5432 failed: port is already allocated` (any port) | Another stack on this computer already uses that port. Give this stack its own ports in `.env` (section E). |
+| A second stack shows the first stack's data, or starting it replaced the first stack's containers | Both folders have the same stack name. Set `COMPOSE_PROJECT_NAME` in the second folder's `.env` (section E), then run `docker compose up -d --force-recreate` in the first folder and then in the second. |
