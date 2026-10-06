@@ -115,7 +115,7 @@ export default function AvailabilityEditor({ windows, onSaved, onError }) {
           Clear everything
         </button>
         <button type="button" onClick={save} disabled={saving || !dirty}
-          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
           <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save availability'}
         </button>
       </div>

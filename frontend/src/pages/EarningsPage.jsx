@@ -88,7 +88,7 @@ export default function EarningsPage() {
             {PERIODS.map((p) => (
               <button key={p.id} type="button" onClick={() => setPeriod(p.id)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                  period === p.id ? 'bg-brand-500 text-slate-950' : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-600'}`}>
+                  period === p.id ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-600'}`}>
                 {p.label}
               </button>
             ))}

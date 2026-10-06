@@ -186,7 +186,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
                 <div
                   className={`px-3.5 py-2 rounded-2xl text-xs max-w-[85%] break-words shadow-sm ${
                     isMe
-                      ? 'bg-brand-500 text-slate-950 rounded-br-none'
+                      ? 'bg-emerald-600 text-white rounded-br-none'
                       : isAuthorManager
                       ? 'bg-slate-800 text-slate-100 border border-amber-500/20 rounded-bl-none'
                       : 'bg-slate-800 text-slate-200 border border-slate-700/60 rounded-bl-none'

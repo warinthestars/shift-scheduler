@@ -145,7 +145,7 @@ export default function JoinPage() {
           {' '}You'll see their shifts on the ShiftBoard and get alerts when they post new ones.
         </div>
         <button type="button" onClick={() => navigate('/worker', { replace: true })}
-          className="w-full py-2.5 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold text-sm">
+          className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm">
           See open shifts
         </button>
       </>
@@ -195,7 +195,7 @@ export default function JoinPage() {
         </div>
       )}
       <button type="button" onClick={() => goLogin('register')}
-        className="w-full py-2.5 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold text-sm">
+        className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm">
         Create my account
       </button>
       <button type="button" onClick={() => goLogin('signin')}

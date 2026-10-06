@@ -107,7 +107,7 @@ function CalendarCard({ cal, busy, onTurnOn, onOption, onAskReset, onAskOff }) {
         </div>
         {!on && (
           <button type="button" disabled={busy} onClick={() => onTurnOn(cal)}
-            className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950 disabled:opacity-50 flex-shrink-0`}>
+            className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-slate-950 disabled:opacity-50 flex-shrink-0`}>
             <CalendarPlus className="w-4 h-4" /> Turn on
           </button>
         )}
@@ -330,7 +330,7 @@ export default function CalendarSyncPanel({ data, onData, onSaved, onError }) {
               {offVenues.map((c) => <option key={c.scope_key} value={c.scope_key}>{c.name}</option>)}
             </select>
             <button type="button" disabled={busy || !picked} onClick={() => { turnOn(picked); setPick(''); }}
-              className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950 disabled:opacity-50`}>
+              className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-slate-950 disabled:opacity-50`}>
               <CalendarPlus className="w-4 h-4" /> Turn on
             </button>
           </div>

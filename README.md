@@ -287,6 +287,7 @@ frontend/public/brand/   the logo pictures the app shows · frontend/public/icon
 assets/                  the original logo (main_logo_shift-up.png); the files above are cut from it
 frontend/tailwind.config.js   the brand colours (brand-50 … brand-950; brand-500 is the logo's gold)
 scripts/phase37_rebrand.py    the one-off rename and recolour of Phase 37 (kept for the record; it does nothing on a second run)
+scripts/phase371_buttons.py   the one-off change of 0.37.1: buttons and selected tabs back to green (same safety checks)
 database/init.sql    the whole schema (runs on an empty database)
 database/upgrades/   "keep your data" SQL per version, for a database you don't want to wipe
 backend/src/seed.py        starter demo accounts at startup (off with SEED_DEMO_ACCOUNTS=false)
@@ -428,8 +429,8 @@ Changes are planned as numbered **phases**. The prompts are written against the 
 8. **Every phase ends with a version bump and a CHANGELOG entry** (section 9).
 9. **Brand and colour** (since 0.37.0):
    * The service is **ShiftUp**; the board of open shifts is the **ShiftBoard**. In new screens import `APP_NAME` and `BOARD_NAME` from `frontend/src/brand.js`, and show the logo with `<BrandLogo />`.
-   * **Gold (`brand-*`)** is for main buttons, the active tab or link, links, focus rings and section icons. Text on solid gold is `text-slate-950`, never white.
-   * **Green (`emerald-*`)** only means confirmed, booked, on, verified or done. **Amber** means waiting. **Rose** means a problem. Don't use green for a button that isn't one of those.
+   * **Gold (`brand-*`) is the accent colour** (since 0.37.1): links, the current link in the top bar, small icons, pay, focus rings, and the outline or tint of a selected option. **Never fill a button or a tab with gold, and never put text on solid gold.**
+   * **Green (`emerald-*`) is for buttons and selected tabs**, as before 0.37.0: `bg-emerald-500 hover:bg-emerald-400 text-slate-950` for a main button, `bg-emerald-600 text-white` for a selected tab. Green also means confirmed, booked, on, verified or done. **Amber** means waiting. **Rose** means a problem.
    * Two areas keep their own accent from before 0.37.0: the admin screens and the shift chat are indigo, and the organization screens are teal.
    * Don't redraw or recolour the logo. New sizes are cut from `assets/main_logo_shift-up.png`.
 

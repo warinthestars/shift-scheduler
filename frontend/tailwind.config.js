@@ -8,8 +8,10 @@ export default {
     extend: {
       colors: {
         // Phase 37: ShiftUp gold. 500 is the gold in the logo (assets/main_logo_shift-up.png).
-        // Use brand-* for buttons, active tabs, links and accents. Green (emerald-*) is only for
-        // "confirmed / booked / on / success"; amber is "waiting"; rose is "problem".
+        // 0.37.1: gold is the ACCENT colour: links, the current top-bar link, small icons, pay, focus rings
+        // and the outline or tint of a selected option. It is never a button's fill, and never has text on it.
+        // Buttons and selected tabs are green (emerald-*), as they were before Phase 37.
+        // Green also means "confirmed / booked / on / success"; amber is "waiting"; rose is "problem".
         brand: {
           50: '#FFFDEB',
           100: '#FFF9C7',

@@ -49,7 +49,7 @@ export default function DownloadHoursModal({ venueId, venueName, onClose, onDone
   };
 
   const chip = (on) => `px-3 py-2 rounded-xl text-xs font-bold border transition ${
-    on ? 'bg-brand-500 text-slate-950 border-brand-500' : 'bg-slate-950 text-slate-300 border-slate-700 hover:border-slate-500'}`;
+    on ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-950 text-slate-300 border-slate-700 hover:border-slate-500'}`;
 
   return (
     <ModalShell
@@ -62,7 +62,7 @@ export default function DownloadHoursModal({ venueId, venueName, onClose, onDone
         <>
           <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm text-slate-300 mr-auto">Close</button>
           <button type="button" onClick={download} disabled={busy || invalid}
-            className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+            className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
             <Download className="w-4 h-4" /> {busy ? 'Downloading…' : 'Download'}
           </button>
         </>

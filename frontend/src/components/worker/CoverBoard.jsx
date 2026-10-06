@@ -53,7 +53,7 @@ export default function CoverBoard({ items = [], busyId, onTake }) {
             </div>
             {c.can_take && (
               <button type="button" onClick={() => onTake(c)} disabled={busy}
-                className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 self-start sm:self-auto">
+                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 self-start sm:self-auto">
                 {c.booking === 'instant' && <Zap className="w-4 h-4" />}
                 {busy ? '…' : c.booking === 'instant' ? 'Take it' : 'Ask to take it'}
               </button>

@@ -390,7 +390,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={handleVerifiedContinue}
                 disabled={submitting}
-                className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl bg-brand-500 hover:bg-brand-400 font-semibold text-slate-950 text-sm shadow-lg shadow-brand-500/20 transition disabled:opacity-50"
+                className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 font-semibold text-slate-950 text-sm shadow-lg shadow-emerald-500/20 transition disabled:opacity-50"
               >
                 <span>{submitting ? 'Checking…' : "I've verified my email"}</span>
                 <ArrowRight className="w-4 h-4 ml-1.5" />
@@ -515,7 +515,7 @@ export default function LoginPage() {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full mt-2 flex items-center justify-center py-2.5 px-4 rounded-xl bg-brand-500 hover:bg-brand-400 font-semibold text-slate-950 text-sm shadow-lg shadow-brand-500/20 transition focus:outline-none disabled:opacity-50"
+                    className="w-full mt-2 flex items-center justify-center py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 font-semibold text-slate-950 text-sm shadow-lg shadow-emerald-500/20 transition focus:outline-none disabled:opacity-50"
                   >
                     <span>
                       {submitting

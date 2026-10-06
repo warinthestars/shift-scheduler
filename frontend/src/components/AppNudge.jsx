@@ -101,7 +101,7 @@ export default function AppNudge({ manager = false }) {
         {error && <p className="mt-1.5 text-xs text-rose-300">{error}</p>}
         {!showSteps && (
           <button type="button" onClick={mode === 'install' ? install : turnOn} disabled={busy}
-            className="mt-2 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+            className="mt-2 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
             {mode === 'install' ? <Download className="w-3.5 h-3.5" /> : <BellRing className="w-3.5 h-3.5" />}
             {busy ? 'One moment…' : mode === 'install' ? (isIOS() ? 'Show me how' : 'Install') : 'Turn on notifications'}
           </button>

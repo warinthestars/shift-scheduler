@@ -40,7 +40,7 @@ export default function ConfirmDialog({
             Go back
           </button>
           <button type="button" onClick={submit} disabled={saving}
-            className={`px-5 py-2 rounded-xl text-sm font-bold disabled:opacity-50 ${danger ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-brand-500 hover:bg-brand-400 text-slate-950'}`}>
+            className={`px-5 py-2 rounded-xl text-sm font-bold disabled:opacity-50 ${danger ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'}`}>
             {saving ? 'Working…' : confirmLabel}
           </button>
         </>

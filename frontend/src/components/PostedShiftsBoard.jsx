@@ -128,7 +128,7 @@ export default function PostedShiftsBoard({
 
   const toggleBtn = (active) =>
     `flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-      active ? 'bg-brand-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-white'
+      active ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
     }`;
 
   return (
@@ -255,7 +255,7 @@ export default function PostedShiftsBoard({
                           <button
                             type="button"
                             onClick={() => setSelectedKey(ev.event_key)}
-                            className="px-3 py-1.5 rounded-lg bg-brand-600/20 hover:bg-brand-500 text-brand-300 hover:text-slate-950 font-semibold text-xs border border-brand-600/30 transition inline-flex items-center gap-1.5"
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-semibold text-xs border border-emerald-600/30 transition inline-flex items-center gap-1.5"
                           >
                             <Eye className="w-3.5 h-3.5" /> Details
                           </button>
@@ -265,7 +265,7 @@ export default function PostedShiftsBoard({
                               onClick={() => onPublishEvent(ev)}
                               disabled={!upcoming}
                               title={upcoming ? 'Workers can see and request it, and your team is told' : 'The start time has passed. Edit the date first.'}
-                              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold text-xs transition inline-flex items-center gap-1.5 disabled:opacity-40"
+                              className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition inline-flex items-center gap-1.5 disabled:opacity-40"
                             >
                               <Send className="w-3.5 h-3.5" /> Publish
                             </button>

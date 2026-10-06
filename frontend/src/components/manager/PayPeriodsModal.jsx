@@ -252,7 +252,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                       ) : !confirmApprove ? (
                         <div className="flex flex-wrap items-center gap-3">
                         <button type="button" onClick={() => setConfirmApprove(true)}
-                          className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
+                          className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
                           <Check className="w-4 h-4" /> Approve and lock
                         </button>
                         <span className="text-xs text-amber-100/80">Check the hours below first. After approving, times and pay rates in this period are locked.</span>
@@ -264,7 +264,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                             times or pay rates in it until it's reopened.
                           </span>
                           <button type="button" onClick={approve} disabled={busy}
-                            className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold disabled:opacity-50">
+                            className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50">
                             {busy ? 'Saving…' : 'Approve and lock'}
                           </button>
                           <button type="button" onClick={() => setConfirmApprove(false)} className={btnGhost}>Cancel</button>

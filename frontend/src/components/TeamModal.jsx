@@ -18,7 +18,7 @@ const cardCls = 'p-4 rounded-xl bg-slate-950 border border-slate-800';
 const btnGhost =
   'px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-40';
 const btnPrimary =
-  'px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-40';
+  'px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-40';
 
 const STATUS_CHIP = {
   active: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
@@ -639,7 +639,7 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
         <div className="flex bg-slate-800 border border-slate-700 rounded-xl p-0.5 overflow-x-auto">
           {FILTERS.map(([id, label]) => (
             <button key={id} type="button" onClick={() => setFilter(id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap ${filter === id ? 'bg-brand-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}>
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap ${filter === id ? 'bg-emerald-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}>
               {label}
             </button>
           ))}
@@ -1130,7 +1130,7 @@ export default function TeamModal({ venue, positions = [], timeZone, onClose, on
       {tabs.map(([id, label, Icon, count]) => (
         <button key={id} type="button" onClick={() => { setTab(id); setMsg(null); }}
           className={`px-3 py-1.5 rounded-lg text-xs font-bold border inline-flex items-center gap-1.5 ${
-            tab === id ? 'bg-brand-500 text-slate-950 border-brand-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+            tab === id ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
           }`}>
           <Icon className="w-3.5 h-3.5" /> {label}
           {count > 0 && (

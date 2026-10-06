@@ -137,7 +137,7 @@ export default function ShiftRosterModal({ selectedShift, onClose, setSelectedSh
                   {worker.phone && (
                     <a
                       href={`tel:${worker.phone}`}
-                      className="px-3 py-1.5 rounded-lg bg-brand-600/20 hover:bg-brand-500 text-brand-300 hover:text-slate-950 text-xs font-semibold border border-brand-600/30 flex items-center space-x-1.5 transition self-end sm:self-center"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-semibold border border-emerald-600/30 flex items-center space-x-1.5 transition self-end sm:self-center"
                     >
                       <Phone className="w-3.5 h-3.5" />
                       <span>Call Worker</span>

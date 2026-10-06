@@ -231,7 +231,7 @@ export default function VenueProfile() {
                   type="button"
                   onClick={() => setScope(s.id)}
                   className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
-                    scope === s.id ? 'bg-brand-500 text-slate-950' : 'text-slate-400 hover:text-white'
+                    scope === s.id ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
                   }`}
                 >
                   {s.label}
@@ -271,7 +271,7 @@ export default function VenueProfile() {
                           <button
                             type="button"
                             onClick={() => setOpenEventId(ev.event_id)}
-                            className="px-3.5 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold"
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold"
                           >
                             {hasMine ? 'View details' : 'View & request'}
                           </button>

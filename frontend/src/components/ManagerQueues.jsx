@@ -89,7 +89,7 @@ export function ApprovalQueueCard({ requests, reliabilityMap = {}, timeZone, act
                   </button>
                   <button type="button" onClick={() => onApprove(req.id)} disabled={busy || full}
                     title={full ? 'Shift is full' : 'Approve'}
-                    className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                     <Check className="w-3 h-3" /> Approve
                   </button>
                 </div>
@@ -152,7 +152,7 @@ export function TransfersCard({ transfers, timeZone, actionLoading, onReview, on
                     <X className="w-3 h-3" /> Deny
                   </button>
                   <button type="button" onClick={() => onApprove(t.id)} disabled={busy}
-                    className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
                     <Check className="w-3 h-3" /> Approve
                   </button>
                 </div>

@@ -134,7 +134,7 @@ export default function EventRosterModal({
                 </div>
                 {canStaff && (
                   <button type="button" onClick={() => setStaffPos(pos)}
-                    className="px-2.5 py-1 rounded-lg bg-brand-600/15 hover:bg-brand-500 text-brand-300 hover:text-slate-950 text-xs font-bold border border-brand-600/30 inline-flex items-center gap-1">
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600/15 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-bold border border-emerald-600/30 inline-flex items-center gap-1">
                     <UserPlus className="w-3 h-3" /> Assign / Offer
                   </button>
                 )}
@@ -292,7 +292,7 @@ export default function EventRosterModal({
                               </button>
                               <button type="button" onClick={() => onApprove && onApprove(p.request_id)} disabled={isFull || approving || denying}
                                 title={isFull ? 'Shift is full' : 'Approve'}
-                                className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
+                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                                 <Check className="w-3 h-3" /> {approving ? '…' : 'Approve'}
                               </button>
                             </div>
@@ -332,7 +332,7 @@ export default function EventRosterModal({
                             <button type="button" onClick={() => setBookBack({ person: p, pos })}
                               disabled={pos.assigned.length >= pos.capacity}
                               title={pos.assigned.length >= pos.capacity ? 'Shift is full' : 'Book them back on this shift'}
-                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-brand-500 text-brand-300 hover:text-slate-950 border border-slate-700 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
+                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-slate-700 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                               <RotateCcw className="w-3 h-3" /> Book back…
                             </button>
                           )}

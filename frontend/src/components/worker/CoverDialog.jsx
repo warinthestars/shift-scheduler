@@ -60,7 +60,7 @@ export default function CoverDialog({ req, onClose, onPosted }) {
             Close
           </button>
           <button type="button" onClick={submit} disabled={busy}
-            className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+            className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
             {busy ? 'Posting…' : 'Post cover request'}
           </button>
         </>

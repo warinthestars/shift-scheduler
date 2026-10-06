@@ -112,7 +112,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
         <Send className="w-4 h-4" /> {testing ? 'Sending…' : 'Send me a test'}
       </button>
       <button type="button" onClick={save} disabled={saving || !prefs}
-        className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
         {saving ? 'Saving…' : 'Save'}
       </button>
     </>

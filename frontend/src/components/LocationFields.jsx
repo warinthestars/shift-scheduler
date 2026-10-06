@@ -108,7 +108,7 @@ export default function LocationFields({ value, onChange, venueRadius = 150, com
             type="button"
             onClick={useMyLocation}
             disabled={locating}
-            className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-50"
+            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-50"
           >
             <Crosshair className="w-3 h-3" /> {locating ? 'Locating…' : "I'm there now"}
           </button>

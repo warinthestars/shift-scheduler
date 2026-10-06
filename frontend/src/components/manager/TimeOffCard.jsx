@@ -71,7 +71,7 @@ export default function TimeOffCard({ venueId, items = [], onOpenWorker, onDone 
                 <X className="w-3.5 h-3.5" /> Decline
               </button>
               <button type="button" onClick={() => approve(t)} disabled={busy === t.id}
-                className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
                 <Check className="w-3.5 h-3.5" /> {busy === t.id ? 'Saving…' : 'Approve'}
               </button>
             </div>
