@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, addMonths, isSameMonth, format,
 } from 'date-fns';
 import {
-  ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertTriangle, MapPin, Clock, Eye, EyeOff, ArrowRight,
+  ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertTriangle, MapPin, Clock, Eye, EyeOff, ArrowRight, CalendarPlus,
 } from 'lucide-react';
 import { fmtTime, fmtTimeRange, fmtLongDate, tzAbbrev } from '../utils/venueTime';
 import {
@@ -218,7 +219,12 @@ export default function WorkerCalendar({ items = [], openListings = [], onSelect
             Today
           </button>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Phase 36.1: these shifts in Google / Apple / Outlook */}
+          <Link to="/profile?tab=calendar" title="See these shifts in Google, Apple or Outlook calendar"
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold border bg-slate-900 text-slate-400 border-slate-800 hover:text-white inline-flex items-center gap-1.5">
+            <CalendarPlus className="w-3.5 h-3.5" /> Sync
+          </Link>
           <button
             type="button"
             onClick={() => setShowOpen((v) => !v)}

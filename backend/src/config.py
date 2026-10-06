@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     # Phase 36: true = the home page (/) is a public board of posted shifts for people who aren't signed in,
     # with a Sign in / Sign up button. false = the home page is the sign-in page, as before.
     PUBLIC_EVENT_BOARD: bool = os.getenv("PUBLIC_EVENT_BOARD", "false").lower() in ("true", "1", "yes")
+    # Phase 36.1: true = people can connect their shifts to Google / Apple / Outlook with a private calendar link
+    # (Profile -> Calendar sync). false = the links stop working and the settings are hidden.
+    CALENDAR_SYNC: bool = os.getenv("CALENDAR_SYNC", "true").lower() in ("true", "1", "yes")
     # Phase 28.1: emails that are always platform admins (comma-separated)
     ALWAYS_ADMIN_EMAILS: str = os.getenv("ALWAYS_ADMIN_EMAILS", "")
 

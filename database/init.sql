@@ -773,3 +773,26 @@ CREATE TABLE event_tips (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_event_tips_venue ON event_tips(venue_id);
+
+-- ==============================================================================
+-- Phase 36.1: Calendar sync (private subscription links; the token in the link is the credential)
+-- ==============================================================================
+CREATE TABLE calendar_feeds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind VARCHAR(20) NOT NULL,                                -- worker | manager | venue | organization | admin (models.CalendarKind)
+    scope_key VARCHAR(60) NOT NULL,                           -- worker | manager | admin | venue:<id> | organization:<id>
+    venue_id UUID REFERENCES venues(id) ON DELETE CASCADE,
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    token VARCHAR(64) NOT NULL UNIQUE,
+    include_requested BOOLEAN NOT NULL DEFAULT TRUE,          -- worker: shifts waiting for an answer
+    include_waitlist BOOLEAN NOT NULL DEFAULT TRUE,           -- worker: waitlisted shifts
+    include_offers BOOLEAN NOT NULL DEFAULT TRUE,             -- worker: offers they haven't answered
+    include_time_off BOOLEAN NOT NULL DEFAULT TRUE,           -- worker: their own time off
+    include_drafts BOOLEAN NOT NULL DEFAULT FALSE,            -- venue calendars: draft events (never for shift leads)
+    last_fetched_at TIMESTAMPTZ,                              -- last time a calendar app read it
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_calendar_feed_scope UNIQUE (user_id, scope_key)
+);
+CREATE INDEX idx_calendar_feeds_user ON calendar_feeds(user_id);

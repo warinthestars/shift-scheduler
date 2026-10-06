@@ -1,6 +1,6 @@
 import uuid
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone   # Phase 36.1: timezone (new tables use aware UTC defaults)
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, Numeric,
     DateTime, ForeignKey, ARRAY, CheckConstraint, UniqueConstraint,   # Phase 34.5: no SQLAlchemy Enum (no native PG ENUMs)
@@ -825,3 +825,44 @@ class EventTip(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("idx_event_tips_venue", "venue_id"),)
+
+
+# ------------------------------------------------------------------------------
+# Phase 36.1: Calendar sync (private subscription links)
+# ------------------------------------------------------------------------------
+class CalendarKind(str, Enum):
+    """Phase 36.1: which calendar a link shows. Stored as VARCHAR; checked here (no native PG ENUM)."""
+    worker = "worker"                # the person's own shifts
+    manager = "manager"              # every venue they manage, in one calendar
+    venue = "venue"                  # one venue
+    organization = "organization"    # every venue in an organization
+    admin = "admin"                  # every venue on the platform
+
+
+class CalendarFeed(Base):
+    """Phase 36.1: one private calendar link. The token in the link is the only credential, so it is long,
+    random and replaceable. What the link shows is decided again on every read (services/calendar_feeds.py):
+    a link for a venue the person no longer runs shows an empty calendar. No pay is ever written to a feed."""
+    __tablename__ = "calendar_feeds"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(20), nullable=False)                                # CalendarKind
+    scope_key = Column(String(60), nullable=False)                           # worker | manager | admin | venue:<id> | organization:<id>
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    token = Column(String(64), nullable=False, unique=True)
+    include_requested = Column(Boolean, nullable=False, default=True)        # worker: shifts waiting for an answer
+    include_waitlist = Column(Boolean, nullable=False, default=True)         # worker: waitlisted shifts
+    include_offers = Column(Boolean, nullable=False, default=True)           # worker: offers they haven't answered
+    include_time_off = Column(Boolean, nullable=False, default=True)         # worker: their own time off
+    include_drafts = Column(Boolean, nullable=False, default=False)          # venue calendars: draft events (never for shift leads)
+    last_fetched_at = Column(DateTime(timezone=True), nullable=True)         # last time a calendar app read it
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "scope_key", name="uq_calendar_feed_scope"),
+        Index("idx_calendar_feeds_user", "user_id"),
+    )

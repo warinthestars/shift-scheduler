@@ -2497,3 +2497,52 @@ class PublicBoard(BaseModel):
 class PublicConfig(BaseModel):
     public_board: bool = False
     self_registration: bool = True
+
+
+# ------------------------------------------------------------------------------
+# Phase 36.1: Calendar sync (private subscription links)
+# ------------------------------------------------------------------------------
+class CalendarLink(BaseModel):
+    """One calendar this person can connect. `id` and the addresses are None until they turn it on."""
+    kind: str                                # worker | manager | venue | organization | admin
+    scope_key: str
+    name: str
+    description: str
+    venue_id: Optional[UUID] = None
+    organization_id: Optional[UUID] = None
+    shift_lead: bool = False                 # a venue calendar a shift lead gets (never drafts)
+    available: bool = True                   # False = they turned it on, then lost access: empty calendar, can only be turned off
+    options: List[str] = []                  # which include_* switches apply to this calendar
+    id: Optional[UUID] = None                # set = turned on
+    url: Optional[str] = None                # https address of the feed
+    webcal_url: Optional[str] = None         # same address as webcal:// (Apple Calendar and most phone apps)
+    google_url: Optional[str] = None
+    outlook_url: Optional[str] = None        # outlook.com
+    office_url: Optional[str] = None         # Microsoft 365 (work or school)
+    include_requested: bool = True
+    include_waitlist: bool = True
+    include_offers: bool = True
+    include_time_off: bool = True
+    include_drafts: bool = False
+    last_fetched_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+class CalendarLinks(BaseModel):
+    enabled: bool = True                     # CALENDAR_SYNC
+    public_address_ok: bool = True           # False = the site address is local, so Google / Outlook can't reach it
+    calendars: List[CalendarLink] = []
+
+
+class CalendarLinkCreate(BaseModel):
+    kind: str
+    venue_id: Optional[UUID] = None
+    organization_id: Optional[UUID] = None
+
+
+class CalendarLinkUpdate(BaseModel):
+    include_requested: Optional[bool] = None
+    include_waitlist: Optional[bool] = None
+    include_offers: Optional[bool] = None
+    include_time_off: Optional[bool] = None
+    include_drafts: Optional[bool] = None

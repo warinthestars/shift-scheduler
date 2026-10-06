@@ -87,7 +87,35 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
   * A venue can keep its shifts off the board, and can type the city that is shown (Venue settings). With no city typed, it is worked out from the address; if that isn't clear, no city is shown.
   * Drafts, cancelled and past events are never listed. Full events are listed as "Full".
 * Signed-in people never see the board: `/` takes them to their own home page, as before.
-* Apart from signing in, invites and the board, **every API endpoint needs a sign-in** (since 0.36.0 that includes `GET /api/venues`, `GET /api/venues/{id}` and `GET /api/venues/{id}/shifts`).
+* Apart from signing in, invites, the board and private calendar links, **every API endpoint needs a sign-in** (since 0.36.0 that includes `GET /api/venues`, `GET /api/venues/{id}` and `GET /api/venues/{id}/shifts`).
+
+### Calendar sync
+Everyone can see their ShiftBoard calendar in **Google Calendar, Apple Calendar, Outlook or any other calendar app** (Profile → **Calendar sync**, every account type; `CALENDAR_SYNC=false` turns it off).
+* **How it works:** turning a calendar on makes a **private link** (an iCalendar feed, `GET /api/public/calendar/{token}.ics`). The calendar app subscribes to it and checks it on its own schedule: usually every few hours, and Google can take up to a day.
+  * It is **one-way**: nothing done in the calendar app changes ShiftBoard.
+  * Buttons add it to Google, Apple, Outlook.com or Microsoft 365 in one tap; the link can be copied for anything else.
+* **Which calendars a person can turn on** follows their access:
+
+  | Who | Calendars |
+  | :--- | :--- |
+  | Worker | **My shifts** |
+  | Shift lead | My shifts, plus a **venue calendar** for each venue they lead (posted events only) |
+  | Manager | **All my venues**, plus one **venue calendar** per venue |
+  | Owner | the above, plus an **organization calendar** for each organization they own |
+  | Platform admin | **Every venue**, plus any organization's or venue's calendar |
+* **A worker's calendar** tags every shift:
+  * `[Confirmed]` booked
+  * `[REQUESTED]` asked for, waiting on the venue
+  * `[WAITLIST]` in line for a full position
+  * `[OFFERED]` offered to them, not answered yet
+
+  It also shows their time off. Everything except confirmed shifts can be switched off per link. Only confirmed shifts block the time as "busy".
+* **Venue, manager, organization and admin calendars** have one entry per event, such as "Smith Wedding (6/8 filled)", with each position and who is booked in the details. Shifts that aren't part of an event are entries of their own. Managers can add drafts, tagged `[DRAFT]`.
+* **What is never in a calendar:** pay, tips, staff-only notes, private time-off notes, email addresses and phone numbers. Each entry links back to ShiftBoard for the rest.
+* **The link is the key.** Anyone who has it can read that calendar, so it is long and random. **Reset link** replaces it at once; **Turn off** deletes it.
+  * Access is worked out again each time a feed is built (a built feed is reused for up to a minute): a link for a venue someone no longer runs, or for an account that was turned off, shows an empty calendar. Their settings list it as **No longer available** so they can turn it off.
+* Google and Outlook read the link from their own servers, so the site needs a public `https` address. Entries link back to ShiftBoard only when `APP_BASE_URL` is that address.
+* Feeds cover 30 days back and 180 days ahead.
 
 ### For workers
 * **Find shifts**: upcoming events, grouped by day, with filters:
@@ -236,9 +264,11 @@ backend/src/
   models.py          SQLAlchemy models             (every table is also in database/init.sql)
   schemas.py         Pydantic request / response models
   routers/           one file per area (auth, venues, events, shifts, listings, transfers, cover, team, ...)
-                     public.py = no sign-in (config + public board) · organizations.py = owners · lead.py = shift leads
+                     public.py = no sign-in (config + public board + private calendar links) · organizations.py = owners
+                     lead.py = shift leads · calendar_sync.py = Profile → Calendar sync
   services/          the logic (booking, auto_confirm, clock, cover, waitlist, reliability, notify*, ...)
                      access.py = manager / shift-lead checks · organizations.py = owners' venue rows · public_board.py
+                     calendar_feeds.py = who may have which calendar, and what goes in it (never pay)
 frontend/src/
   pages/             WorkerDashboard, VenueManagerDashboard, AdminPanel, EarningsPage, ProfilePage, ...
                      PublicBoardPage (home page when the board is on), LeadPage (/lead), OrganizationPage (/org)
@@ -246,6 +276,7 @@ frontend/src/
   context/AuthContext.jsx, api/client.js   (locked: change only when asked)
   utils/             formatting, time zones, errors, push, version
 database/init.sql    the whole schema (runs on an empty database)
+database/upgrades/   "keep your data" SQL per version, for a database you don't want to wipe
 backend/src/seed.py        starter demo accounts at startup (off with SEED_DEMO_ACCOUNTS=false)
 backend/src/demo_data.py   the full demo data loader: python -m src.demo_data load | reset | clear | status
 deploy_test_data.sh        runs the loader's Docker commands for you: bash deploy_test_data.sh [load | reset | clear | status]
@@ -266,7 +297,7 @@ API docs are live at `/docs` (Swagger) and `/redoc` on the backend.
 * **Time:** all timestamps are `TIMESTAMPTZ`, and all comparisons in Python use timezone-aware UTC (`datetime.now(timezone.utc)`). Venue-local times are only for display and exports.
 * **There is no migration tool.** `init.sql` only runs on an empty database. To apply a schema change, pick one:
   * wipe and rebuild: `docker compose down -v`, then `docker compose up -d --build`
-  * or run that phase's "keep your data" SQL (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, `CREATE ... IF NOT EXISTS`)
+  * or run that phase's "keep your data" SQL (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, `CREATE ... IF NOT EXISTS`), saved as `database/upgrades/<version>.sql` (the command is at the top of each file)
 
 ---
 
@@ -355,6 +386,7 @@ The main settings:
 | Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
 | Sign-in | `SECRET_KEY` (signs every login; must be set; in `stack.env`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS`, `SEED_DEMO_ACCOUNTS` (`false` = clean install, no starter demo accounts) |
 | Home page | `PUBLIC_EVENT_BOARD` (`true` = the home page is the public board of posted shifts; `false` = the sign-in page) |
+| Calendar sync | `CALENDAR_SYNC` (`true` = people can connect Google / Apple / Outlook with a private calendar link; `false` = hidden, and every link stops working). Needs a public `https` `APP_BASE_URL` |
 | Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
 | Links | `APP_BASE_URL`: the public address used in emails, texts and invites |
 | Email | `EMAIL_PROVIDER` (`console` \| `smtp` \| `resend`), `EMAIL_FROM`, `SMTP_*`, `RESEND_API_KEY` |

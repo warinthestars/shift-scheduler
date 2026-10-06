@@ -4,6 +4,32 @@ All notable changes to ShiftBoard. The format follows [Keep a Changelog](https:/
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.36.1] - 2026-10-06 - Phase 36.1: Calendar sync
+
+### Added
+- **Calendar sync** for every account type (Profile → **Calendar sync**): see ShiftBoard in Google Calendar, Apple Calendar, Outlook or any other calendar app.
+  - Turning a calendar on makes a private link (an iCalendar feed) that the calendar app subscribes to. One tap adds it to Google, Apple, Outlook.com or Microsoft 365; the link can be copied for anything else.
+  - It is one-way, and the calendar app decides how often it checks (Google can take up to a day).
+- **Calendars by role:**
+  - Worker: **My shifts**.
+  - Shift lead: also a venue calendar for each venue they lead (posted events only).
+  - Manager: **All my venues** and one calendar per venue.
+  - Owner: also one per organization.
+  - Platform admin: **Every venue**, and any organization's or venue's calendar.
+- **Tags on a worker's shifts:** `[Confirmed]`, `[REQUESTED]`, `[WAITLIST]` and `[OFFERED]`, plus their time off. Everything except confirmed shifts can be switched off per link. Only confirmed shifts show as busy.
+- **Venue calendars** have one entry per event, such as "Smith Wedding (6/8 filled)", with positions and who is booked in the details. Managers can include drafts, tagged `[DRAFT]`.
+- **Reset link** (a new private link; the old one stops at once) and **Turn off**. The settings show when a calendar app last read each link.
+- A **Sync** button on the worker's calendar opens the settings.
+- Setting `CALENDAR_SYNC` (default `true`). `false` hides the settings and stops every link.
+- Table `calendar_feeds`. Endpoints `GET/POST /api/me/calendar-links`, `PUT/DELETE /api/me/calendar-links/{id}`, `POST /api/me/calendar-links/{id}/reset`, and the feed `GET /api/public/calendar/{token}.ics`.
+- `database/upgrades/0.36.1.sql`: the "keep your data" SQL for this version.
+
+### Security
+- A calendar never contains pay, tips, staff-only notes, private time-off notes, email addresses or phone numbers.
+- The link's 43-character random token is its only credential. What it shows is worked out again each time the feed is built (at most a minute old): losing a venue, a shift lead role or the account empties the calendar, and the settings then list the link as "No longer available" so it can be turned off.
+- Titles, notes and names can't inject anything into a calendar: every kind of line break in them is neutralised.
+- The feed is the only new endpoint that works without a sign-in.
+
 ## [0.36.0] - 2026-10-06 - Phase 36: Organizations, owners, shift leads and the public board
 
 ### Added

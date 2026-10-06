@@ -226,6 +226,13 @@ Each phase is sized for one AGY prompt. Where a phase is large it can be split i
 - ✅ **Public event board:** with `PUBLIC_EVENT_BOARD=true` the home page lists posted shifts with minimal details; a worker account is needed to see the rest or to book.
 - ⏳ **Venue sign-up** (a manager creates a venue, and an admin approves or verifies it): not built yet, on purpose. Next when wanted.
 
+### Phase 36.1: Calendar sync (shipped in 0.36.1)
+- ✅ **Private calendar links** for every account type (Profile → Calendar sync): worker, venue, manager, organization and admin calendars that Google, Apple, Outlook and any other calendar app subscribe to. One-way, and never any pay.
+- ✅ A worker's shifts are tagged `[Confirmed]`, `[REQUESTED]`, `[WAITLIST]` and `[OFFERED]`.
+- ⏳ **Later, if wanted:**
+  - **Sign in with Google / Microsoft** to write shifts straight into a calendar within a minute (needs a Google Cloud and a Microsoft app registration, and Google's review).
+  - **Read a worker's own calendar** (they paste its private link) to warn before they request a shift that clashes with something personal.
+
 ### Later / nice to have
 - **Admin "needs attention" dashboard:**
   - unfilled shifts within 48h
