@@ -95,7 +95,7 @@ export default function AdminOverview({ refreshKey = 0, onTab, onOpenVenue }) {
           label="Venues"
           value={data.venues}
           sub={`${data.events_next_7d} event${data.events_next_7d === 1 ? '' : 's'} in the next 7 days`}
-          tone="text-emerald-400"
+          tone="text-brand-400"
           onClick={() => onTab('venues')}
         />
         <StatTile
@@ -141,7 +141,7 @@ export default function AdminOverview({ refreshKey = 0, onTab, onOpenVenue }) {
                 <li key={a.id} className="py-2 text-xs">
                   <div className="text-slate-200">{a.summary}</div>
                   <div className="text-[10px] text-slate-500 mt-0.5">
-                    <span className="text-emerald-300/80 font-semibold">{a.venue_name}</span>
+                    <span className="text-brand-300/80 font-semibold">{a.venue_name}</span>
                     {a.actor_name ? ` · by ${a.actor_name}` : ''} · {ago(a.created_at)}
                   </div>
                 </li>

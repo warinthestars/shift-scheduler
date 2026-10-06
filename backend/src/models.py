@@ -1,6 +1,6 @@
 import uuid
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone   # Phase 36.1: timezone (new tables use aware UTC defaults)
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, Numeric,
     DateTime, ForeignKey, ARRAY, CheckConstraint, UniqueConstraint,   # Phase 34.5: no SQLAlchemy Enum (no native PG ENUMs)
@@ -105,6 +105,33 @@ class User(Base):
     ratings_received = relationship("Rating", back_populates="worker", foreign_keys="Rating.worker_id")
     whitelist_entries = relationship("VenueWhitelist", back_populates="worker", cascade="all, delete-orphan", foreign_keys="VenueWhitelist.worker_id")
 
+class OrgRole(str, Enum):
+    """Phase 36: roles inside an organization. Stored as VARCHAR; checked here (no native PG ENUM)."""
+    owner = "owner"
+
+
+class Organization(Base):
+    """Phase 36: a group of venues with one or more owners. An owner manages every venue in it."""
+    __tablename__ = "organizations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class OrganizationMember(Base):
+    """Phase 36: who owns an organization. services/organizations.py keeps venue_managers in step."""
+    __tablename__ = "organization_members"
+
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    role = Column(String(20), nullable=False, default="owner")               # OrgRole
+    venue_alerts = Column(Boolean, nullable=False, default=False)            # also send this owner each venue's manager alerts
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
 class Venue(Base):
     __tablename__ = "venues"
 
@@ -141,6 +168,9 @@ class Venue(Base):
     tip_pool_split = Column(String(20), nullable=False, default="hours")           # Phase 35.2: hours | equal
     tip_pool_payroll = Column(Boolean, nullable=False, default=True)               # Phase 35.2
     tips_shown_to_workers = Column(Boolean, nullable=False, default=True)          # Phase 35.2
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)  # Phase 36
+    public_board = Column(Boolean, nullable=False, default=True)                   # Phase 36: listed on the public event board
+    city = Column(String(120), nullable=True)                                      # Phase 36: shown on the public board (never the address)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -182,6 +212,7 @@ class VenueManager(Base):
     venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), primary_key=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     is_primary = Column(Boolean, nullable=False, default=False)
+    via_org = Column(Boolean, nullable=False, default=False)                 # Phase 36: row exists because they own the venue's organization
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -201,6 +232,7 @@ class VenueWhitelist(Base):
     source = Column(String(20), nullable=False, default="manager")           # Phase 29: manager | invite | import | admin
     time_tracking = Column(String(20), nullable=True)                        # Phase 35: payroll | shiftboard | None = venue setting
     works_through = Column(String(120), nullable=True)                       # Phase 35: staffing company / agency
+    is_lead = Column(Boolean, nullable=False, default=False)                 # Phase 36: shift lead at this venue (runs the floor, never sees pay)
     added_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -793,3 +825,44 @@ class EventTip(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("idx_event_tips_venue", "venue_id"),)
+
+
+# ------------------------------------------------------------------------------
+# Phase 36.1: Calendar sync (private subscription links)
+# ------------------------------------------------------------------------------
+class CalendarKind(str, Enum):
+    """Phase 36.1: which calendar a link shows. Stored as VARCHAR; checked here (no native PG ENUM)."""
+    worker = "worker"                # the person's own shifts
+    manager = "manager"              # every venue they manage, in one calendar
+    venue = "venue"                  # one venue
+    organization = "organization"    # every venue in an organization
+    admin = "admin"                  # every venue on the platform
+
+
+class CalendarFeed(Base):
+    """Phase 36.1: one private calendar link. The token in the link is the only credential, so it is long,
+    random and replaceable. What the link shows is decided again on every read (services/calendar_feeds.py):
+    a link for a venue the person no longer runs shows an empty calendar. No pay is ever written to a feed."""
+    __tablename__ = "calendar_feeds"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(20), nullable=False)                                # CalendarKind
+    scope_key = Column(String(60), nullable=False)                           # worker | manager | admin | venue:<id> | organization:<id>
+    venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), nullable=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    token = Column(String(64), nullable=False, unique=True)
+    include_requested = Column(Boolean, nullable=False, default=True)        # worker: shifts waiting for an answer
+    include_waitlist = Column(Boolean, nullable=False, default=True)         # worker: waitlisted shifts
+    include_offers = Column(Boolean, nullable=False, default=True)           # worker: offers they haven't answered
+    include_time_off = Column(Boolean, nullable=False, default=True)         # worker: their own time off
+    include_drafts = Column(Boolean, nullable=False, default=False)          # venue calendars: draft events (never for shift leads)
+    last_fetched_at = Column(DateTime(timezone=True), nullable=True)         # last time a calendar app read it
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "scope_key", name="uq_calendar_feed_scope"),
+        Index("idx_calendar_feeds_user", "user_id"),
+    )

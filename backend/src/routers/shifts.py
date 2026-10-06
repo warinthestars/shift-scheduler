@@ -26,6 +26,7 @@ from src.services.booking import request_position, withdraw_other_pending_in_eve
 from src.services.clock import clock_in, clock_out, auto_close_open_entries
 from src.services import notify_events
 from src.services import activity
+from src.services.access import is_shift_lead                      # Phase 36
 
 router = APIRouter(prefix="/api/shifts", tags=["Shifts"])
 
@@ -582,6 +583,10 @@ async def verify_shift_message_access(shift: Shift, user: User, db: AsyncSession
             detail="You are not authorized to view messages for this venue."
         )
 
+    # Phase 36: the venue's shift leads see and post on every shift's chat
+    if await is_shift_lead(db, user, shift.venue_id):
+        return
+
     # Worker access: Must hold an assigned / confirmed request
     req = await db.scalar(
         select(ShiftRequest).where(
@@ -646,6 +651,13 @@ async def post_shift_message(
     db.add(msg)
     await db.commit()
     await db.refresh(msg)
+
+    # Phase 36: "Send to everyone booked": managers, admins and shift leads only (ignored for anyone else)
+    if msg_in.notify and (
+        normalize_role(current_user.role) in ("platform_admin", "super_admin", "venue_manager")
+        or await is_shift_lead(db, current_user, shift.venue_id)
+    ):
+        await notify_events.shift_message(msg.id)        # after commit; never raises
 
     res = await db.execute(
         select(ShiftBoardMessage)

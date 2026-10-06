@@ -189,6 +189,8 @@ class VenueBase(BaseModel):
     tip_pool_split: str = "hours"           # Phase 35.2: hours | equal
     tip_pool_payroll: bool = True           # Phase 35.2: venue-payroll people share tip pools (scheduled hours)
     tips_shown_to_workers: bool = True      # Phase 35.2: workers see their tips in Hours & pay
+    public_board: bool = True               # Phase 36: listed on the public event board
+    city: Optional[str] = None              # Phase 36: shown on the public board (never the address)
 
 class VenueCreate(BaseModel):
     name: str
@@ -248,9 +250,12 @@ class VenueUpdateSettings(BaseModel):
     tip_pool_split: Optional[str] = None              # Phase 35.2: hours | equal
     tip_pool_payroll: Optional[bool] = None           # Phase 35.2
     tips_shown_to_workers: Optional[bool] = None      # Phase 35.2
+    public_board: Optional[bool] = None               # Phase 36
+    city: Optional[str] = Field(None, max_length=120) # Phase 36: "" clears it (the board then works it out from the address)
 
 class VenueResponse(VenueBase):
     id: UUID
+    organization_id: Optional[UUID] = None            # Phase 36
     created_at: datetime
     updated_at: datetime
     total_shifts: Optional[int] = 0
@@ -465,6 +470,7 @@ class ShiftTransferResponse(BaseModel):
 # ------------------------------------------------------------------------------
 class ShiftBoardMessageCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=5000)
+    notify: bool = False                     # Phase 36: managers and shift leads: also send it to everyone booked on the shift
 
 class ShiftBoardMessageResponse(BaseModel):
     id: UUID
@@ -1220,6 +1226,7 @@ class TeamMember(BaseModel):
     time_tracking: Optional[str] = None      # Phase 35: this person's setting: payroll | shiftboard | None = venue setting
     effective_time_tracking: str = "shiftboard"   # Phase 35: what applies to their next booking
     works_through: Optional[str] = None      # Phase 35: staffing company / agency
+    is_lead: bool = False                    # Phase 36: shift lead at this venue
 
 
 class TeamMemberUpdate(BaseModel):
@@ -1228,6 +1235,7 @@ class TeamMemberUpdate(BaseModel):
     notes: Optional[str] = None
     time_tracking: Optional[str] = None      # Phase 35: payroll | shiftboard | venue (or null) = use the venue setting
     works_through: Optional[str] = Field(None, max_length=120)   # Phase 35: "" clears it
+    is_lead: Optional[bool] = None           # Phase 36: make / stop being a shift lead (active team members only)
 
 
 class TeamMemberUpdateResult(BaseModel):
@@ -1265,6 +1273,8 @@ class VenueManagerItem(BaseModel):
     phone: Optional[str] = None
     is_primary: bool = False
     is_you: bool = False
+    via_org: bool = False                    # Phase 36: manages this venue as an owner of its organization
+    organization_name: Optional[str] = None  # Phase 36
 
 
 class ManagerCreate(BaseModel):
@@ -2293,3 +2303,246 @@ class EventTipsUpdate(BaseModel):
 WorkerProfile.model_rebuild()
 EventListing.model_rebuild()   # Phase 32.3: series is a list of EventListing
 MyProfile.model_rebuild()
+
+
+# ------------------------------------------------------------------------------
+# Phase 36: Organizations, owners, shift leads and the public event board
+# ------------------------------------------------------------------------------
+class OrgOwner(BaseModel):
+    user_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: str
+    phone: Optional[str] = None
+    venue_alerts: bool = False               # also gets each venue's manager alerts
+    is_you: bool = False
+
+
+class OrgVenue(BaseModel):
+    id: UUID
+    name: str
+    city: Optional[str] = None
+    timezone: str = "America/New_York"
+    managers: int = 0                        # managers assigned directly (owners not counted)
+    public_board: bool = True
+
+
+class OrganizationDetail(BaseModel):
+    id: UUID
+    name: str
+    owners: List[OrgOwner] = []
+    venues: List[OrgVenue] = []
+    is_owner: bool = False                   # the viewer owns it (false for a platform admin who doesn't)
+    created_at: Optional[datetime] = None
+
+
+class OrganizationCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    venue_ids: List[UUID] = []
+
+
+class OrganizationUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class OrgOwnerAdd(BaseModel):
+    email: str
+    first_name: str = ""
+    last_name: str = ""
+    phone: Optional[str] = None
+
+
+class OrgVenueAdd(BaseModel):
+    venue_id: UUID
+
+
+class OrgMyUpdate(BaseModel):
+    venue_alerts: bool
+
+
+class OrgChangeResult(BaseModel):
+    organization: OrganizationDetail
+    message: str = "Saved."
+    warnings: List[str] = []                 # e.g. "Harbor House has no manager now."
+    created: bool = False                    # a new manager account was made for the owner
+    temporary_password: Optional[str] = None # shown once
+
+
+class OrgVenueToday(BaseModel):
+    venue_id: UUID
+    name: str
+    city: Optional[str] = None
+    timezone: str = "America/New_York"
+    events_today: int = 0
+    live_now: int = 0                        # events running right now
+    booked_today: int = 0
+    clocked_in: int = 0
+    late: int = 0                            # late + not clocked in yet after the start
+    open_spots_today: int = 0
+    open_spots_week: int = 0                 # today + 6 days, published events
+    requests_waiting: int = 0                # today + 6 days
+    events_week: int = 0
+    next_event_title: Optional[str] = None
+    next_event_start: Optional[datetime] = None
+
+
+class OrgOverview(BaseModel):
+    organization_id: UUID
+    name: str
+    now: datetime
+    venues: List[OrgVenueToday] = []
+    totals: dict = {}
+
+
+class OrgPersonVenue(BaseModel):
+    venue_id: UUID
+    venue_name: str
+    status: str = "active"                   # active | removed | blocked
+    positions: List[str] = []
+    is_lead: bool = False
+    shifts_worked: int = 0
+    upcoming: int = 0
+    works_through: Optional[str] = None
+
+
+class OrgPerson(BaseModel):
+    worker_id: UUID
+    first_name: str = ""
+    last_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    aggregate_rating: float = 5.0
+    rating_count: int = 0
+    venues: List[OrgPersonVenue] = []        # only venues in this organization
+
+
+class OrgShareBody(BaseModel):
+    to_venue_ids: List[UUID]
+    from_venue_id: Optional[UUID] = None     # copy their positions and staffing company from here
+    mode: str = "copy"                       # copy | move (move also takes them off the from venue's team)
+
+
+class OrgShareSkip(BaseModel):
+    venue_name: str
+    reason: str
+
+
+class OrgShareResult(BaseModel):
+    added: List[str] = []                    # venue names
+    skipped: List[OrgShareSkip] = []
+    moved: bool = False
+    message: str = ""
+    person: Optional[OrgPerson] = None
+
+
+class LeadVenue(BaseModel):
+    venue_id: UUID
+    name: str
+    timezone: str = "America/New_York"
+
+
+class LeadTimesPerson(BaseModel):
+    """A booked person's clock times. No pay fields, by design."""
+    request_id: UUID
+    worker_id: UUID
+    name: str
+    shift_id: UUID
+    role_type: str
+    status: str
+    status_reason: Optional[str] = None
+    entries: List[TimeEntryRow] = []
+    total_hours: float = 0
+    time_tracking: str = "shiftboard"
+    is_you: bool = False                     # leads can't change their own times
+
+
+class LeadTimes(BaseModel):
+    event_id: UUID
+    venue_id: UUID
+    title: str
+    start_time: datetime
+    end_time: datetime
+    timezone: str
+    cancelled: bool = False
+    started: bool = False
+    people: List[LeadTimesPerson] = []
+    total_hours: float = 0
+
+
+class PublicBoardPosition(BaseModel):
+    name: str
+    open_spots: int = 0
+
+
+class PublicBoardEvent(BaseModel):
+    """What someone who isn't signed in may see. No pay, no address, no notes, no venue id."""
+    event_id: UUID
+    title: str
+    start_time: datetime
+    end_time: datetime
+    timezone: str = "America/New_York"
+    venue_name: str
+    city: Optional[str] = None
+    positions: List[PublicBoardPosition] = []
+    open_spots: int = 0
+    full: bool = False
+
+
+class PublicBoard(BaseModel):
+    events: List[PublicBoardEvent] = []
+    days: int = 60
+    generated_at: datetime
+
+
+class PublicConfig(BaseModel):
+    public_board: bool = False
+    self_registration: bool = True
+
+
+# ------------------------------------------------------------------------------
+# Phase 36.1: Calendar sync (private subscription links)
+# ------------------------------------------------------------------------------
+class CalendarLink(BaseModel):
+    """One calendar this person can connect. `id` and the addresses are None until they turn it on."""
+    kind: str                                # worker | manager | venue | organization | admin
+    scope_key: str
+    name: str
+    description: str
+    venue_id: Optional[UUID] = None
+    organization_id: Optional[UUID] = None
+    shift_lead: bool = False                 # a venue calendar a shift lead gets (never drafts)
+    available: bool = True                   # False = they turned it on, then lost access: empty calendar, can only be turned off
+    options: List[str] = []                  # which include_* switches apply to this calendar
+    id: Optional[UUID] = None                # set = turned on
+    url: Optional[str] = None                # https address of the feed
+    webcal_url: Optional[str] = None         # same address as webcal:// (Apple Calendar and most phone apps)
+    google_url: Optional[str] = None
+    outlook_url: Optional[str] = None        # outlook.com
+    office_url: Optional[str] = None         # Microsoft 365 (work or school)
+    include_requested: bool = True
+    include_waitlist: bool = True
+    include_offers: bool = True
+    include_time_off: bool = True
+    include_drafts: bool = False
+    last_fetched_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+class CalendarLinks(BaseModel):
+    enabled: bool = True                     # CALENDAR_SYNC
+    public_address_ok: bool = True           # False = the site address is local, so Google / Outlook can't reach it
+    calendars: List[CalendarLink] = []
+
+
+class CalendarLinkCreate(BaseModel):
+    kind: str
+    venue_id: Optional[UUID] = None
+    organization_id: Optional[UUID] = None
+
+
+class CalendarLinkUpdate(BaseModel):
+    include_requested: Optional[bool] = None
+    include_waitlist: Optional[bool] = None
+    include_offers: Optional[bool] = None
+    include_time_off: Optional[bool] = None
+    include_drafts: Optional[bool] = None

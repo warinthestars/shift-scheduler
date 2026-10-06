@@ -167,7 +167,7 @@ export default function AdminActivity({ refreshKey = 0, venues = [], initialLog 
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm text-slate-200">{a.summary}</span>
                       <span className="block text-[11px] text-slate-500 mt-0.5">
-                        <span className="text-emerald-300/80 font-semibold">{a.venue_name}</span>
+                        <span className="text-brand-300/80 font-semibold">{a.venue_name}</span>
                         {a.actor_name ? ` · by ${a.actor_name}` : ''} · <span title={fmtDateTime(a.created_at)}>{ago(a.created_at)}</span>
                       </span>
                     </span>

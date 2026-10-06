@@ -98,7 +98,7 @@ async def evaluate_shift_request(
     venue: Venue
 ) -> Tuple[RequestStatus, Optional[str]]:
     """
-    ShiftBoard Auto-Confirm Engine. Looks up the whitelist, asks decide_approval(),
+    ShiftUp Auto-Confirm Engine. Looks up the whitelist, asks decide_approval(),
     and runs the double-booking check when the answer is APPROVED.
     """
     whitelist_id = await db.scalar(

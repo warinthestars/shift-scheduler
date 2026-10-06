@@ -187,7 +187,7 @@ async def send_test(
     """Sends yourself a test through every channel you have turned on (email / text within a minute)."""
     await notify(
         [current_user.id], "test", "Test notification",
-        "If you can read this, ShiftBoard can reach you here.", "/",
+        "If you can read this, ShiftUp can reach you here.", "/",
         urgent=True,
     )
     return await unread_count(current_user, db)
@@ -315,7 +315,7 @@ async def push_test(
     """Send a test to every device you turned on, right now (not through the outbox)."""
     try:
         reached, err = await webpush.send_to_user(db, current_user.id, {
-            "title": "ShiftBoard notifications are on",
+            "title": "ShiftUp notifications are on",
             "body": "This is how shift updates will reach this device.",
             "url": "/", "tag": "push-test", "urgent": False,
         })

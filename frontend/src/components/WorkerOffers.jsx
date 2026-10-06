@@ -30,7 +30,7 @@ export default function WorkerOffers({ offers = [], busyId, onAccept, onDecline 
                 {fmtDate(o.start_time, o.venue_timezone)} · {fmtTimeRange(o.start_time, o.end_time, o.venue_timezone)}
               </div>
               <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
-                <PayLabel rate={o.hourly_rate} rateMax={o.hourly_rate_max} className="text-emerald-400 font-semibold" />
+                <PayLabel rate={o.hourly_rate} rateMax={o.hourly_rate_max} className="text-brand-400 font-semibold" />
                 <TipBadge shift={o} />
                 {(o.location_name || o.address) && (
                   <span className="inline-flex items-center gap-1 text-slate-400">
@@ -52,7 +52,7 @@ export default function WorkerOffers({ offers = [], busyId, onAccept, onDecline 
                 <X className="w-4 h-4" /> Decline
               </button>
               <button type="button" onClick={() => onAccept(o)} disabled={busy}
-                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+                className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
                 <Check className="w-4 h-4" /> {busy ? '…' : 'Accept'}
               </button>
             </div>

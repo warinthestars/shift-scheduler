@@ -131,8 +131,8 @@ async def send_invite(inv: VenueInvite, venue: Venue, inviter_name: str, base: O
     url = invite_url(inv.token, base)
     first = (inv.first_name or "").strip()
     hello = f"Hi {first}, " if first else ""
-    title = f"Join {venue.name} on ShiftBoard"
-    body = (f"{hello}{inviter_name} invited you to join the {team_name(venue.name)} team on ShiftBoard. "
+    title = f"Join {venue.name} on ShiftUp"
+    body = (f"{hello}{inviter_name} invited you to join the {team_name(venue.name)} team on ShiftUp. "
             "You'll see their open shifts, can book them and get reminders.\n\n"
             "Tap the button to create your account (or sign in) and join. The link works for 14 days.")
     emailed = texted = False
@@ -147,7 +147,7 @@ async def send_invite(inv: VenueInvite, venue: Venue, inviter_name: str, base: O
             logger.exception("invite email failed")
     if inv.phone and sms_available() and normalize_phone(inv.phone):
         try:
-            ok, err = await send_sms(inv.phone, f"{inviter_name} invited you to join {venue.name} on ShiftBoard: {url}")
+            ok, err = await send_sms(inv.phone, f"{inviter_name} invited you to join {venue.name} on ShiftUp: {url}")
             texted = bool(ok)
         except Exception:
             logger.exception("invite sms failed")

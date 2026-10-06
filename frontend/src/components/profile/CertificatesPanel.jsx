@@ -5,7 +5,7 @@ import ConfirmDialog from '../ConfirmDialog';
 import { uploadFile, openProtectedFile } from '../../utils/files';
 import { fmtDay } from '../../utils/availability';
 
-const inputCls = 'mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+const inputCls = 'mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 
 export function certState(c) {
   if (!c) return ['Not added', 'bg-slate-800 text-slate-400 border-slate-700', null];
@@ -188,7 +188,7 @@ function CertForm({ type, cert, onCancel, onSaved, onError }) {
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-slate-700">Cancel</button>
         <button type="button" onClick={save} disabled={busy || (type.expires && !expires)}
-          className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+          className="px-4 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
           <Save className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save'}
         </button>
       </div>

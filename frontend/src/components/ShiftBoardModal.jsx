@@ -6,7 +6,7 @@ import { useModalLayer } from './modalLayer';
 /**
  * Phase 25.3: Discussion board overlay. Always renders above ModalShell (z-[60]).
  */
-export default function ShiftBoardModal({ shiftId, shiftTitle, currentUserRole, onClose }) {
+export default function ShiftBoardModal({ shiftId, shiftTitle, currentUserRole, onClose, canNotify = null }) {
   useModalLayer(onClose);
 
   return createPortal(
@@ -17,7 +17,7 @@ export default function ShiftBoardModal({ shiftId, shiftTitle, currentUserRole, 
       }}
     >
       <div className="max-w-2xl w-full">
-        <ShiftBoard shiftId={shiftId} shiftTitle={shiftTitle} currentUserRole={currentUserRole} onClose={onClose} />
+        <ShiftBoard shiftId={shiftId} shiftTitle={shiftTitle} currentUserRole={currentUserRole} onClose={onClose} canNotify={canNotify} />
       </div>
     </div>,
     document.body

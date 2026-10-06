@@ -1,4 +1,4 @@
-# Deploying ShiftBoard: with or without demo data
+# Deploying ShiftUp: with or without demo data
 
 There are two separate kinds of demo content. You choose each one on its own.
 
@@ -15,7 +15,7 @@ Pick the setup you want:
 | **B. Starter accounts only** | Quick local development. This is what you get by default. | [B](#b-starter-demo-accounts-only-the-default) |
 | **C. Full demo data in your current stack** | Showing or testing a busy system, next to whatever is already there. | [C](#c-full-demo-data-in-your-current-stack) |
 | **D. Full demo data in a separate copy** | The same, but in its own database so your current data and testers aren't affected. | [D](#d-full-demo-data-in-a-separate-copy) |
-| **E. Two stacks on one computer** | A second, fully separate ShiftBoard (for example prod next to dev) with its own code, settings, database and public address. | [E](#e-two-stacks-on-one-computer-for-example-dev-and-prod) |
+| **E. Two stacks on one computer** | A second, fully separate ShiftUp (for example prod next to dev) with its own code, settings, database and public address. | [E](#e-two-stacks-on-one-computer-for-example-dev-and-prod) |
 
 ---
 
@@ -54,6 +54,8 @@ Rules that apply everywhere:
    SHOW_DEMO_LOGINS=false
    ```
 2. Still in `.env`, set the first admin: `SUPER_ADMIN_USERNAME=you@yourdomain.com`. Put the password in `.secrets/stack.env` as `SUPER_ADMIN_PASSWORD`. Optionally list people who should always be admins when they sign in with Firebase: `ALWAYS_ADMIN_EMAILS=you@yourdomain.com,partner@yourdomain.com`.
+   Also decide what the home page is: `PUBLIC_EVENT_BOARD=true` shows a public board of posted shifts to people who aren't signed in (event name, time, venue, city and open spots only); `false` (the default) shows the sign-in page.
+   Calendar sync (Profile → Calendar sync) is on unless you set `CALENDAR_SYNC=false`. Google and Outlook read each person's private calendar link from their own servers, so set `APP_BASE_URL` to the site's public `https` address.
 3. Start it: `docker compose up -d --build` (new install) or `docker compose up -d --force-recreate` (existing one).
 4. Check: sign in as the admin. Admin → Venues is empty and Admin → People lists only you.
 
@@ -130,7 +132,8 @@ It prints the logins when it finishes:
 | Manager | `manager.copperline@demo.example.com` | Copperline Taproom |
 | Manager | `manager.juniper@demo.example.com` | Juniper Rooftop |
 | Manager | `manager.riverside@demo.example.com` | Riverside Convention Center |
-| Manager | `regional.manager@demo.example.com` | Harbor House + Copperline |
+| Owner | `regional.manager@demo.example.com` | Whitaker Hospitality Group: Harbor House + Copperline, and the Organization page |
+| Shift lead | `lead.marlowe@demo.example.com` (also `lead.harbor`, `lead.copperline`, `lead.juniper`, `lead.riverside`) | their own shifts, plus the Lead view for that venue |
 | Workers | any address ending `@demo.example.com` (Admin → People, or a venue's Team list) | their own shifts |
 | Your admins | their normal login | every demo venue, in the venue picker |
 
@@ -140,8 +143,8 @@ It prints the logins when it finishes:
 
 | Venue | Time zone | Set up to show |
 | :--- | :--- | :--- |
-| The Marlowe Theatre | New York | Team on **venue payroll**; overhire through three **staffing companies** clocks in with ShiftBoard; pay every two weeks; daily + weekly overtime; bar tip pool |
-| Harbor House Events | Chicago | ShiftBoard clock-in with the **location check** on; off-site locations; tip pools by hours; weekly pay periods (one was reopened); a week with **weekly overtime** |
+| The Marlowe Theatre | New York | Team on **venue payroll**; overhire through three **staffing companies** clocks in with ShiftUp; pay every two weeks; daily + weekly overtime; bar tip pool |
+| Harbor House Events | Chicago | ShiftUp clock-in with the **location check** on; off-site locations; tip pools by hours; weekly pay periods (one was reopened); a week with **weekly overtime** |
 | Copperline Taproom | Denver | **Book anyone instantly**; tips shared equally plus servers' own tips; pay twice a month; work week starts Wednesday |
 | Juniper Rooftop | Los Angeles | **Manager approves everyone** (requests waiting); pay hidden; tips off; approving pay periods off; no public cover board |
 | Riverside Convention Center | New York | Venue payroll + staffing companies; long days (**daily overtime**); payroll people left out of tip pools; location check on |
@@ -229,7 +232,7 @@ Or both steps in one: `bash deploy_test_data.sh load --demo-copy --start` (Power
 
 ## E. Two stacks on one computer (for example dev and prod)
 
-Use this to run a second, fully separate ShiftBoard next to the one you already have. Each stack has its own folder, code, settings files, database, ports and public address.
+Use this to run a second, fully separate ShiftUp next to the one you already have. Each stack has its own folder, code, settings files, database, ports and public address.
 
 What keeps them apart:
 
@@ -325,5 +328,6 @@ docker compose start backend
 | `--manager-email ...: no such account, skipped` | That person hasn't signed in or been created yet. Create them (Admin → People), then run `reset` with the option again. |
 | A demo login is refused | The password is whatever `--password` was at the last load (`Demo12345!` by default). Demo accounts use the email + password form, not Google. |
 | `service "backend" is not running` | Start the stack first: `docker compose up -d`. |
+| Google or Outlook says it can't add a ShiftUp calendar, or it never updates | Their servers must be able to open the link: the site needs a public `https` address, and anything in front of it (a Cloudflare Access rule, a bot challenge, a login wall) must let `/api/public/calendar/` through. Open the link in a private browser window: it should download a calendar file. Google can take up to a day to show changes. |
 | `Bind for 0.0.0.0:5432 failed: port is already allocated` (any port) | Another stack on this computer already uses that port. Give this stack its own ports in `.env` (section E). |
 | A second stack shows the first stack's data, or starting it replaced the first stack's containers | Both folders have the same stack name. Set `COMPOSE_PROJECT_NAME` in the second folder's `.env` (section E), then run `docker compose up -d --force-recreate` in the first folder and then in the second. |

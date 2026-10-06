@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Calendar, Building2, MapPin, Check, AlertTriangle, LogOut } from 'lucide-react';
+import { Building2, MapPin, Check, AlertTriangle, LogOut } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';   // Phase 37
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 
@@ -87,14 +88,9 @@ export default function JoinPage() {
     });
 
   const shell = (children) => (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 px-4 text-slate-100">
+    <div className="min-h-screen bg-black flex flex-col justify-center py-12 px-4 text-slate-100">
       <div className="text-center mb-6">
-        <div className="inline-flex w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 items-center justify-center shadow-xl shadow-emerald-500/20 mb-3">
-          <Calendar className="w-7 h-7 text-slate-950" />
-        </div>
-        <h1 className="text-2xl font-extrabold text-white">
-          Shift<span className="text-emerald-400">Board</span>
-        </h1>
+        <h1><BrandLogo variant="stack" className="h-32" /></h1>
       </div>
       <div className="w-full max-w-md mx-auto bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4">{children}</div>
     </div>
@@ -106,7 +102,7 @@ export default function JoinPage() {
     return shell(
       <>
         <div className="flex items-start gap-2 text-rose-200 text-sm"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> {error || invite?.reason}</div>
-        <Link to="/" className="block text-center text-sm text-emerald-400 hover:underline">Go to ShiftBoard</Link>
+        <Link to="/" className="block text-center text-sm text-brand-400 hover:underline">Go to ShiftUp</Link>
       </>
     );
   }
@@ -134,7 +130,7 @@ export default function JoinPage() {
       <>
         {venueHeader}
         <div className="flex items-start gap-2 text-amber-200 text-sm"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> {invite?.reason}</div>
-        <Link to="/" className="block text-center text-sm text-emerald-400 hover:underline">Go to ShiftBoard</Link>
+        <Link to="/" className="block text-center text-sm text-brand-400 hover:underline">Go to ShiftUp</Link>
       </>
     );
   }
@@ -146,10 +142,10 @@ export default function JoinPage() {
         <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/40 text-emerald-100 text-sm flex items-start gap-2">
           <Check className="w-5 h-5 flex-shrink-0" />
           {joined?.already_member ? `You're already on the ${joined.venue_name} team.` : `You're on the ${joined?.venue_name} team.`}
-          {' '}You'll see their shifts in Find shifts and get alerts when they post new ones.
+          {' '}You'll see their shifts on the ShiftBoard and get alerts when they post new ones.
         </div>
         <button type="button" onClick={() => navigate('/worker', { replace: true })}
-          className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm">
+          className="w-full py-2.5 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold text-sm">
           See open shifts
         </button>
       </>
@@ -161,7 +157,7 @@ export default function JoinPage() {
       <>
         {venueHeader}
         <div className="flex items-start gap-2 text-rose-200 text-sm"><AlertTriangle className="w-5 h-5 flex-shrink-0" /> {error}</div>
-        <Link to="/" className="block text-center text-sm text-emerald-400 hover:underline">Go to ShiftBoard</Link>
+        <Link to="/" className="block text-center text-sm text-brand-400 hover:underline">Go to ShiftUp</Link>
       </>
     );
   }
@@ -188,7 +184,7 @@ export default function JoinPage() {
     <>
       {venueHeader}
       <p className="text-sm text-slate-200">
-        {invite.first_name ? `Hi ${invite.first_name}! ` : ''}You're invited to join the <strong>{invite.venue_name}</strong> team on ShiftBoard:
+        {invite.first_name ? `Hi ${invite.first_name}! ` : ''}You're invited to join the <strong>{invite.venue_name}</strong> team on ShiftUp:
         see their shifts, book them from your phone and get reminders.
       </p>
       {invite.positions?.length > 0 && (
@@ -199,7 +195,7 @@ export default function JoinPage() {
         </div>
       )}
       <button type="button" onClick={() => goLogin('register')}
-        className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm">
+        className="w-full py-2.5 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold text-sm">
         Create my account
       </button>
       <button type="button" onClick={() => goLogin('signin')}

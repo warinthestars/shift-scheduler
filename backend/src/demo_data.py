@@ -1,5 +1,5 @@
 """
-Phase 35.3: demo data. Fills a ShiftBoard database with a realistic "has been running for a while" example:
+Phase 35.3: demo data. Fills a ShiftUp database with a realistic "has been running for a while" example:
 several venues set up differently, about 70 people, weeks of finished events with clock-ins, tips, ratings and
 pay periods, events happening today, and upcoming events with requests, offers, cover requests and waitlists.
 
@@ -39,7 +39,7 @@ from sqlalchemy import delete, func, select
 from src.auth import get_password_hash
 from src.database import AsyncSessionLocal, Base
 from src.models import (
-    CoverRequest, EventTemplate, EventTip, NotificationPreference, PayPeriodApproval, Rating, Shift,
+    CoverRequest, EventTemplate, EventTip, NotificationPreference, Organization, OrganizationMember, PayPeriodApproval, Rating, Shift,
     ShiftBoardMessage, ShiftEvent, ShiftOffer, ShiftRequest, ShiftTransfer, TimeEntry, TimeEntryEdit, TimeOffBlock,
     User, Venue, VenueActivity, VenueInvite, VenueLocation, VenueManager, VenuePosition, VenueWhitelist,
     WaitlistEntry, WorkerAvailability, WorkerCertification,
@@ -58,6 +58,10 @@ UTC = timezone.utc
 
 def uid(key: str) -> uuid.UUID:
     return uuid.uuid5(NS, key)
+
+
+ORG_NAME = "Whitaker Hospitality Group"          # Phase 36: the demo organization (Harbor House + Copperline)
+ORG_IDS = [uid("org:whitaker")]
 
 
 # ------------------------------------------------------------------------------------------------
@@ -132,6 +136,7 @@ VENUES = [
         settings=dict(approval_policy="everyone_auto", team_time_tracking="shiftboard", pay_period="semimonthly",
                       ot_weekly_hours=40, ot_daily_hours=None, work_week_start=2, tips_enabled=True,
                       tip_pool_split="equal", geofence_enabled=False,
+                      city="RiNo, Denver",                                    # Phase 36: typed city for the public board
                       arrival_instructions="Side door by the patio. Aprons are behind the bar.",
                       dress_code="Copperline tee (we have spares), jeans, closed-toe shoes."),
         positions=[("Bartender", "bar", 15, None, True, True, ["alcohol_server"]), ("Barback", "bar", 16, None, True, True, []),
@@ -152,6 +157,7 @@ VENUES = [
         settings=dict(approval_policy="manual", team_time_tracking="shiftboard", pay_period="monthly",
                       pay_period_approval=False, ot_weekly_hours=40, ot_daily_hours=8, tips_enabled=False,
                       show_rates_publicly=False, allow_public_cover=False, geofence_enabled=False,
+                      public_board=False,                                     # Phase 36: this venue stays off the public board
                       arrival_instructions="Check in with the host stand on 12. Staff lockers on 11.",
                       dress_code="All black, elevated. No logos."),
         positions=[("Host", "foh", 19, None, False, False, []), ("Server", "foh", 17, None, False, False, []),
@@ -824,8 +830,20 @@ class Seeder:
             added_by_user_id=built[4]["mgr"].id))
         built[4]["by_role"]["Setup Crew"].append(both)
         regional = self.person("venue_manager", "Sam", "Whitaker", f"regional.manager@{DOMAIN}", bio="Regional operations manager.")
+        # Phase 36: those two venues are one organization, and the regional manager owns it. An owner's
+        # venue rows are via_org (the same rows services/organizations.sync_managers() would make).
+        opened = self.now - timedelta(days=self.weeks_back * 7 + 30)
+        org = self.add(Organization(id=ORG_IDS[0], name=ORG_NAME, created_at=opened, updated_at=opened))
+        self.add(OrganizationMember(organization_id=org.id, user_id=regional.id, role="owner", venue_alerts=False,
+                                    created_at=opened))
         for v in (built[1], built[2]):
-            self.add(VenueManager(venue_id=v["venue"].id, user_id=regional.id, is_primary=False))
+            v["venue"].organization_id = org.id
+            self.add(VenueManager(venue_id=v["venue"].id, user_id=regional.id, is_primary=False, via_org=True))
+        # Phase 36: one shift lead per venue (a reliable team member), with an easy login
+        for v in built:
+            wid = next((w for w in v["members"] if self.profile.get(w) == "ace"), next(iter(v["members"])))
+            v["members"][wid].is_lead = True
+            self.users[wid].email = f"lead.{v['spec']['key']}@{DOMAIN}"
         # a brand-new team member with no history, and one removed, one blocked
         for v in built:
             newbie = self.person(tz=v["spec"]["tz"], bio="Just joined the team.")
@@ -893,6 +911,7 @@ async def status(db):
 async def clear(db):
     """Delete the demo venues and demo accounts. Everything attached to them goes with them (ON DELETE CASCADE)."""
     v = (await db.execute(delete(Venue).where(Venue.id.in_(VENUE_IDS)))).rowcount
+    await db.execute(delete(Organization).where(Organization.id.in_(ORG_IDS)))      # Phase 36: the demo organization
     u = (await db.execute(delete(User).where(User.email.like(f"%@{DOMAIN}")))).rowcount
     return v, u
 
@@ -908,7 +927,7 @@ def show(st):
 
 
 async def main(argv=None):
-    ap = argparse.ArgumentParser(prog="python -m src.demo_data", description="Load or remove ShiftBoard demo data.")
+    ap = argparse.ArgumentParser(prog="python -m src.demo_data", description="Load or remove ShiftUp demo data.")
     ap.add_argument("command", choices=["status", "load", "reset", "clear"])
     ap.add_argument("--weeks-back", type=int, default=8)
     ap.add_argument("--weeks-ahead", type=int, default=3)
@@ -950,7 +969,10 @@ async def main(argv=None):
         print("Managers:")
         for s in VENUES:
             print(f"  manager.{s['key']}@{DOMAIN:<18}  {s['name']}")
-        print(f"  regional.manager@{DOMAIN}   Harbor House Events + Copperline Taproom")
+        print(f"  regional.manager@{DOMAIN}   owner of {ORG_NAME} (Harbor House Events + Copperline Taproom)")
+        print("Shift leads (worker accounts with a Lead view):")
+        for s in VENUES:
+            print(f"  lead.{s['key']}@{DOMAIN:<21}  {s['name']}")
         print(f"Workers: Admin -> Users, or any venue's Team list. They all end in @{DOMAIN}.")
         print("Existing admins see every demo venue in the venue picker.")
 

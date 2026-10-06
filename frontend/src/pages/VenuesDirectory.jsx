@@ -53,7 +53,7 @@ export default function VenuesDirectory() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by name or neighborhood"
-              className="w-full pl-9 pr-3 py-3 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
+              className="w-full pl-9 pr-3 py-3 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500"
             />
           </div>
         </div>
@@ -88,7 +88,7 @@ export default function VenuesDirectory() {
 
                   <div className="flex flex-wrap items-center gap-2 mt-3">
                     {v.open_spots > 0 ? (
-                      <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-brand-500/15 text-brand-400 border border-brand-500/30">
                         {v.open_spots} open spot{v.open_spots === 1 ? '' : 's'}
                       </span>
                     ) : v.upcoming_shift_count > 0 ? (
@@ -102,7 +102,7 @@ export default function VenuesDirectory() {
                     )}
                     {v.show_rates_publicly && v.rate_min != null && (
                       <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-200 border border-slate-700 inline-flex items-center gap-1">
-                        <DollarSign className="w-3 h-3 text-emerald-400" />
+                        <DollarSign className="w-3 h-3 text-brand-400" />
                         {v.rate_min === v.rate_max
                           ? `${v.rate_min.toFixed(0)}/hr`
                           : `${v.rate_min.toFixed(0)}–${v.rate_max.toFixed(0)}/hr`}

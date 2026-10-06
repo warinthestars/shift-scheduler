@@ -5,7 +5,7 @@ import api from '../api/client';
 /**
  * Phase 33: the installed app (PWA) and Web Push on THIS device.
  * Phase 33.0.1: when the server has Firebase messaging set up (GET /notifications/push -> provider 'fcm'),
- * devices register a Firebase token instead; otherwise ShiftBoard's own Web Push is used. Either way the
+ * devices register a Firebase token instead; otherwise ShiftUp's own Web Push is used. Either way the
  * messages land in public/sw.js.
  * Nothing here throws at import time; every helper is safe on browsers without push.
  */
@@ -110,7 +110,7 @@ async function subscribeFcm(reg, cfg) {
   if (!(await messagingSupported().catch(() => false))) {
     return saveSubscription(await subscribeFresh(reg, cfg.public_key));
   }
-  // A subscription made with ShiftBoard's own key would block Firebase's: remove it first.
+  // A subscription made with ShiftUp's own key would block Firebase's: remove it first.
   const existing = await reg.pushManager.getSubscription();
   if (existing && !sameKey(existing, cfg.fcm_vapid_key)) {
     await api.post('/notifications/push/unsubscribe', { endpoint: existing.endpoint }).catch(() => {});
@@ -143,16 +143,16 @@ async function subscribeFresh(reg, publicKey) {
 /** Ask permission (must be called from a tap), subscribe this device and save it. Returns { public_key, devices }. */
 export async function enablePush() {
   const state = permissionState();
-  if (state === 'needs_install') throw new Error('Add ShiftBoard to your Home Screen first, then open it from there.');
+  if (state === 'needs_install') throw new Error('Add ShiftUp to your Home Screen first, then open it from there.');
   if (state === 'unsupported') throw new Error("This browser can't show notifications.");
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') {
     throw new Error(permission === 'denied'
-      ? 'Notifications are blocked for ShiftBoard. Allow them in your browser or phone settings.'
+      ? 'Notifications are blocked for ShiftUp. Allow them in your browser or phone settings.'
       : 'Notifications were not turned on.');
   }
   const reg = await swRegistration();
-  if (!reg) throw new Error('Open ShiftBoard from its usual web address (https://…) to turn on notifications.');
+  if (!reg) throw new Error('Open ShiftUp from its usual web address (https://…) to turn on notifications.');
   const { data } = await api.get('/notifications/push');
   if (data.provider === 'fcm') return subscribeFcm(reg, data);          // Phase 33.0.1
   const sub = await subscribeFresh(reg, data.public_key);

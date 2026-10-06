@@ -5,7 +5,7 @@ import LocationFields, { blankLocationDraft, locationToDraft, draftToPayload } f
 import { locationPatchBody } from './VenueLocationsPanel';
 
 const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 
 /**
  * Phase 27: "Where" on Post / Edit a Shift.
@@ -147,7 +147,7 @@ export default function EventLocationPicker({ venue, value, onChange }) {
           <div className="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
             <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={pickVenue}
               className="w-full text-left px-3 py-2 hover:bg-slate-800 flex items-start gap-2">
-              <Building2 className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+              <Building2 className="w-4 h-4 text-brand-400 mt-0.5 flex-shrink-0" />
               <span className="min-w-0">
                 <span className="block text-sm text-white">Venue address</span>
                 <span className="block text-[11px] text-slate-400 truncate">{venue?.address}</span>
@@ -156,7 +156,7 @@ export default function EventLocationPicker({ venue, value, onChange }) {
             {matches.map((loc) => (
               <button key={loc.id} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => pickSaved(loc)}
                 className="w-full text-left px-3 py-2 hover:bg-slate-800 flex items-start gap-2 border-t border-slate-800">
-                <MapPin className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                <MapPin className="w-4 h-4 text-brand-400 mt-0.5 flex-shrink-0" />
                 <span className="min-w-0">
                   <span className="block text-sm text-white truncate">{loc.name}</span>
                   <span className="block text-[11px] text-slate-400 truncate">
@@ -167,7 +167,7 @@ export default function EventLocationPicker({ venue, value, onChange }) {
             ))}
             {q && !exact && (
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => startNew(query.trim())}
-                className="w-full text-left px-3 py-2 hover:bg-slate-800 flex items-center gap-2 border-t border-slate-800 text-emerald-400 text-sm font-semibold">
+                className="w-full text-left px-3 py-2 hover:bg-slate-800 flex items-center gap-2 border-t border-slate-800 text-brand-400 text-sm font-semibold">
                 <Plus className="w-4 h-4" /> Add “{query.trim()}” as a new location
               </button>
             )}
@@ -210,7 +210,7 @@ export default function EventLocationPicker({ venue, value, onChange }) {
               <X className="w-3.5 h-3.5" /> Cancel
             </button>
             <button type="button" onClick={saveEdit} disabled={editBusy}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
               <Save className="w-3.5 h-3.5" /> {editBusy ? 'Saving…' : 'Save for all events'}
             </button>
           </div>
@@ -219,8 +219,8 @@ export default function EventLocationPicker({ venue, value, onChange }) {
 
       {/* New location typed here: fields open inline and it's saved to the list with the event */}
       {showNewFields && (
-        <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-500/5 space-y-3">
-          <p className="text-[11px] text-emerald-200">
+        <div className="p-3 rounded-xl border border-brand-500/40 bg-brand-500/5 space-y-3">
+          <p className="text-[11px] text-brand-200">
             New location. It will be saved to your locations list when you save this shift.
           </p>
           <LocationFields

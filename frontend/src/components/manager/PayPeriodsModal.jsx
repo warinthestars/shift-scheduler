@@ -129,7 +129,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
     <ModalShell
       title="Pay periods"
       subtitle={list ? `${venueName || 'This venue'} · ${PERIOD_TEXT[list.pay_period] || list.pay_period} · ${list.overtime_text}` : venueName}
-      icon={<CalendarRange className="w-5 h-5 text-emerald-400" />}
+      icon={<CalendarRange className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-6xl"
       footer={(
@@ -158,7 +158,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
             )}
             {periods.map((p) => (
               <button key={p.start_date} type="button" onClick={() => { setSelected(p.start_date); setNotice(''); setError(''); }}
-                className={`w-full text-left p-3 rounded-xl border transition ${selected === p.start_date ? 'border-emerald-500/60 bg-emerald-500/5' : 'border-slate-800 bg-slate-950 hover:border-slate-600'}`}>
+                className={`w-full text-left p-3 rounded-xl border transition ${selected === p.start_date ? 'border-brand-500/60 bg-brand-500/5' : 'border-slate-800 bg-slate-950 hover:border-slate-600'}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-bold text-white">{p.label}</span>
                   <ChevronRight className="w-4 h-4 text-slate-500" />
@@ -252,7 +252,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                       ) : !confirmApprove ? (
                         <div className="flex flex-wrap items-center gap-3">
                         <button type="button" onClick={() => setConfirmApprove(true)}
-                          className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
+                          className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
                           <Check className="w-4 h-4" /> Approve and lock
                         </button>
                         <span className="text-xs text-amber-100/80">Check the hours below first. After approving, times and pay rates in this period are locked.</span>
@@ -264,7 +264,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                             times or pay rates in it until it's reopened.
                           </span>
                           <button type="button" onClick={approve} disabled={busy}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold disabled:opacity-50">
+                            className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold disabled:opacity-50">
                             {busy ? 'Saving…' : 'Approve and lock'}
                           </button>
                           <button type="button" onClick={() => setConfirmApprove(false)} className={btnGhost}>Cancel</button>
@@ -298,7 +298,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                     </thead>
                     <tbody className="divide-y divide-slate-800">
                       {detail.rows.length === 0 && (
-                        <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-500">No ShiftBoard clock-ins in this period.</td></tr>
+                        <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-500">No ShiftUp clock-ins in this period.</td></tr>
                       )}
                       {detail.rows.map((r) => (
                         <tr key={r.worker_id} className="bg-slate-900/40">
@@ -320,7 +320,7 @@ export default function PayPeriodsModal({ venueId, venueName, onClose, onOpenSet
                           <td className="px-2 py-2 text-right text-slate-300">{r.regular_hours.toFixed(2)}</td>
                           <td className={`px-2 py-2 text-right ${r.overtime_hours > 0 ? 'text-orange-300 font-bold' : 'text-slate-500'}`}>{r.overtime_hours.toFixed(2)}</td>
                           <td className="px-2 py-2 text-right text-white font-semibold">{r.hours.toFixed(2)}</td>
-                          <td className="px-2 py-2 text-right text-emerald-400 font-semibold">{money(r.pay)}</td>
+                          <td className="px-2 py-2 text-right text-brand-400 font-semibold">{money(r.pay)}</td>
                           <td className={`px-3 py-2 text-right ${r.tips > 0 ? 'text-amber-300 font-semibold' : 'text-slate-600'}`}>{r.tips > 0 ? money(r.tips) : '—'}</td>
                         </tr>
                       ))}

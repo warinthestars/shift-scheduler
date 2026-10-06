@@ -206,7 +206,7 @@ export default function AdminUserDrawer({ userId, venues = [], onClose, onChange
                 <input type="email" value={form.email} onChange={set('email')} disabled={u.always_admin}
                   className={`${inputCls} mt-1 disabled:opacity-50`} />
                 {u.auth_source !== 'local' && payload.email && (
-                  <span className="block text-[11px] text-amber-300 mt-1">They sign in with Firebase; this only changes where ShiftBoard emails go.</span>
+                  <span className="block text-[11px] text-amber-300 mt-1">They sign in with Firebase; this only changes where ShiftUp emails go.</span>
                 )}
               </label>
               <label className="text-xs text-slate-400">Phone
@@ -342,7 +342,7 @@ export default function AdminUserDrawer({ userId, venues = [], onClose, onChange
                 {u.has_password ? (
                   <button type="button" onClick={() => setModal('reset')} className={btnGhost}><KeyRound className="w-3 h-3" /> Reset password</button>
                 ) : (
-                  <span className="text-[11px] text-slate-500 self-center">Signs in with Firebase only, so there is no ShiftBoard password to reset.</span>
+                  <span className="text-[11px] text-slate-500 self-center">Signs in with Firebase only, so there is no ShiftUp password to reset.</span>
                 )}
                 {!u.always_admin && (
                   <button type="button" onClick={u.is_active ? () => setModal('deactivate') : toggleActive} disabled={statusBusy}

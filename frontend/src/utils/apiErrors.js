@@ -65,7 +65,7 @@ export function installFriendlyErrors() {
           if (error && error.code !== 'ERR_CANCELED') {
             error.message = typeof navigator !== 'undefined' && navigator.onLine === false
               ? "You're offline. Check your connection and try again."
-              : "Can't reach ShiftBoard right now. Check your connection and try again.";
+              : "Can't reach ShiftUp right now. Check your connection and try again.";
           }
         } else if (res.status >= 500) {
           if (res.data && typeof res.data === 'object' && !(res.data instanceof Blob)) {

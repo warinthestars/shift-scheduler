@@ -1,4 +1,4 @@
-# Project Context: "ShiftBoard" Scheduling Platform
+# Project Context: "ShiftUp" Scheduling Platform (called "ShiftBoard" until 0.37.0)
 
 You are an expert full-stack developer and DevOps engineer. Your task is to build a shift-scheduling and community call-board application designed for the service industry (bartenders, servers, dishwashers, AV techs, etc.). 
 
@@ -57,6 +57,8 @@ You must structure the project as follows. **CRITICAL:** Create a `.env.template
 *   **Platform Admin:** Manages system, adds new venues.
 *   **Venue Manager:** Posts shifts, manages venue profile, reviews applicants, rates workers, manages whitelist.
 *   **Worker:** Subscribes to shift types/locations, applies for shifts, checks in/out (geolocation), manages personal profile.
+*   **Owner (Phase 36):** a manager account that owns an organization (a group of venues). Manages every venue in it. Not a `users.role` value: a row in `organization_members`.
+*   **Shift lead (Phase 36):** a worker marked shift lead on a venue's team (`venue_whitelists.is_lead`). Runs the floor (clock-ins, no-shows, clock times, shift chat, open spots). Never sees pay. Not a `users.role` value.
 
 ### 2. Worker Profiles & Ratings
 *   Workers have profiles showcasing their total shifts worked, past venues, and an aggregate 5-star rating.
@@ -107,3 +109,25 @@ The project rules that always apply are in README.md → "Working on the code" (
    * Never rename a service, the network or a volume: the database volume is found by `<stack name>_postgres_data`.
    * Refer to a container as `docker compose exec <service>`, never by a container name.
    * Never run `docker compose` yourself on this computer: a command in the wrong folder acts on the wrong stack.
+10. **Roles and access (Phase 36):** `users.role` has exactly three values: `platform_admin`, `venue_manager`, `worker`. Never add a fourth. Owner and shift lead are memberships, not roles.
+   * **Owners:** `organization_members` (role `owner`). An owner manages every venue in the organization through ordinary `venue_managers` rows with `via_org = TRUE`. Only `services/organizations.sync_managers()` creates or deletes those rows. Call it, before the commit, whenever an owner or a venue is added to or removed from an organization, an organization is deleted, or a user's role changes. Never write `via_org` rows by hand anywhere else (the demo loader is the one exception, and its rows must match what the sync would make).
+   * **Shift leads:** `venue_whitelists.is_lead`. Use `services/access.floor_access()` for "manager or shift lead"; use the existing manager checks for everything else. A new endpoint is manager-only unless the phase says leads may use it.
+   * **Shift leads never see pay.** Nothing a lead can call may return a pay rate, tip, cost or earnings. What a lead reads lives in `routers/lead.py`, with response models that have no pay fields. Never return a manager schema (`EventTimesheet`, `EventDetail`, `ShiftRosterResponse`, ...) from an endpoint a lead can call, and never open a manager read endpoint to leads.
+   * There is no venue sign-up: only platform admins create organizations and put venues in them.
+11. **The public board (Phase 36):** `PUBLIC_EVENT_BOARD=true` makes the home page a public board for people who aren't signed in. `routers/public.py` is the ONLY place for endpoints that need no sign-in (besides sign-in itself, invites and avatars). Since 0.36.1 it also serves private calendar links (rule 12).
+   * `GET /api/public/board` returns only: event id, title, start and end, time zone, venue name, city, and positions with open spots. Never add pay, addresses, coordinates, notes, location names, requirements, logos, venue ids or anyone's name to it.
+   * Every other endpoint must depend on `get_current_user` (directly or through a `require_...` dependency). A new endpoint with no sign-in needs the user's explicit OK.
+   * The frontend learns the setting from `GET /api/public/config` (`utils/publicConfig.js`). No `VITE_` variable.
+12. **Calendar sync (Phase 36.1):** private calendar links (table `calendar_feeds`), switched by `CALENDAR_SYNC`.
+   * `GET /api/public/calendar/{token}.ics` needs no sign-in: the long random token in the address is the credential. It is the only no-sign-in endpoint that returns anything about a person or a roster. Don't add another, and never log or return a token anywhere except to its owner.
+   * `services/calendar_feeds.py` is the only place that decides who may have which calendar (`scopes_for`) and what a feed contains. A new role or membership gets its calendar there. Access is worked out again every time a feed is built (a built feed is reused for up to 60 seconds).
+   * **No pay in a feed, ever:** no rate, tip, cost or earnings. Also no staff-only notes, private time-off notes, email addresses or phone numbers. A shift lead's venue calendar never includes drafts.
+   * A worker's entries keep these tags exactly: `[Confirmed]`, `[REQUESTED]`, `[WAITLIST]`, `[OFFERED]`. Venue, manager, organization and admin calendars have one entry per event.
+   * Every text value written to a feed goes through `ics_text()` (it escapes the value and neutralises every kind of line break), and every link through `app_link()`.
+   * Feeds are one-way and written by hand as iCalendar text (no new package). Don't add sign-in-with-Google or Microsoft calendar connections unless a phase asks.
+13. **Brand (Phase 37):** the service is **ShiftUp**. **ShiftBoard** is only the board of open shifts (the worker's tab, id `find`, and the heading of the public home page).
+   * New screens import `APP_NAME` and `BOARD_NAME` from `frontend/src/brand.js` and show the logo with `<BrandLogo />` (`frontend/src/components/BrandLogo.jsx`). Never type "ShiftBoard" as the service's name.
+   * **Colour:** gold `brand-*` for main buttons, the active tab or link, links, focus rings and section icons; text on solid gold is `text-slate-950`, never white. Green `emerald-*` only for confirmed / booked / on / verified / done. Amber = waiting. Rose = problem.
+   * **Logo files** are in `frontend/public/brand/` and `frontend/public/icons/`, cut from `assets/main_logo_shift-up.png`. Don't redraw, recolour or regenerate them, and don't add an SVG version.
+   * **Keep these as they are** (people never see them, and renaming breaks things): the database name and user, the Docker network and `shiftboard-demo` stack, demo sign-ins `@shiftboard.com`, browser storage keys starting `shiftboard_`, calendar entry ids ending `@shiftboard`, the time-tracking value `'shiftboard'`, the FCM app name, and the `ShiftBoard.jsx` / `ShiftBoardModal` component names.
+   * A worker's ShiftBoard never lists an event they have requested, are waitlisted for or have been offered: those are on My shifts (`boardListings` in `frontend/src/pages/WorkerDashboard.jsx`).

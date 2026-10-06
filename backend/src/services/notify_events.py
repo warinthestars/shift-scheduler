@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import AsyncSessionLocal
 from src.models import (
     Shift, ShiftEvent, ShiftRequest, ShiftTransfer, User, Venue, VenueManager, VenueLocation, ShiftOffer,
+    OrganizationMember,                                         # Phase 36
 )
 from src.services.notify import notify_in, deliver_soon
 from src.services.messaging import team_name                    # Phase 33.0.1
@@ -76,9 +77,27 @@ def is_soon(start) -> bool:
 
 
 async def manager_ids(db: AsyncSession, venue_id) -> List:
-    return list((await db.execute(
-        select(VenueManager.user_id).where(VenueManager.venue_id == venue_id)
+    """
+    Who gets this venue's manager alerts.
+    Phase 36: an organization owner's row (via_org) counts only when that owner turned on
+    "venue alerts" for the organization. If nobody else manages the venue, its owners get the
+    alerts anyway, so an alert is never sent to no one.
+    """
+    rows = (await db.execute(
+        select(VenueManager.user_id, VenueManager.via_org).where(VenueManager.venue_id == venue_id)
+    )).all()
+    direct = [uid for uid, via in rows if not via]
+    owners = [uid for uid, via in rows if via]
+    if not owners:
+        return direct
+    if not direct:
+        return owners
+    wants = set((await db.execute(
+        select(OrganizationMember.user_id)
+        .join(Venue, Venue.organization_id == OrganizationMember.organization_id)
+        .where(Venue.id == venue_id, OrganizationMember.user_id.in_(owners), OrganizationMember.venue_alerts == True)
     )).scalars().all())
+    return direct + [uid for uid in owners if uid in wants]
 
 
 async def _shift_bundle(db: AsyncSession, shift_id):
@@ -611,3 +630,55 @@ async def _cert_reviewed(db: AsyncSession, cert_id) -> None:
 
 async def cert_reviewed(cert_id) -> None:
     await _run("cert_reviewed", _cert_reviewed, cert_id)
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 36: "Send to everyone booked" on the shift chat (managers and shift leads)
+# ---------------------------------------------------------------------------------------------
+async def _shift_message(db: AsyncSession, message_id) -> None:
+    from src.models import ShiftBoardMessage
+    msg = await db.scalar(select(ShiftBoardMessage).where(ShiftBoardMessage.id == message_id))
+    if msg is None:
+        return
+    shift, venue, event, _ = await _shift_bundle(db, msg.shift_id)
+    if shift is None:
+        return
+    author = await db.scalar(select(User).where(User.id == msg.author_id))
+    booked = (await db.execute(
+        select(ShiftRequest.id, ShiftRequest.worker_id).where(
+            ShiftRequest.shift_id == shift.id,
+            func.lower(ShiftRequest.status).in_(("approved", "confirmed", "checked_in")),
+            ShiftRequest.worker_id != msg.author_id,
+        )
+    )).all()
+    text = (msg.content or "").strip()
+    if len(text) > 500:
+        text = text[:497] + "..."
+    title = f"{person(author)}: {shift.role_type} · {event.title if event else shift.title}"
+    for request_id, worker_id in booked:
+        await notify_in(
+            db, [worker_id], "shift_message", title,
+            f"{when_text(shift.start_time, venue)}\n{text}",
+            worker_shift_link(request_id), venue_id=shift.venue_id, event_id=shift.event_id, request_id=request_id,
+            urgent=is_soon(shift.start_time), dedupe_key=f"shiftmsg:{msg.id}",
+        )
+
+
+async def shift_message(message_id) -> None:
+    await _run("shift_message", _shift_message, message_id)
+
+
+async def _made_shift_lead(db: AsyncSession, venue_id, worker_id) -> None:
+    venue = await db.scalar(select(Venue).where(Venue.id == venue_id))
+    if venue is None:
+        return
+    await notify_in(
+        db, [worker_id], "team_added", f"You're a shift lead at {venue.name}",
+        "You can see who's on today, clock people in and out, mark no-shows, fix clock times, "
+        "post updates and fill open spots from the team. Open Lead in your menu.",
+        "/lead", venue_id=venue_id,
+    )
+
+
+async def made_shift_lead(venue_id, worker_id) -> None:
+    await _run("made_shift_lead", _made_shift_lead, venue_id, worker_id)

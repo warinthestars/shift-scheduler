@@ -3,9 +3,11 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import NotificationBell from './NotificationBell';
-import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound, Wallet } from 'lucide-react';
+import { Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound, Wallet, ClipboardCheck, Network, LayoutGrid } from 'lucide-react';
 import { Avatar } from './WorkerProfilePanel';
 import { syncPush, disablePush } from '../utils/push';   // Phase 33
+import BrandLogo from './BrandLogo';                        // Phase 37
+import { BOARD_NAME } from '../brand';                     // Phase 37
 
 // Phase 33.1: role names people read
 const ROLE_TEXT = { worker: 'Worker', venue_manager: 'Manager', platform_admin: 'Admin' };
@@ -29,7 +31,7 @@ export default function Navbar() {
     setMobileOpen(false);
     await disablePush();          // Phase 33: this device stops getting this account's notifications
     logout();
-    navigate('/login');
+    navigate('/');                // Phase 36: the home page is the public board, or the sign-in page when the board is off
   };
 
   // Phase 33: if this device already allowed notifications, make sure the server still has it
@@ -37,10 +39,45 @@ export default function Navbar() {
     if (user?.id) syncPush();
   }, [user?.id]);
 
-  // Close the mobile menu whenever the route changes
+  // Phase 36: is this worker a shift lead anywhere / does this manager own an organization?
+  // Asked once per sign-in; the page-level components ask again for the details.
+  const [isLead, setIsLead] = useState(false);
+  const [ownsOrg, setOwnsOrg] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setIsLead(false);
+    setOwnsOrg(false);
+    if (!user?.id) return undefined;
+    if (userRole === 'worker') {
+      api.get('/lead/venues').then((res) => active && setIsLead((res.data || []).length > 0)).catch(() => {});
+    } else if (userRole === 'venue_manager') {
+      api.get('/organizations').then((res) => active && setOwnsOrg((res.data || []).length > 0)).catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [user?.id, userRole]);
+
+  // Phase 37: which worker tab is open (My shifts / ShiftBoard are separate links). WorkerDashboard reports it
+  // with the same 'worker_tab_state' event the phone tab bar listens to.
+  const [workerTab, setWorkerTab] = useState(() => {
+    try {
+      return (JSON.parse(sessionStorage.getItem('shiftboard_worker_tab') || 'null') || {}).tab || 'schedule';
+    } catch (e) {
+      return 'schedule';
+    }
+  });
+  useEffect(() => {
+    const onState = (e) => setWorkerTab((e.detail || {}).tab || 'schedule');
+    window.addEventListener('worker_tab_state', onState);
+    return () => window.removeEventListener('worker_tab_state', onState);
+  }, []);
+  const onWorkerPage = location.pathname === '/worker';
+
+  // Close the mobile menu whenever the route changes (Phase 37: also My shifts <-> ShiftBoard, which share /worker)
   useEffect(() => {
     setMobileOpen(false);
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   // Super Admin venue switcher data (Phase 29.2: reloads when the admin console creates/deletes a venue)
   useEffect(() => {
@@ -87,38 +124,68 @@ export default function Navbar() {
     }
   };
 
+  // Phase 37: `on` = is this link the page they're on. Workers get My shifts and the ShiftBoard as two links.
   const links = [
-    (isWorker || isPlatformAdmin) && {
+    isPlatformAdmin && {
       to: '/worker',
-      label: isPlatformAdmin ? 'Worker view' : 'My shifts',
+      label: 'Worker view',
       icon: Briefcase,
-      active: 'bg-slate-800 text-emerald-400',
+      active: 'bg-slate-800 text-brand-400',
+    },
+    isWorker && !isPlatformAdmin && {
+      to: '/worker?tab=schedule',
+      label: 'My shifts',
+      icon: Briefcase,
+      active: 'bg-slate-800 text-brand-400',
+      on: onWorkerPage && workerTab !== 'find',
+    },
+    isWorker && !isPlatformAdmin && {              // Phase 37: every shift that's up and isn't theirs yet
+      to: '/worker?tab=find',
+      label: BOARD_NAME,
+      icon: LayoutGrid,
+      active: 'bg-slate-800 text-brand-400',
+      on: onWorkerPage && workerTab === 'find',
     },
     isWorker && {                                   // Phase 33.1
       to: '/earnings',
       label: 'Hours & pay',
       icon: Wallet,
-      active: 'bg-slate-800 text-emerald-400',
+      active: 'bg-slate-800 text-brand-400',
+    },
+    isWorker && isLead && {                         // Phase 36: shift leads
+      to: '/lead',
+      label: 'Lead',
+      icon: ClipboardCheck,
+      active: 'bg-slate-800 text-brand-400',
     },
     (isManagerRole || isPlatformAdmin) && {
       to: '/venue',
       label: isPlatformAdmin ? 'Manager view' : 'My venue',
       icon: Building2,
-      active: 'bg-slate-800 text-teal-400',
+      active: 'bg-slate-800 text-brand-400',
+    },
+    isManagerRole && ownsOrg && {                   // Phase 36: organization owners (admins use Admin → Organizations)
+      to: '/org',
+      label: 'Organization',
+      icon: Network,
+      active: 'bg-slate-800 text-brand-400',
     },
     isPlatformAdmin && {
       to: '/admin',
       label: 'Admin',
       icon: Shield,
-      active: 'bg-indigo-950 text-indigo-300 border border-indigo-700/50',
+      active: 'bg-slate-800 text-brand-400',
     },
     {
       to: '/venues',
       label: 'Venues',
       icon: MapPin,
-      active: 'bg-slate-800 text-amber-400',
+      active: 'bg-slate-800 text-brand-400',
     },
-  ].filter(Boolean);
+  ].filter(Boolean).map((l) => ({
+    ...l,
+    on: l.on !== undefined ? l.on : (location.pathname === l.to || (l.to === '/venues' && location.pathname.startsWith('/venues/'))),
+  }));
 
   const venueSwitcher = (idSuffix) =>
     isPlatformAdmin && adminVenues.length > 0 ? (
@@ -147,30 +214,26 @@ export default function Navbar() {
     userRole === 'platform_admin' ? 'bg-indigo-400' : userRole === 'venue_manager' ? 'bg-teal-400' : 'bg-emerald-400';
 
   return (
-    <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40">
+    <header className="bg-black border-b border-brand-500/25 sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center">
           {/* Brand + desktop links */}
           <div className="flex items-center space-x-3">
-            <Link to="/" className="flex items-center space-x-2">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
-                <Calendar className="w-5 h-5 text-slate-950 font-bold" />
-              </div>
-              <span className="text-xl font-bold tracking-tight text-white">
-                Shift<span className="text-emerald-400">Board</span>
-              </span>
+            <Link to="/" className="flex items-center" aria-label="ShiftUp home">
+              <BrandLogo />
             </Link>
 
-            <nav className="hidden lg:flex ml-6 space-x-2">
-              {links.map(({ to, label, icon: Icon, active }) => (
+            <nav className="hidden lg:flex ml-3 xl:ml-6 space-x-1 xl:space-x-2">
+              {links.map(({ to, label, icon: Icon, active, on }) => (
                 <Link
                   key={to}
                   to={to}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
-                    (location.pathname === to || (to === '/venues' && location.pathname.startsWith('/venues/'))) ? active : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  aria-current={on ? 'page' : undefined}
+                  className={`px-2.5 xl:px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${isPlatformAdmin ? '' : 'whitespace-nowrap '}${
+                    on ? active : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
+                  <Icon className="w-4 h-4 flex-shrink-0" />
                   <span>{label}</span>
                 </Link>
               ))}
@@ -200,11 +263,11 @@ export default function Navbar() {
             {user && (
               <Link to="/profile" title="Your profile" className={`hidden lg:flex items-center gap-2 pl-1 pr-2 py-1 rounded-xl transition ${
                 location.pathname === '/profile' ? 'bg-slate-800' : 'hover:bg-slate-800/60'}`}>
-                <div className="text-right">
+                <div className="text-right hidden xl:block">
                   <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
                   <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
                     <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
-                    <span>{ROLE_TEXT[userRole] || 'Worker'}</span>
+                    <span>{ownsOrg ? 'Owner' : isLead ? 'Shift lead' : (ROLE_TEXT[userRole] || 'Worker')}</span>
                   </div>
                 </div>
                 <Avatar person={user} size="w-8 h-8 text-xs" />
@@ -238,13 +301,13 @@ export default function Navbar() {
 
       {/* Mobile menu panel */}
       {user && mobileOpen && (
-        <div className="lg:hidden border-t border-slate-800 bg-slate-900 px-4 pb-4 pt-3 space-y-3 shadow-2xl">
+        <div className="lg:hidden border-t border-slate-800 bg-black px-4 pb-4 pt-3 space-y-3 shadow-2xl">
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm font-semibold text-white">{user.first_name} {user.last_name}</div>
               <div className="text-xs text-slate-400 capitalize flex items-center space-x-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
-                <span>{ROLE_TEXT[userRole] || 'Worker'}</span>
+                <span>{ownsOrg ? 'Owner' : isLead ? 'Shift lead' : (ROLE_TEXT[userRole] || 'Worker')}</span>
               </div>
             </div>
             {userRole === 'worker' && (
@@ -256,12 +319,13 @@ export default function Navbar() {
           </div>
 
           <nav className="grid gap-2">
-            {[...links, { to: '/profile', label: 'My profile', icon: UserRound, active: 'bg-slate-800 text-emerald-400' }].map(({ to, label, icon: Icon, active }) => (
+            {[...links, { to: '/profile', label: 'My profile', icon: UserRound, active: 'bg-slate-800 text-brand-400', on: location.pathname === '/profile' }].map(({ to, label, icon: Icon, active, on }) => (
               <Link
                 key={to}
                 to={to}
+                aria-current={on ? 'page' : undefined}
                 className={`px-4 py-3 rounded-xl text-base font-semibold transition flex items-center space-x-3 ${
-                  (location.pathname === to || (to === '/venues' && location.pathname.startsWith('/venues/'))) ? active : 'text-slate-200 bg-slate-800/60 hover:bg-slate-800'
+                  on ? active : 'text-slate-200 bg-slate-800/60 hover:bg-slate-800'
                 }`}
               >
                 <Icon className="w-5 h-5" />

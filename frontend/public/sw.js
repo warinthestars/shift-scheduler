@@ -1,13 +1,13 @@
 /*
- * Phase 33: ShiftBoard service worker.
+ * Phase 33: ShiftUp service worker.
  * - Shows Web Push notifications and opens the right page when one is tapped.
  * - Keeps a tiny offline page for when the phone has no signal.
  * - It NEVER caches the app code or API calls (the dev server serves fresh code on every load),
  *   so an update can't get stuck behind a stale cache.
  * Bump CACHE when offline.html or the icons change.
  */
-const CACHE = 'shiftboard-shell-v1';
-// Phase 33.0.1: messages arrive either straight from ShiftBoard (Web Push) or through Firebase Cloud Messaging.
+const CACHE = 'shiftup-shell-v2';
+// Phase 33.0.1: messages arrive either straight from ShiftUp (Web Push) or through Firebase Cloud Messaging.
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {
@@ -39,13 +39,13 @@ self.addEventListener('push', (event) => {
   try {
     raw = event.data ? event.data.json() : {};
   } catch (e) {
-    raw = { title: 'ShiftBoard', body: event.data ? event.data.text() : '' };
+    raw = { title: 'ShiftUp', body: event.data ? event.data.text() : '' };
   }
   // Firebase wraps our fields: { data: { title, body, url, tag, urgent: "true" }, from, fcmMessageId, ... }
   const data = raw && raw.data && typeof raw.data === 'object' && !raw.title ? raw.data : raw;
   const urgent = data.urgent === true || data.urgent === 'true';
   event.waitUntil(
-    self.registration.showNotification(data.title || 'ShiftBoard', {
+    self.registration.showNotification(data.title || 'ShiftUp', {
       body: data.body || '',
       tag: data.tag || undefined,
       renotify: Boolean(data.tag) && urgent,

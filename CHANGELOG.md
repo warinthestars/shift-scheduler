@@ -1,8 +1,94 @@
 # Changelog
 
-All notable changes to ShiftBoard. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/): while pre-1.0, **0.&lt;phase&gt;.&lt;sub-phase&gt;** (see README → Versioning & releases).
+All notable changes to ShiftUp (called ShiftBoard until 0.37.0). The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/): while pre-1.0, **0.&lt;phase&gt;.&lt;sub-phase&gt;** (see README → Versioning & releases).
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
+
+## [0.37.0] - 2026-10-06 - Phase 37: ShiftUp branding and the ShiftBoard tab
+
+### Added
+- **ShiftBoard tab** for workers: every shift that's up and isn't theirs yet. It replaces "Find shifts".
+  - An event leaves the ShiftBoard once the worker requests it, joins its waitlist or is offered a shift in it. It is then on **My shifts**. A line at the top of the board says how many are there.
+  - **My shifts** and **ShiftBoard** are two links in the top bar, and two tabs on a phone.
+  - With no tab chosen, the app opens My shifts when the worker has something booked, requested, offered or waitlisted in the next 7 days, and the ShiftBoard when they don't.
+  - `/shiftboard` opens the ShiftBoard directly.
+- **Logo and icons** from `assets/main_logo_shift-up.png`: the header, the sign-in and invite pages, the public home page, the browser tab, the installed app and notification badges. The pictures are in `frontend/public/brand/` and `frontend/public/icons/`.
+- `frontend/src/brand.js` (`APP_NAME`, `APP_TAGLINE`, `BOARD_NAME`) and `frontend/src/components/BrandLogo.jsx`.
+- `scripts/phase37_rebrand.py`: the one-off script that renamed and recoloured more than 100 files in this version.
+
+### Changed
+- **The service is now ShiftUp** (shift-up.team). Every screen, email, text message, notification, calendar name and the API title say ShiftUp. "ShiftBoard" now means the board of open shifts: the worker tab, and the heading of the public home page.
+- **Gold brand colour** (`brand-*` in `frontend/tailwind.config.js`, taken from the logo) on a black header. Main buttons, active tabs, links, focus rings and section icons are gold with dark text.
+  - Green now only means confirmed, booked, on, verified or done. Amber still means waiting, and rose a problem.
+  - Every link in the top bar uses the same gold when it is the current page.
+- The default `EMAIL_FROM` is `ShiftUp <no-reply@example.com>`. A stack whose `.env` sets `EMAIL_FROM` keeps sending under the name written there until that line is changed.
+- The shift chat is called **Shift chat** everywhere (two buttons said "Board"), and "the public shift board" in cover requests is now "the ShiftBoard".
+- Downloads are named `shiftup-hours-….csv` and `shiftup.ics`.
+- The manager calendar's selected view button and today's column are gold.
+- The installed app's name, colours and icons (`manifest.webmanifest`), the offline page, and the service worker's cache name (`shiftup-shell-v2`).
+- One sentence of text in `backend/src/auth.py` and `backend/src/routers/auth.py` ("Contact your venue or ShiftUp…"). Sign-in itself is unchanged.
+
+### Removed
+- The "Hide ones I've requested" filter: requested shifts are no longer on the board.
+- `frontend/public/icons/favicon.svg` (the old calendar icon).
+
+### Not changed, on purpose
+- No database change. Names people never see still say `shiftboard`: the database and its user, the Docker network, the demo stack and demo sign-ins (`@shiftboard.com`), browser storage keys, calendar entry ids and the time-tracking value `shiftboard`.
+
+## [0.36.1] - 2026-10-06 - Phase 36.1: Calendar sync
+
+### Added
+- **Calendar sync** for every account type (Profile → **Calendar sync**): see ShiftBoard in Google Calendar, Apple Calendar, Outlook or any other calendar app.
+  - Turning a calendar on makes a private link (an iCalendar feed) that the calendar app subscribes to. One tap adds it to Google, Apple, Outlook.com or Microsoft 365; the link can be copied for anything else.
+  - It is one-way, and the calendar app decides how often it checks (Google can take up to a day).
+- **Calendars by role:**
+  - Worker: **My shifts**.
+  - Shift lead: also a venue calendar for each venue they lead (posted events only).
+  - Manager: **All my venues** and one calendar per venue.
+  - Owner: also one per organization.
+  - Platform admin: **Every venue**, and any organization's or venue's calendar.
+- **Tags on a worker's shifts:** `[Confirmed]`, `[REQUESTED]`, `[WAITLIST]` and `[OFFERED]`, plus their time off. Everything except confirmed shifts can be switched off per link. Only confirmed shifts show as busy.
+- **Venue calendars** have one entry per event, such as "Smith Wedding (6/8 filled)", with positions and who is booked in the details. Managers can include drafts, tagged `[DRAFT]`.
+- **Reset link** (a new private link; the old one stops at once) and **Turn off**. The settings show when a calendar app last read each link.
+- A **Sync** button on the worker's calendar opens the settings.
+- Setting `CALENDAR_SYNC` (default `true`). `false` hides the settings and stops every link.
+- Table `calendar_feeds`. Endpoints `GET/POST /api/me/calendar-links`, `PUT/DELETE /api/me/calendar-links/{id}`, `POST /api/me/calendar-links/{id}/reset`, and the feed `GET /api/public/calendar/{token}.ics`.
+- `database/upgrades/0.36.1.sql`: the "keep your data" SQL for this version.
+
+### Security
+- A calendar never contains pay, tips, staff-only notes, private time-off notes, email addresses or phone numbers.
+- The link's 43-character random token is its only credential. What it shows is worked out again each time the feed is built (at most a minute old): losing a venue, a shift lead role or the account empties the calendar, and the settings then list the link as "No longer available" so it can be turned off.
+- Titles, notes and names can't inject anything into a calendar: every kind of line break in them is neutralised.
+- The feed is the only new endpoint that works without a sign-in.
+
+## [0.36.0] - 2026-10-06 - Phase 36: Organizations, owners, shift leads and the public board
+
+### Added
+- **Organizations.** A group of venues with one or more owners. A venue belongs to at most one.
+  - Platform admins create them, choose their venues and add owners in **Admin → Organizations**. There is no venue sign-up yet.
+  - Tables `organizations` and `organization_members`; column `venues.organization_id`.
+- **Owner role.** A manager account that owns an organization manages every venue in it, with every manager screen.
+  - New **Organization** page (`/org`): every venue side by side (today and the next seven days), everyone across the venues' teams, and owners and settings.
+  - Owners can add a person to another venue's team or move them (positions and staffing company come along where they fit), add co-owners, and rename the organization.
+  - Owners get a venue's manager alerts only if they turn on "Send me each venue's manager alerts", or when the venue has no other manager.
+  - A venue's Managers list shows owners with an Owner badge; they are removed on the Organization page, not there.
+- **Shift lead role.** A manager marks a team member "shift lead" on the Team page (`venue_whitelists.is_lead`).
+  - New **Lead** page (`/lead`): the Today board, clock someone in, mark a no-show, fix clock times, message a shift, and fill open spots from the team.
+  - A shift lead never sees pay, tips, pay periods, exports, settings or the team list, and can't approve requests or post events. They can't change their own clock times.
+  - They stay a worker: they still find, book and work shifts.
+- **Public event board.** With `PUBLIC_EVENT_BOARD=true` the home page (`/`) shows every posted, upcoming event to people who aren't signed in, with a **Sign in / Sign up** button in the corner.
+  - It shows the event name, date and time, venue name, city, positions and open spots. Never pay, addresses or notes.
+  - Tapping an event asks the visitor to sign in or create a worker account, then opens that event with its full details.
+  - Each venue can stay off the board and can set the city shown (Venue settings → `public_board`, `city`).
+  - With `PUBLIC_EVENT_BOARD=false` (the default) the home page is the sign-in page, as before.
+- **"Also send it to everyone booked on this shift"** on the shift chat, for managers and shift leads (notification kind `shift_message`).
+- The demo data has one organization (Whitaker Hospitality Group, owned by `regional.manager@demo.example.com`) and one shift lead per venue (`lead.<venue>@demo.example.com`).
+
+### Changed
+- `GET /api/venues`, `GET /api/venues/{id}` and `GET /api/venues/{id}/shifts` now need a sign-in. They returned addresses, settings and pay to anyone.
+- Marking a no-show, adding, changing or deleting a clock time, the candidate list, assign, offer and withdrawing an offer accept the venue's shift leads as well as its managers.
+- Signing out goes to the home page (the public board, or the sign-in page when the board is off).
+- Database: new columns `venues.public_board`, `venues.city`, `venue_managers.via_org`, `venue_whitelists.is_lead`.
 
 ## [0.35.6] - 2026-10-04 - Phase 35.4: Dev and prod stacks on one computer
 

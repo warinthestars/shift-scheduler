@@ -5,7 +5,7 @@ import { WEEKDAYS_LONG, PRESETS, fmtHm } from '../../utils/availability';
 
 const HALF_HOURS = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
 const END_TIMES = [...HALF_HOURS.slice(1), '24:00'];
-const selCls = 'px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500';
+const selCls = 'px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-brand-500';
 
 function toDays(windows) {
   const days = WEEKDAYS_LONG.map(() => []);
@@ -56,7 +56,7 @@ export default function AvailabilityEditor({ windows, onSaved, onError }) {
         <Info className="w-4 h-4 flex-shrink-0 text-slate-500" />
         <span>
           When you usually can work, in the local time where the venue is. Managers see it when they assign or offer shifts,
-          and <b className="text-slate-200">Find shifts</b> can hide what doesn't fit. It never stops you picking up a shift.
+          and <b className="text-slate-200">ShiftBoard</b> can hide what doesn't fit. It never stops you picking up a shift.
           For one-off days away, use <b className="text-slate-200">Time off</b> instead.
         </span>
       </p>
@@ -101,7 +101,7 @@ export default function AvailabilityEditor({ windows, onSaved, onError }) {
                 );
               })}
               <button type="button" onClick={() => update((d) => { d[i].push({ start: '17:00', end: '24:00' }); return d; })}
-                className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-0.5">
+                className="text-[11px] font-semibold text-brand-400 hover:text-brand-300 inline-flex items-center gap-0.5">
                 <Plus className="w-3 h-3" /> {days[i].length ? 'Add another range' : 'Add a time range'}
               </button>
             </div>
@@ -115,7 +115,7 @@ export default function AvailabilityEditor({ windows, onSaved, onError }) {
           Clear everything
         </button>
         <button type="button" onClick={save} disabled={saving || !dirty}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
           <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save availability'}
         </button>
       </div>

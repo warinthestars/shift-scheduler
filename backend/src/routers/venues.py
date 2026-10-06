@@ -85,7 +85,10 @@ async def verify_venue_manager_access(venue_id: UUID, user: User, db: AsyncSessi
     return venue
 
 @router.get("", response_model=List[VenueResponse])
-async def list_venues(db: AsyncSession = Depends(get_db)):
+async def list_venues(
+    current_user: User = Depends(get_current_user),          # Phase 36: sign-in required (it returns addresses and settings)
+    db: AsyncSession = Depends(get_db),
+):
     """List all registered venues"""
     result = await db.execute(select(Venue).order_by(Venue.name))
     return result.scalars().all()
@@ -174,7 +177,11 @@ async def create_venue(
     return venue
 
 @router.get("/{venue_id}", response_model=VenueResponse)
-async def get_venue(venue_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_venue(
+    venue_id: UUID,
+    current_user: User = Depends(get_current_user),          # Phase 36: sign-in required
+    db: AsyncSession = Depends(get_db),
+):
     """
     Task 3: Retrieve venue details by ID.
     """
@@ -187,6 +194,7 @@ async def get_venue(venue_id: UUID, db: AsyncSession = Depends(get_db)):
 @router.get("/{venue_id}/shifts", response_model=List[ShiftResponse])
 async def get_venue_shifts(
     venue_id: UUID,
+    current_user: User = Depends(get_current_user),          # Phase 36: sign-in required (it returns pay)
     db: AsyncSession = Depends(get_db)
 ):
     """Retrieve all shifts for a specific venue"""
@@ -802,7 +810,7 @@ async def export_venue_payroll_csv(
                 f"{worker.first_name} {worker.last_name}".strip() or worker.email, worker.email or "",
                 shift.title or "", shift.role_type or "", _local_str(shift.start_time, vtz, "%Y-%m-%d"),
                 loc.name if loc is not None else "Venue",
-                "Tips only (no ShiftBoard clock-in)", "", "0.00", "", "0.00",
+                "Tips only (no ShiftUp clock-in)", "", "0.00", "", "0.00",
                 "Yes" if shift.tips_eligible else "No", "Yes" if shift.tip_pool else "No",
                 "", "", "", "", "", "0.00", "0.00", companies.get(worker.id, ""),
                 f"{own:.2f}", f"{share:.2f}", f"{own + share:.2f}",

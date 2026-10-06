@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import {
   Calendar, AlertCircle, Briefcase, Check, Search, Filter, ArrowRightLeft, Zap, Info, CalendarDays, AlertTriangle,
-  ListChecks, Send, ChevronRight, RotateCcw, X,
+  ListChecks, Send, ChevronRight, RotateCcw, X, LayoutGrid,
 } from 'lucide-react';
 import TransferModal from '../components/TransferModal';
 import ShiftBoardModal from '../components/ShiftBoardModal';
@@ -25,19 +25,27 @@ import EarningsCard from '../components/worker/EarningsCard';   // Phase 33.1
 import CoverDialog from '../components/worker/CoverDialog';     // Phase 34
 import CoverBoard from '../components/worker/CoverBoard';       // Phase 34
 import WaitlistPanel from '../components/worker/WaitlistPanel'; // Phase 34
+import LeadBanner from '../components/lead/LeadBanner';         // Phase 36
+import { takePublicEvent } from '../utils/publicConfig';        // Phase 36
 import { PENDING_INVITE_KEY } from './JoinPage';
 import {
   dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
 } from '../utils/listingFormat';
 import { getCurrentPosition } from '../utils/geo';
+import { BOARD_NAME } from '../brand';   // Phase 37
 
 const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in'];
+const WEEK_MS = 7 * 86400000;   // Phase 37: "this week" for choosing the first tab
 const TAB_IDS = ['schedule', 'find', 'calendar', 'transfers'];
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
 
 /**
  * Worker home. Phase 29.4 layout:
- *   Tabs: My shifts (default when you have something coming up) · Find shifts · Calendar · Hand-offs.
+ *   Tabs: My shifts · ShiftBoard · Calendar · Hand-offs.
+ *   Phase 37: "Find shifts" is now the ShiftBoard: every shift that is up and is NOT already on My shifts
+ *   (nothing they asked for, are booked on, are waitlisted for, or were offered).
+ *   With no ?tab= in the address, the first tab is My shifts when they have something booked or waiting in the
+ *   next 7 days, otherwise the ShiftBoard.
  *   Each shift card has ONE main button (clock in/out, read the update, withdraw, ask to come back)
  *   and a ⋯ menu for the rest (details, directions, calendar, chat, hand off, drop).
  *   Tab ids stay 'schedule' | 'find' | 'calendar' | 'transfers' so notification links keep working.
@@ -68,7 +76,7 @@ function ListingDayGroups({ groups, onOpen }) {
   return groups.map((g) => (
     <section key={g.label}>
       <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
-        <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+        <Calendar className="w-3.5 h-3.5 text-brand-400" />
         {g.label}
         <span className="text-slate-600 font-semibold normal-case tracking-normal">· {plural(g.items.length, 'event')}</span>
       </h2>
@@ -105,7 +113,6 @@ export default function WorkerDashboard() {
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [venueFilter, setVenueFilter] = useState('ALL');
   const [instantOnly, setInstantOnly] = useState(false);
-  const [hideRequested, setHideRequested] = useState(false);
   const [fitsOnly, setFitsOnly] = useState(false);            // Phase 31: fits my availability, not on time off
   const [mineOnly, setMineOnly] = useState(false);            // Phase 32.2: hide other departments
 
@@ -156,15 +163,25 @@ export default function WorkerDashboard() {
       setIncomingTransfers(transfersRes.data || []);
       setOutgoingTransfers(outRes.data || []);
       setActiveClockIns(new Set((activeClocksRes.data || []).map((te) => te.shift_id)));
-      // First load: open My shifts when there's something coming up, otherwise Find shifts
+      // First load (Phase 37): My shifts when something is booked or waiting in the next 7 days, otherwise the ShiftBoard.
+      //   booked or asked for  a request whose shift starts within 7 days (or is running now)
+      //   waiting on them      an offer from a manager, or a waitlist spot being held
+      //   in line              a waitlist place for a shift that starts within 7 days
       setActiveTab((prev) => {
         if (prev) return prev;
+        const now = Date.now();
+        const soon = (start) => {
+          const t = new Date(start).getTime();
+          return !Number.isNaN(t) && t <= now + WEEK_MS;
+        };
         const upcoming = (myRes.data || []).some((r) => {
           const st = String(r.status || '').toLowerCase();
-          return UPCOMING_STATUSES.includes(st) && new Date(r.shift?.end_time).getTime() >= Date.now();
+          if (!UPCOMING_STATUSES.includes(st)) return false;
+          if (st === 'checked_in') return true;
+          return new Date(r.shift?.end_time).getTime() >= now && soon(r.shift?.start_time);
         });
-        const waitOffer = (waitRes.data || []).some((w) => w.status === 'offered');
-        return upcoming || waitOffer || (offersRes.data || []).length ? 'schedule' : 'find';
+        const waiting = (waitRes.data || []).some((w) => w.status === 'offered' || soon(w.start_time));
+        return upcoming || waiting || (offersRes.data || []).length ? 'schedule' : 'find';
       });
     } catch (err) {
       flash('error', "Couldn't load your shifts. Check your connection and refresh.");
@@ -335,6 +352,16 @@ export default function WorkerDashboard() {
     else if (req.shift?.event_id) setOpenListing({ eventId: req.shift.event_id, initial: null });
   };
 
+  // Phase 36: they tapped a shift on the public board, then signed in or signed up: open that shift
+  useEffect(() => {
+    if (String(user?.role || '').toLowerCase() !== 'worker') return;
+    const eventId = takePublicEvent();
+    if (!eventId) return;
+    setActiveTab('find');
+    setOpenListing({ eventId, initial: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Deep links from notifications (?tab=, ?request=, ?event=)
   const [pendingDeepLink, setPendingDeepLink] = useState(null);
   useEffect(() => {
@@ -361,21 +388,28 @@ export default function WorkerDashboard() {
     }
   }, [pendingDeepLink, calendarByRequest]);
 
-  // Find Shifts
-  const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;   // Phase 34: full events don't count
+  // The ShiftBoard (Phase 37): everything that is up and is NOT already on My shifts.
+  // Left out: an event they asked for or are booked on, one they are waitlisted for, and one they were offered.
+  const offeredShiftIds = useMemo(() => new Set(offers.map((o) => o.shift_id)), [offers]);
+  const boardListings = useMemo(
+    () => listings.filter((l) => !l.my_request && !l.positions.some((p) => p.my_waitlist || offeredShiftIds.has(p.shift_id))),
+    [listings, offeredShiftIds]
+  );
+  const onMyShifts = listings.length - boardListings.length;
+  const openListingCount = boardListings.filter((l) => l.total_spots_left > 0).length;   // Phase 34: full events don't count
   const roleOptions = useMemo(
-    () => Array.from(new Set(listings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN' || p.can_waitlist).map((p) => p.role_type)))).sort(),
-    [listings]
+    () => Array.from(new Set(boardListings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN' || p.can_waitlist).map((p) => p.role_type)))).sort(),
+    [boardListings]
   );
   const venueOptions = useMemo(() => {
     const m = new Map();
-    listings.forEach((l) => l.venue && m.set(l.venue.id, l.venue.name));
+    boardListings.forEach((l) => l.venue && m.set(l.venue.id, l.venue.name));
     return Array.from(m.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [listings]);
+  }, [boardListings]);
   const filteredListings = useMemo(() => {
     const q = search.trim().toLowerCase();
     const weekEnd = Date.now() + 7 * 86400000;
-    return listings.filter((l) => {
+    return boardListings.filter((l) => {
       const tz = l.venue?.timezone;
       if (q) {
         const hay = [l.title, l.venue?.name, l.venue?.address, l.location?.name, l.location?.address, ...l.positions.map((p) => p.role_type)]
@@ -386,31 +420,28 @@ export default function WorkerDashboard() {
       if (whenFilter === 'today' && !isOnDay(l.start_time, tz, 0)) return false;
       if (whenFilter === 'tomorrow' && !isOnDay(l.start_time, tz, 1)) return false;
       if (whenFilter === 'week' && new Date(l.start_time).getTime() > weekEnd) return false;
-      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.my_status || p.can_waitlist || p.my_waitlist))) return false;
+      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.can_waitlist))) return false;
       if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
       if (instantOnly && !l.any_instant) return false;
-      if (hideRequested && l.my_request) return false;
       if (fitsOnly && (l.availability === 'outside' || l.time_off === 'blocked')) return false;   // Phase 31 / 32.1
       if (mineOnly && isOtherDept(l)) return false;                                              // Phase 32.2
       return true;
     });
-  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested, fitsOnly, mineOnly]);
+  }, [boardListings, search, whenFilter, roleFilter, venueFilter, instantOnly, fitsOnly, mineOnly]);
   // Phase 32.2: shifts in my departments first; everything else under "Other departments"
   const listingGroups = useMemo(() => groupByDay(filteredListings.filter((l) => !isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
   const otherGroups = useMemo(() => groupByDay(filteredListings.filter((l) => isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
   const fullListings = useMemo(() => filteredListings.filter(isFullOnly), [filteredListings]);                 // Phase 34
   const fullGroups = useMemo(() => groupByDay(fullListings), [fullListings]);
-  const myWaitCount = fullListings.filter((l) => l.positions.some((p) => p.my_waitlist)).length;
   const coverByRequest = useMemo(() => new Map(myCovers.map((c) => [c.request_id, c])), [myCovers]);
   const waitOffers = waitlists.filter((w) => w.status === 'offered').length;
-  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested || fitsOnly || mineOnly;
+  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || fitsOnly || mineOnly;
   const clearFilters = () => {
     setSearch('');
     setWhenFilter('all');
     setRoleFilter('ALL');
     setVenueFilter('ALL');
     setInstantOnly(false);
-    setHideRequested(false);
     setFitsOnly(false);
     setMineOnly(false);
   };
@@ -492,7 +523,7 @@ export default function WorkerDashboard() {
 
   const tabs = [
     { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length, badge: waitOffers },
-    { id: 'find', label: 'Find shifts', icon: Search, count: openListingCount, badge: coverOpen.filter((c) => c.can_take).length },
+    { id: 'find', label: BOARD_NAME, icon: LayoutGrid, count: openListingCount, badge: coverOpen.filter((c) => c.can_take).length },   // Phase 37
     { id: 'calendar', label: 'Calendar', icon: CalendarDays, badge: calendar.unread_count },
     { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft, badge: incomingTransfers.length },
   ];
@@ -539,6 +570,7 @@ export default function WorkerDashboard() {
 
       <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-6">
         {isWorker && <ProfileNudge />}
+        {isWorker && <LeadBanner />}
         <AppNudge />
         {notification && (
           <div className={`mb-5 p-3.5 rounded-xl border flex items-start justify-between gap-3 ${
@@ -597,7 +629,7 @@ export default function WorkerDashboard() {
             return (
               <button key={t.id} type="button" onClick={() => setActiveTab(t.id)}
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold transition inline-flex items-center justify-center gap-1.5 ${
-                  on ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}>
+                  on ? 'bg-brand-500 text-slate-950 shadow-md shadow-brand-500/20' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}>
                 <Icon className="w-3.5 h-3.5" />
                 <span>{t.label}</span>
                 {t.count !== undefined && <span className={on ? 'text-slate-900' : 'text-slate-500'}>{t.count}</span>}
@@ -637,8 +669,8 @@ export default function WorkerDashboard() {
                 <div className="text-center py-12 bg-slate-900/40 rounded-2xl border border-slate-800">
                   <Calendar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
                   <h3 className="text-sm font-semibold text-slate-300">Nothing coming up</h3>
-                  <button type="button" onClick={() => setActiveTab('find')} className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 font-semibold">
-                    Find a shift →
+                  <button type="button" onClick={() => setActiveTab('find')} className="mt-2 text-xs text-brand-400 hover:text-brand-300 font-semibold">
+                    Open the {BOARD_NAME} →
                   </button>
                 </div>
               ) : (
@@ -667,21 +699,35 @@ export default function WorkerDashboard() {
           </div>
         )}
 
-        {/* Find shifts */}
+        {/* The ShiftBoard (Phase 37; the tab id is still 'find') */}
         {activeTab === 'find' && (
           <div className="mt-6">
+            <div className="mb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-2">
+              <div>
+                <h2 className="hidden md:flex text-xl font-extrabold text-white items-center gap-2">
+                  <LayoutGrid className="w-5 h-5 text-brand-400" /> {BOARD_NAME}
+                </h2>
+                <p className="text-sm text-slate-400 md:mt-0.5">Every shift that's up and isn't yours yet.</p>
+              </div>
+              {onMyShifts > 0 && (
+                <button type="button" onClick={() => setActiveTab('schedule')}
+                  className="self-start sm:self-auto text-xs font-semibold text-brand-400 hover:text-brand-300 inline-flex items-center gap-1">
+                  {plural(onMyShifts, 'event')} {onMyShifts === 1 ? 'is' : 'are'} already on My shifts <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
             <CoverBoard items={coverOpen} busyId={coverBusy} onTake={(c) => setCoverTake(c)} />
             <div className="mt-6 bg-slate-900/60 border border-slate-800 rounded-2xl p-3 sm:p-4 space-y-3">
               <div className="flex flex-col lg:flex-row gap-3">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search events, venues, positions"
-                    className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-emerald-500" />
+                    className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-brand-500" />
                 </div>
                 <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1 overflow-x-auto">
                   {[{ id: 'all', label: 'All dates' }, { id: 'today', label: 'Today' }, { id: 'tomorrow', label: 'Tomorrow' }, { id: 'week', label: 'Next 7 days' }].map((w) => (
                     <button key={w.id} type="button" onClick={() => setWhenFilter(w.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${whenFilter === w.id ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${whenFilter === w.id ? 'bg-brand-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}>
                       {w.label}
                     </button>
                   ))}
@@ -690,35 +736,30 @@ export default function WorkerDashboard() {
               <div className="flex flex-wrap items-center gap-2">
                 <Filter className="w-3.5 h-3.5 text-slate-400" />
                 <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}
-                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-emerald-500">
+                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-brand-500">
                   <option value="ALL">All positions</option>
                   {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <select value={venueFilter} onChange={(e) => setVenueFilter(e.target.value)}
-                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-emerald-500">
+                  className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs font-medium text-slate-200 focus:outline-none focus:border-brand-500">
                   <option value="ALL">All venues</option>
                   {venueOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
                 </select>
                 <button type="button" onClick={() => setInstantOnly((v) => !v)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1 transition ${
-                    instantOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                    instantOnly ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
                   <Zap className="w-3.5 h-3.5" /> Instant book
-                </button>
-                <button type="button" onClick={() => setHideRequested((v) => !v)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-                    hideRequested ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
-                  Hide ones I've requested
                 </button>
                 <button type="button" onClick={() => setFitsOnly((v) => !v)}
                   title="Hide shifts outside your weekly availability or on days you have time off"
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1 transition ${
-                    fitsOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                    fitsOnly ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
                   <CalendarDays className="w-3.5 h-3.5" /> Fits my availability
                 </button>
                 <button type="button" onClick={() => setMineOnly((v) => !v)}
                   title="Hide shifts outside the departments you work"
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-1 transition ${
-                    mineOnly ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                    mineOnly ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
                   <Briefcase className="w-3.5 h-3.5" /> Only my departments
                 </button>
                 {filtersActive && (
@@ -732,9 +773,9 @@ export default function WorkerDashboard() {
             ) : filteredListings.length === 0 ? (
               <div className="mt-6 text-center py-20 bg-slate-900/40 rounded-2xl border border-slate-800">
                 <Briefcase className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                <h3 className="text-sm font-semibold text-slate-300">{listings.length === 0 ? 'No shifts open right now' : 'Nothing matches these filters'}</h3>
+                <h3 className="text-sm font-semibold text-slate-300">{boardListings.length === 0 ? (onMyShifts > 0 ? 'Nothing else is open right now' : 'No shifts open right now') : 'Nothing matches these filters'}</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  {listings.length === 0 ? "Check back soon. You'll get a notification when a venue you work with posts a shift." : 'Try clearing a filter or two.'}
+                  {boardListings.length === 0 ? "Check back soon. You'll get a notification when a venue you work with posts a shift." : 'Try clearing a filter or two.'}
                 </p>
               </div>
             ) : (
@@ -747,7 +788,7 @@ export default function WorkerDashboard() {
                 {listingGroups.length === 0 && otherGroups.length > 0 && (
                   <p className="text-xs text-slate-400 bg-slate-900/40 border border-slate-800 rounded-2xl p-4 text-center">
                     Nothing open in your departments right now.{' '}
-                    <Link to="/profile?tab=about" className="text-emerald-300 hover:underline font-semibold">Check your departments</Link>
+                    <Link to="/profile?tab=about" className="text-brand-300 hover:underline font-semibold">Check your departments</Link>
                   </p>
                 )}
                 <ListingDayGroups groups={listingGroups} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
@@ -757,7 +798,7 @@ export default function WorkerDashboard() {
                       <h2 className="text-sm font-bold text-slate-200">Other departments</h2>
                       <p className="text-xs text-slate-500 mt-0.5">
                         These aren't in the departments you work, so a manager has to approve them.{' '}
-                        <Link to="/profile?tab=about" className="text-emerald-300 hover:underline">Change your departments</Link>
+                        <Link to="/profile?tab=about" className="text-brand-300 hover:underline">Change your departments</Link>
                       </p>
                     </div>
                     <ListingDayGroups groups={otherGroups} onOpen={(item) => setOpenListing({ eventId: item.event_id, initial: item })} />
@@ -765,10 +806,9 @@ export default function WorkerDashboard() {
                 )}
                 {/* Phase 34: full events, so people can get in line */}
                 {fullGroups.length > 0 && (
-                  <details className="group border-t border-slate-800 pt-6" open={myWaitCount > 0}>
+                  <details className="group border-t border-slate-800 pt-6">
                     <summary className="cursor-pointer select-none list-none">
                       <span className="text-sm font-bold text-slate-200">Full: join a waitlist ({fullListings.length})</span>
-                      {myWaitCount > 0 && <span className="ml-2 text-[11px] text-emerald-300">You're in line for {plural(myWaitCount, 'event')}</span>}
                       <span className="block text-xs text-slate-500 mt-0.5">
                         No spots left. Join the line and we'll book you (or offer you the spot) if one opens.
                       </span>
@@ -791,7 +831,7 @@ export default function WorkerDashboard() {
             ) : (
               <WorkerCalendar
                 items={calendar.items}
-                openListings={listings.filter((l) => !isFullOnly(l))}
+                openListings={boardListings.filter((l) => !isFullOnly(l))}
                 onSelectItem={(item) => setDetailRequestId(item.request_id)}
                 onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
               />

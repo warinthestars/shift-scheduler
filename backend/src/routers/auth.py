@@ -153,7 +153,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
         )
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is turned off. Contact your venue or ShiftUp to turn it back on.")
 
     user_role_str = normalize_role(user.role)
     venue_id_str = str(user.managed_venues[0].venue_id) if user.managed_venues and len(user.managed_venues) > 0 else None
@@ -206,7 +206,7 @@ async def firebase_config(request: Request):
 @router.post("/firebase-login", response_model=TokenResponse)
 async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depends(get_db)):
     """
-    Phase 22 & 22.1: Exchange a Firebase ID token for a ShiftBoard JWT.
+    Phase 22 & 22.1: Exchange a Firebase ID token for a ShiftUp JWT.
     JIT provisioning rules:
       1. Match on users.firebase_uid  -> sign in.
       2. Else match on email (case-insensitive) -> link firebase_uid ONLY if the
@@ -326,7 +326,7 @@ async def firebase_login(request: FirebaseLoginRequest, db: AsyncSession = Depen
             raise HTTPException(status_code=500, detail="Couldn't finish setting up your account. Please try again.")
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is turned off. Contact your venue or ShiftUp to turn it back on.")
 
     venue_id = await db.scalar(
         select(VenueManager.venue_id).where(VenueManager.user_id == user.id).limit(1)

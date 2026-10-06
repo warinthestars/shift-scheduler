@@ -4,7 +4,7 @@ Phase 35.2: Tips per event.
 * Own tips: ShiftRequest.tip_amount, entered by a manager for people in positions that get tips (Shift.tips_eligible).
 * Tip pool: EventTip.pool_amount, one per event, shared by everyone booked in the event's tip-pool positions
   (Shift.tip_pool). How it's shared (EventTip.split, defaulting to venues.tip_pool_split):
-    hours  - by hours worked: ShiftBoard clock-ins (closed entries) for people who clock in here, scheduled hours
+    hours  - by hours worked: ShiftUp clock-ins (closed entries) for people who clock in here, scheduled hours
              for people the venue's own payroll tracks. If nobody in the pool has hours yet, it's shared equally.
     equal  - the same share each.
   People on venue payroll are in the pool only when venues.tip_pool_payroll is on.

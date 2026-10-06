@@ -1,403 +1,1371 @@
-# Phase 35.4: Dev and Prod Stacks on One Computer (v0.35.6)
+# Phase 37: ShiftUp Branding & the ShiftBoard Tab (v0.37.0)
 
-**Why:** a second ShiftBoard stack (prod) has to run on the same computer as the existing one (dev). Today that fails, because `docker-compose.yaml` gives every container a fixed name (`shiftboard-backend`, ...) and one fixed port (`5173`), and Docker allows each name and each port only once per computer. This phase removes the fixed names and the fixed port, so each stack is kept apart by its own stack name and its own ports, both set in that stack's `.env`.
+**Why:** the service has its own name and logo now. The domain is `shift-up.team`, so the product is **ShiftUp**. The old name gets a new job: the **ShiftBoard** is the board of open shifts. Workers get it as its own tab, separate from **My shifts**.
 
 ## What changes
-* **`docker-compose.yaml`:** all five `container_name:` lines are removed, and the fixed `"5173:5173"` port becomes a setting (`PORT_FRONTEND_VITE`, default 5173).
-  * Compose then names each container `<stack name>-<service>-1` and puts the stack name in front of the network and the volumes too.
-  * The stack name is `COMPOSE_PROJECT_NAME` in `.env`. Not set = the folder's name, which is what the existing stack already uses, **so the existing stack keeps its database volume and its ports with no change to its `.env`.**
-  * The frontend keeps its old name `shiftboard-frontend` as a name on its own stack's network, so a Cloudflare tunnel that points at `http://shiftboard-frontend:5173` keeps working.
-* **NEW `docker-compose.demo.yaml`:** Phase 35.3 described this file, and the scripts and docs use it, but it is not in the repository. It is created here, without container names.
-* **`.env.template`:** documents `COMPOSE_PROJECT_NAME` (commented out) and adds `PORT_FRONTEND_VITE=5173`.
-* `docs/DEPLOYMENT.md` gets section E (two stacks on one computer); README, CHANGELOG and `agy_system_instructions.md` are updated.
-* **Version 0.35.6.** `frontend/package.json` and `backend/src/version.py` are both bumped, and the CHANGELOG and README updates are included below. **This covers the standing directive for this phase, so don't bump again.**
-* **No database, API, backend code or frontend code change besides the version.** No schema change, so nothing is wiped: there is no `docker compose down -v` in this phase.
+
+### 1. The name
+* The service is **ShiftUp** everywhere a person can read it: every screen, emails, text messages, notifications, calendar names, the API title, the installed app, the README and the deployment guide.
+* **ShiftBoard** now means only the board of open shifts: the worker's tab, and the heading of the public home page.
+* Names people never see keep `shiftboard`. Renaming them would sign people out, duplicate calendar entries or break a running stack:
+  - the database name and user, the Docker network, the `shiftboard-demo` stack
+  - demo sign-ins (`@shiftboard.com`)
+  - browser storage keys that start `shiftboard_`
+  - calendar entry ids that end `@shiftboard`
+  - the time-tracking value `'shiftboard'`, and the FCM app name
+  - the shift chat's component names, `ShiftBoard.jsx` and `ShiftBoardModal`
+
+### 2. The colours
+* Gold from the logo (`#FDD400`) is the brand colour. It is the Tailwind colour `brand-*`.
+* **Gold:** main buttons, the active tab or link, links, focus rings, section icons and pay. Text on a solid gold button is dark (`text-slate-950`), never white.
+* **Green (`emerald-*`) stays** where it means confirmed, booked, on, verified or done.
+* **Amber** (waiting) and **rose** (a problem) are not changed.
+* The header, the sign-in page and the invite page have a black background, like the logo.
+* The admin screens and the shift chat keep indigo, and the organization screens keep teal. Those are area colours, not the brand.
+
+### 3. The logo and icons
+* Cut from `assets/main_logo_shift-up.png`. Nothing is redrawn.
+* Header: the mark and the name side by side. Sign-in and invite pages: the full logo with "Teams App".
+* New browser tab icons, installed-app icons and the notification badge.
+
+### 4. The worker view: My shifts and the ShiftBoard
+* **My shifts** is unchanged: everything that is theirs.
+* **ShiftBoard** replaces "Find shifts". It lists every event that is up and **isn't theirs yet**. An event leaves the board when the worker:
+  - asks for a shift in it, or is booked in it
+  - joins a waitlist in it
+  - is offered a shift in it by a manager
+* A line at the top of the board says how many events are already on My shifts, and opens that tab.
+* The "Hide ones I've requested" filter is removed. It has nothing left to hide.
+* **Top bar:** a worker has two links, **My shifts** and **ShiftBoard**. On a phone they are the first two tabs of the bottom bar.
+* **Which tab opens first** (only when the address has no `?tab=`):
+  - **My shifts** when, in the next 7 days, they have a shift that is booked or asked for; or they are clocked in; or an offer is waiting on them (from a manager, or a waitlist spot being held); or they are in line for a shift that starts within 7 days.
+  - **ShiftBoard** otherwise.
+* `/worker?tab=schedule` and `/worker?tab=find` still open one or the other, so every existing notification link keeps working. `/shiftboard` is a new short address for the second.
+* Calendar and Hand-offs are unchanged.
+
+### 5. Small wording
+* The shift chat is called **Shift chat** everywhere. Two buttons said "Board".
+* "The public shift board" in cover requests is now "the ShiftBoard".
+* Downloads are named `shiftup-hours-….csv` and `shiftup.ics`.
+
+### Database, API, settings
+* **Database: no change.** No table, column or SQL.
+* **API: no change.** Still 217 operations. Only the title (`ShiftUp API`) and message texts change.
+* **Settings: no new setting.** The default `EMAIL_FROM` becomes `ShiftUp <no-reply@example.com>`.
+* **No new packages.**
+
+**Version 0.37.0.** `frontend/package.json` and `backend/src/version.py` are both bumped, and the CHANGELOG and README updates are included below. **This covers the standing directive for this phase, so don't bump again.**
+
+## How this phase is applied
+It has four steps. **Do them in this order.**
+
+| Step | What | Who |
+| :--- | :--- | :--- |
+| **A** | 10 pictures and 1 script are already in the repo | Claude put them there. Check they exist; don't change them. |
+| **B** | Run the script once. It renames and recolours 113 files. | AGY |
+| **C, D, E, F, V** | 2 new files, 46 edits in 15 files, 1 file deleted | AGY |
+| **R** | Restart and try it | Andrew |
+
+The edits in Parts D, F and V were written against the files **as the script leaves them**. Before Part B they will not match.
 
 ## 0. Rules for this phase
-* Touch only the 9 files named below. Nothing in `backend/` except `backend/src/version.py`; nothing in `frontend/` except `frontend/package.json`.
-* **Never open, read, print or edit a real settings file:** `.env`, anything in `.secrets/` that isn't a `.template`, or any `*.bak`. Andrew sets up each stack's `.env` himself (Part R).
-* **Do NOT run any `docker` or `docker compose` command** (no `up`, `down`, `config`, `ps`). A live stack with testers' data may be running on this computer, and a command in the wrong folder acts on the wrong stack. Andrew runs everything himself (Part R).
-* `COMPOSE_PROJECT_NAME` and `PORT_FRONTEND_VITE` are read by Docker Compose only. **Don't add them to `backend/src/config.py`** or to `backend/.env.template`.
-* Don't add a top-level `name:` to either compose file, don't rename the services, the network (`shiftboard-network`) or the volumes (`postgres_data`, `redis_data`), and don't add `name:` under the network or the volumes. Renaming a volume would detach the existing database.
-* Don't change `deploy_test_data.sh` or `deploy_test_data.ps1`. They already work with a named stack.
-* **Code fences are not file content.** Every file and every Find / Replace block in this prompt is wrapped in fence lines of three or four backticks. The outer fence lines are Markdown; never write them into a file. Where a block is wrapped in **four** backticks, the three-backtick lines inside it ARE content and must be written.
-* **Line endings:** keep each file's existing line endings. On this computer `docker-compose.yaml` has Windows (CRLF) line endings and the other edited files have LF. Create `docker-compose.demo.yaml` with LF.
-* **EDITS:** each edit is an exact *Find* → *Replace with*; every *Find* appears **exactly once** in the current file; apply them in order. If a *Find* doesn't match, stop and report it. Don't improvise a different edit.
-* **Verification.** All 21 edits below were replayed by a script against the files in your repo (0.35.5), and each *Find* matched exactly once. The two resulting compose files were then rendered with `docker compose config` (Compose v5.5.1):
-  - **the existing stack, `.env` unchanged:** stack name = the folder name, the same network, the same volumes (`<folder>_postgres_data`, `<folder>_redis_data`) and the same ports (80, 5173, 8000, 5432, 6379) as before this phase. Compared with the render of the current file, the only differences are the missing container names and the frontend's extra network name.
-  - **a second stack** with `COMPOSE_PROJECT_NAME=shiftboard-prod` and the ports from Part R: its own name, network and volumes.
-  - **the demo copy** (`-p shiftboard-demo` with both files), from either folder: its own name, network and volumes, no tunnel, and `-p` wins over `COMPOSE_PROJECT_NAME` in `.env`.
-  - Across the three, no port on this computer is used twice, and no service has a container name.
-  - A second clone in a folder with the **same name** and no `COMPOSE_PROJECT_NAME` renders with the first stack's name. That is why Part R checks the name before the first start.
-  - **Nothing was started.** `config` only renders the files. No container was run, and Docker's handling of the renamed containers on a live stack was not exercised. The first real `up` is Andrew's.
+* **Order:** Part A, then Part B, then the rest. Never apply an edit from Parts D, F or V before the script has run.
+* **Don't do the script's work by hand.** Don't rename "ShiftBoard" or change an `emerald` class in any file yourself, before or after. The script changes exactly what was tested, and nothing else should change.
+* **Don't edit the script**, its rules or its fingerprints. If it stops, report the message it prints (rule in Part B).
+* Do **NOT** touch, apart from what the script does:
+  - `backend/src/auth.py`, `backend/src/routers/auth.py`, `backend/src/services/firebase.py`, `backend/src/services/always_admin.py`
+  - `frontend/src/context/AuthContext.jsx`, `frontend/src/api/client.js`, `frontend/vite.config.js`
+  - the CORS block in `backend/src/main.py`
+  - `docker-compose.yaml`, `docker-compose.demo.yaml`, `database/init.sql`, `database/upgrades/`, `deploy_test_data.sh`, `deploy_test_data.ps1`, `test_deployment.md`
+  - Any real settings file (`.env`, anything in `.secrets/` that isn't a `.template`, any `*.bak`). Never open, read or print one.
+  - In `agy_system_instructions.md`, only the two edits in F1. Leave the Standing rules section exactly as it is.
+  - `assets/` and every picture listed in Part A.
+* **The sign-in files:** the script changes text only, and only these lines. This is the explicit approval for them; nothing else in these files may change.
+  - `backend/src/auth.py`: the sentence "Contact your venue or ShiftBoard to turn it back on." (2 lines) now says ShiftUp.
+  - `backend/src/routers/auth.py`: the same sentence (2 lines) and one comment. This file has Windows line endings and keeps them.
+  - `backend/src/main.py`: two log lines, the API title and the welcome message.
+  - `frontend/src/firebase.js`: one comment.
+* **Keep these names as they are:** everything in the list under "The name" above. Don't "finish" the rename.
+* **Do NOT run any `docker` or `docker compose` command, any SQL, or the demo data loader.** Andrew does that himself (Part R).
+* **No database change.** Don't touch `models.py` or `init.sql`. No native PostgreSQL ENUMs, as always.
+* **No new packages**, backend or frontend. No `VITE_` variables. The icons are from the same `lucide-react` 0.359.0 the repo has.
+* **Code fences are not file content.** Every file and every *Find* / *Replace with* block in this prompt is wrapped in fence lines of three backticks. Those lines are Markdown; never write them into a file.
+* **NEW FILES (2):** create them with exactly the content shown, with LF line endings. Each one states its first and last line: check them when you finish.
+* **EDITS (46 in 15 files):** each edit is an exact *Find* → *Replace with*; every *Find* appears **exactly once** in the file as it is after Part B; apply them in order, top to bottom of each file.
+  - If a *Find* doesn't match, stop and report it. Don't improvise a different edit.
+  - Keep each file's existing line endings (all 15 have LF on this computer). Match on the text.
+* **Verification.** Everything below was generated from the files in your repo (0.36.1 is applied) and replayed: the script was run on a copy of your files, then every edit was applied to its result. Each *Find* matched exactly once, and the end result is the code that was tested.
+  - **The script** was run on a copy of the repo's files with their real line endings:
+    - `--check` passes and changes nothing.
+    - The real run changes 113 files, and the three files with Windows line endings still have them.
+    - A second run says "Already applied" and changes nothing. So does a run after all of this phase's edits.
+    - With one file altered beforehand, or with an extra file that uses the old name, it stops before writing anything.
+    - Any option other than `--check` stops it.
+    - Each file is written beside the original and swapped in, so none is left half written.
+  - **Backend:** imports cleanly. 217 API operations, unchanged. The API reports **0.37.0** and is titled *ShiftUp API*.
+  - **All 22 suites pass against a real PostgreSQL** (1,140 checks). The checks that read the product's name in notifications and calendar feeds were updated to expect ShiftUp. No check had to change for any other reason.
+  - **Frontend:** bundles with no missing imports. In real Chromium, with the demo data:
+    - **Landing tab:** a brand-new worker lands on the ShiftBoard. After asking for a shift 8 or more days away they still land on the ShiftBoard, that event is gone from the board, and the line "1 event is already on My shifts" appears. After asking for one inside 7 days they land on My shifts.
+    - **Top bar:** a worker has My shifts, ShiftBoard, Hours & pay and Venues; the link for the open tab is marked. `/shiftboard` opens the ShiftBoard.
+    - **Phone:** the bottom bar reads My shifts, ShiftBoard, Calendar, Hand-offs, Profile. A fresh load of `/shiftboard` marks the ShiftBoard tab. Switching between the two from the menu closes the menu. No sideways scrolling.
+    - **Width:** at 1024px and 1100px the top bar stays on one line for a worker and for a shift lead (five links).
+    - **Looked at:** the public home page, sign-in, My shifts, the ShiftBoard, an event's details, the worker calendar, Profile → Calendar sync, the manager dashboard and its calendar, venue settings and the admin panel.
+    - No white text on gold anywhere in the code (searched, including hover states). No page errors and no console errors.
+  - **An independent review** read the finished code and the script. It found no data or sign-in problem. What it did find is fixed in the code below: the phone menu staying open, the phone tab bar marking the wrong tab on a fresh load of `/shiftboard`, the script accepting unknown options, and the wording in "Small wording" above.
+  - **Not tested:** nothing was run in Docker or behind the Cloudflare tunnel. The installed app's new icon was not checked on a real phone. Real email was not sent.
 
   Don't "improve" them.
 
 ---
 
-# PART A: The compose files and the settings template
+# PART A: Already in the repo (don't create, edit, move or regenerate these)
 
-## A1. `docker-compose.yaml` (EDITS)
-Seven edits. After them, the text `container_name:` does not appear anywhere in the file.
+Claude placed these 11 files directly. **Check that each one exists.** If one is missing, stop and tell Andrew. Don't try to make it.
+
+| File | What it is |
+| :--- | :--- |
+| `frontend/public/brand/logo-mark.png` | the mark alone, transparent, 256×256 |
+| `frontend/public/brand/logo-wordmark.png` | the name alone, transparent, 341×96 |
+| `frontend/public/brand/logo-full.png` | mark, name and "Teams App", transparent, 567×640 |
+| `frontend/public/icons/icon-192.png` | app icon (replaces the old one) |
+| `frontend/public/icons/icon-512.png` | app icon (replaces the old one) |
+| `frontend/public/icons/maskable-512.png` | app icon for Android's shaped icons (replaces the old one) |
+| `frontend/public/icons/apple-touch-icon.png` | iPhone home screen icon (replaces the old one) |
+| `frontend/public/icons/badge-96.png` | notification badge, white on transparent (replaces the old one) |
+| `frontend/public/icons/favicon-32.png` | browser tab icon (new) |
+| `frontend/public/icons/favicon-64.png` | browser tab icon (new) |
+| `scripts/phase37_rebrand.py` | the script for Part B |
+
+`assets/main_logo_shift-up.png` is the original they were cut from. Leave it where it is.
+
+---
+
+# PART B: Run the rebrand script (once)
+
+**Where:** the repository's root folder (the one that has `docker-compose.yaml`). **When:** before any edit from Parts C to V.
+
+## B1. Look first
+```
+python scripts/phase37_rebrand.py --check
+```
+It must print exactly:
+```
+Check passed: 113 file(s) would change, 0 already done. Nothing was changed (--check).
+```
+
+## B2. Do it
+```
+python scripts/phase37_rebrand.py
+```
+It must print exactly:
+```
+Done: 113 file(s) changed, 0 were already done.
+```
+
+## B3. Rules for this part
+* If `python` isn't found, use `py -3` (Windows) or `python3` (Linux, macOS) with the same arguments. It needs Python 3.8 or newer and no packages. **Don't use Docker for this.** If there is no Python at all, stop and tell Andrew.
+* **If it prints a line starting with `STOP`:** it changed nothing. Copy the whole message into your report and stop the phase. Don't edit the script, don't edit the files it names, and don't carry on with Parts C to V.
+* If B1 says anything other than the line above (for example "already done" is not 0), stop and report it.
+* Run B2 once. A second run prints `Already applied` and changes nothing; that is fine, but there is no reason to do it.
+* Don't delete the script afterwards. It stays in the repo as the record of what changed.
+
+## B4. What the script does (for the record; nothing to do here)
+* **Name:** "ShiftBoard" → "ShiftUp" in `backend/src`, `frontend/src`, `frontend/index.html`, `frontend/public/` (manifest, offline page, service worker), `README.md`, `docs/DEPLOYMENT.md`, `product-roadmap.md` and the three `.env.template` files. It skips the code names listed in "The name" above.
+* **Colour:** in `frontend/src`, each `emerald` Tailwind class becomes `brand` when it is a button, an active tab, a link, a focus ring, a section icon or pay. It stays green when it means confirmed, booked, on, verified or done. `text-white` on a solid gold background becomes `text-slate-950`.
+* **Exact swaps:** the "Find shifts" and "public shift board" wording, the two "Board" buttons, the two download names, the email button's colour, the installed app's colours and its "ShiftBoard" shortcut, the favicon links, and the service worker's cache name (`shiftup-shell-v2`, so phones fetch the new offline page and icons).
+* It checks a SHA-256 fingerprint of every file before and after. That is why it must run on the files exactly as they are now.
+
+---
+
+# PART C: Frontend, new files
+
+## C1. NEW FILE `frontend/src/brand.js`
+The names, in one place. The first line is `/**` and the **last line is `export const BOARD_NAME = 'ShiftBoard';`**.
+
+```js
+/**
+ * Phase 37: the product's name in one place.
+ *   APP_NAME    the service ("ShiftUp")
+ *   BOARD_NAME  the board of open shifts ("ShiftBoard"): the worker's tab and the public home page
+ * New code imports these instead of typing the names. Older screens, the backend's emails and calendar names,
+ * index.html, public/manifest.webmanifest and public/offline.html have the name written out.
+ */
+export const APP_NAME = 'ShiftUp';
+export const APP_TAGLINE = 'Teams App';
+export const BOARD_NAME = 'ShiftBoard';
+```
+
+---
+
+## C2. NEW FILE `frontend/src/components/BrandLogo.jsx`
+The logo. It shows the pictures from Part A; it draws nothing itself. The first line is `import React from 'react';` and the **last line is `}`**.
+
+```jsx
+import React from 'react';
+import { APP_NAME, APP_TAGLINE } from '../brand';
+
+/**
+ * Phase 37: the ShiftUp logo. The pictures are in frontend/public/brand/ (made from assets/main_logo_shift-up.png).
+ *   variant "bar"   the mark and the name side by side (headers)
+ *   variant "stack" the mark above the name and the tagline (sign-in and invite pages)
+ *   variant "mark"  the mark alone
+ * className on "stack" sets its height (default h-40).
+ * The name is a picture so it keeps the logo's lettering; the alt text carries it for screen readers.
+ */
+export default function BrandLogo({ variant = 'bar', className = '' }) {
+  if (variant === 'mark') {
+    return <img src="/brand/logo-mark.png" alt={APP_NAME} className={`w-9 h-9 object-contain ${className}`} />;
+  }
+  if (variant === 'stack') {
+    return (
+      <img src="/brand/logo-full.png" alt={`${APP_NAME} ${APP_TAGLINE}`} width="567" height="640"
+        className={`w-auto object-contain mx-auto ${className || 'h-40'}`} />
+    );
+  }
+  return (
+    <span className={`inline-flex items-center gap-2.5 flex-shrink-0 ${className}`}>
+      <img src="/brand/logo-mark.png" alt="" className="w-9 h-9 object-contain flex-shrink-0" />
+      <img src="/brand/logo-wordmark.png" alt={APP_NAME} className="h-[1.35rem] w-auto object-contain flex-shrink-0" />
+    </span>
+  );
+}
+```
+
+---
+
+# PART D: Frontend, edits (made AFTER Part B)
+
+## D1. `frontend/tailwind.config.js` (1 EDIT)
+The `brand` colours become gold. `brand-500` (`#FDD400`) is the gold in the logo.
 
 **Edit 1.** Find:
-```yaml
-# .secrets/ also holds the Firebase files and is mounted read-only into the backend.
-# ------------------------------------------------------------------------------
+```js
+    extend: {
+      colors: {
+        brand: {
+          50: '#f0fdf4',
+          100: '#dcfce7',
+          500: '#22c55e',
+          600: '#16a34a',
+          700: '#15803d',
+        }
+      }
 ```
 Replace with:
-```yaml
-# .secrets/ also holds the Firebase files and is mounted read-only into the backend.
-#
-# Phase 35.4: several stacks can run on one computer (for example dev and prod).
-#   * No service has a fixed container name. Compose names each container
-#     <stack name>-<service>-1 and puts the stack name in front of the network and the
-#     volumes, so two stacks never share a container, a network or a database volume.
-#   * The stack name is COMPOSE_PROJECT_NAME in .env. Not set = the name of this folder.
-#   * Every port on your computer comes from .env. Each stack needs its own.
-#   Never give a service a fixed container name again, and never write a fixed number on the
-#   left side of a "ports:" line. See docs/DEPLOYMENT.md, section E.
-# ------------------------------------------------------------------------------
+```js
+    extend: {
+      colors: {
+        // Phase 37: ShiftUp gold. 500 is the gold in the logo (assets/main_logo_shift-up.png).
+        // Use brand-* for buttons, active tabs, links and accents. Green (emerald-*) is only for
+        // "confirmed / booked / on / success"; amber is "waiting"; rose is "problem".
+        brand: {
+          50: '#FFFDEB',
+          100: '#FFF9C7',
+          200: '#FFF08A',
+          300: '#FFE74D',
+          400: '#FEDE24',
+          500: '#FDD400',
+          600: '#D9B500',
+          700: '#A88B00',
+          800: '#6E5B00',
+          900: '#453900',
+          950: '#241E00',
+        }
+      }
+```
+
+---
+
+## D2. `frontend/src/index.css` (2 EDITS)
+The manager calendar's selected view button and today's column.
+
+**Edit 1.** Find:
+```css
+}
+.rbc-toolbar button.rbc-active {
+  background-color: #059669;
+  border-color: #10b981;
+  color: #ffffff;
+  box-shadow: none;
+}
+```
+Replace with:
+```css
+}
+.rbc-toolbar button.rbc-active {
+  background-color: #FDD400;   /* Phase 37: brand gold, dark text */
+  border-color: #FEDE24;
+  color: #0a0a0a;
+  box-shadow: none;
+}
 ```
 
 **Edit 2.** Find:
-```yaml
-    image: postgres:16-alpine
-    container_name: shiftboard-database
-    restart: unless-stopped
+```css
+}
+.rbc-today {
+  background-color: rgba(16, 185, 129, 0.08);
+}
+.rbc-event {
 ```
 Replace with:
-```yaml
-    image: postgres:16-alpine
-    restart: unless-stopped
+```css
+}
+.rbc-today {
+  background-color: rgba(253, 212, 0, 0.08);   /* Phase 37 */
+}
+.rbc-event {
+```
+
+---
+
+## D3. `frontend/src/App.jsx` (1 EDIT)
+One new route: `/shiftboard` opens the worker's ShiftBoard tab.
+
+**Edit 1.** Find:
+```jsx
+            />
+
+            {/* Catch-all fallback */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+```
+Replace with:
+```jsx
+            />
+
+            {/* Phase 37: a short address for the ShiftBoard (the worker's list of open shifts) */}
+            <Route path="/shiftboard" element={<Navigate to="/worker?tab=find" replace />} />
+
+            {/* Catch-all fallback */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+```
+
+---
+
+## D4. `frontend/src/components/Navbar.jsx` (8 EDITS)
+* New state: `const [workerTab, setWorkerTab] = useState(...)`, kept up to date by the `worker_tab_state` window event that `WorkerDashboard` already sends.
+* A worker gets two links: **My shifts** (`/worker?tab=schedule`) and **ShiftBoard** (`/worker?tab=find`). Each link has an `on` flag for "this is the page they're on".
+* Every link uses the same gold when it is the current page. The header is black and shows `<BrandLogo />`.
+* The phone menu closes when the address's `?tab=` changes too. Below 1280px the links sit closer together and the person's name is hidden (the avatar stays), so five links fit.
+
+**Edit 1.** Find:
+```jsx
+import api from '../api/client';
+import NotificationBell from './NotificationBell';
+import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound, Wallet, ClipboardCheck, Network } from 'lucide-react';
+import { Avatar } from './WorkerProfilePanel';
+import { syncPush, disablePush } from '../utils/push';   // Phase 33
+
+// Phase 33.1: role names people read
+```
+Replace with:
+```jsx
+import api from '../api/client';
+import NotificationBell from './NotificationBell';
+import { Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound, Wallet, ClipboardCheck, Network, LayoutGrid } from 'lucide-react';
+import { Avatar } from './WorkerProfilePanel';
+import { syncPush, disablePush } from '../utils/push';   // Phase 33
+import BrandLogo from './BrandLogo';                        // Phase 37
+import { BOARD_NAME } from '../brand';                     // Phase 37
+
+// Phase 33.1: role names people read
+```
+
+**Edit 2.** Find:
+```jsx
+  }, [user?.id, userRole]);
+
+  // Close the mobile menu whenever the route changes
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  // Super Admin venue switcher data (Phase 29.2: reloads when the admin console creates/deletes a venue)
+```
+Replace with:
+```jsx
+  }, [user?.id, userRole]);
+
+  // Phase 37: which worker tab is open (My shifts / ShiftBoard are separate links). WorkerDashboard reports it
+  // with the same 'worker_tab_state' event the phone tab bar listens to.
+  const [workerTab, setWorkerTab] = useState(() => {
+    try {
+      return (JSON.parse(sessionStorage.getItem('shiftboard_worker_tab') || 'null') || {}).tab || 'schedule';
+    } catch (e) {
+      return 'schedule';
+    }
+  });
+  useEffect(() => {
+    const onState = (e) => setWorkerTab((e.detail || {}).tab || 'schedule');
+    window.addEventListener('worker_tab_state', onState);
+    return () => window.removeEventListener('worker_tab_state', onState);
+  }, []);
+  const onWorkerPage = location.pathname === '/worker';
+
+  // Close the mobile menu whenever the route changes (Phase 37: also My shifts <-> ShiftBoard, which share /worker)
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname, location.search]);
+
+  // Super Admin venue switcher data (Phase 29.2: reloads when the admin console creates/deletes a venue)
 ```
 
 **Edit 3.** Find:
-```yaml
-    image: redis:7-alpine
-    container_name: shiftboard-redis
-    restart: unless-stopped
+```jsx
+  };
+
+  const links = [
+    (isWorker || isPlatformAdmin) && {
+      to: '/worker',
+      label: isPlatformAdmin ? 'Worker view' : 'My shifts',
+      icon: Briefcase,
+      active: 'bg-slate-800 text-brand-400',
+    },
+    isWorker && {                                   // Phase 33.1
 ```
 Replace with:
-```yaml
-    image: redis:7-alpine
-    restart: unless-stopped
+```jsx
+  };
+
+  // Phase 37: `on` = is this link the page they're on. Workers get My shifts and the ShiftBoard as two links.
+  const links = [
+    isPlatformAdmin && {
+      to: '/worker',
+      label: 'Worker view',
+      icon: Briefcase,
+      active: 'bg-slate-800 text-brand-400',
+    },
+    isWorker && !isPlatformAdmin && {
+      to: '/worker?tab=schedule',
+      label: 'My shifts',
+      icon: Briefcase,
+      active: 'bg-slate-800 text-brand-400',
+      on: onWorkerPage && workerTab !== 'find',
+    },
+    isWorker && !isPlatformAdmin && {              // Phase 37: every shift that's up and isn't theirs yet
+      to: '/worker?tab=find',
+      label: BOARD_NAME,
+      icon: LayoutGrid,
+      active: 'bg-slate-800 text-brand-400',
+      on: onWorkerPage && workerTab === 'find',
+    },
+    isWorker && {                                   // Phase 33.1
 ```
 
 **Edit 4.** Find:
-```yaml
-      dockerfile: Dockerfile
-    container_name: shiftboard-backend
-    restart: unless-stopped
+```jsx
+      label: 'Lead',
+      icon: ClipboardCheck,
+      active: 'bg-slate-800 text-amber-300',
+    },
+    (isManagerRole || isPlatformAdmin) && {
+      to: '/venue',
+      label: isPlatformAdmin ? 'Manager view' : 'My venue',
+      icon: Building2,
+      active: 'bg-slate-800 text-teal-400',
+    },
+    isManagerRole && ownsOrg && {                   // Phase 36: organization owners (admins use Admin → Organizations)
+      to: '/org',
+      label: 'Organization',
+      icon: Network,
+      active: 'bg-slate-800 text-teal-300',
+    },
+    isPlatformAdmin && {
+      to: '/admin',
+      label: 'Admin',
+      icon: Shield,
+      active: 'bg-indigo-950 text-indigo-300 border border-indigo-700/50',
+    },
+    {
+      to: '/venues',
+      label: 'Venues',
+      icon: MapPin,
+      active: 'bg-slate-800 text-amber-400',
+    },
+  ].filter(Boolean);
+
+  const venueSwitcher = (idSuffix) =>
 ```
 Replace with:
-```yaml
-      dockerfile: Dockerfile
-    restart: unless-stopped
+```jsx
+      label: 'Lead',
+      icon: ClipboardCheck,
+      active: 'bg-slate-800 text-brand-400',
+    },
+    (isManagerRole || isPlatformAdmin) && {
+      to: '/venue',
+      label: isPlatformAdmin ? 'Manager view' : 'My venue',
+      icon: Building2,
+      active: 'bg-slate-800 text-brand-400',
+    },
+    isManagerRole && ownsOrg && {                   // Phase 36: organization owners (admins use Admin → Organizations)
+      to: '/org',
+      label: 'Organization',
+      icon: Network,
+      active: 'bg-slate-800 text-brand-400',
+    },
+    isPlatformAdmin && {
+      to: '/admin',
+      label: 'Admin',
+      icon: Shield,
+      active: 'bg-slate-800 text-brand-400',
+    },
+    {
+      to: '/venues',
+      label: 'Venues',
+      icon: MapPin,
+      active: 'bg-slate-800 text-brand-400',
+    },
+  ].filter(Boolean).map((l) => ({
+    ...l,
+    on: l.on !== undefined ? l.on : (location.pathname === l.to || (l.to === '/venues' && location.pathname.startsWith('/venues/'))),
+  }));
+
+  const venueSwitcher = (idSuffix) =>
 ```
 
 **Edit 5.** Find:
-```yaml
-      dockerfile: Dockerfile
-    container_name: shiftboard-frontend
-    restart: unless-stopped
+```jsx
+    userRole === 'platform_admin' ? 'bg-indigo-400' : userRole === 'venue_manager' ? 'bg-teal-400' : 'bg-emerald-400';
+
+  return (
+    <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between h-16 items-center">
+          {/* Brand + desktop links */}
+          <div className="flex items-center space-x-3">
+            <Link to="/" className="flex items-center space-x-2">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-500 to-teal-400 flex items-center justify-center shadow-lg shadow-brand-500/20">
+                <Calendar className="w-5 h-5 text-slate-950 font-bold" />
+              </div>
+              <span className="text-xl font-bold tracking-tight text-white">
+                Shift<span className="text-brand-400">Board</span>
+              </span>
+            </Link>
+
+            <nav className="hidden lg:flex ml-6 space-x-2">
+              {links.map(({ to, label, icon: Icon, active }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${
+                    (location.pathname === to || (to === '/venues' && location.pathname.startsWith('/venues/'))) ? active : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span>{label}</span>
+                </Link>
 ```
 Replace with:
-```yaml
-      dockerfile: Dockerfile
-    restart: unless-stopped
+```jsx
+    userRole === 'platform_admin' ? 'bg-indigo-400' : userRole === 'venue_manager' ? 'bg-teal-400' : 'bg-emerald-400';
+
+  return (
+    <header className="bg-black border-b border-brand-500/25 sticky top-0 z-40">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between h-16 items-center">
+          {/* Brand + desktop links */}
+          <div className="flex items-center space-x-3">
+            <Link to="/" className="flex items-center" aria-label="ShiftUp home">
+              <BrandLogo />
+            </Link>
+
+            <nav className="hidden lg:flex ml-3 xl:ml-6 space-x-1 xl:space-x-2">
+              {links.map(({ to, label, icon: Icon, active, on }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  aria-current={on ? 'page' : undefined}
+                  className={`px-2.5 xl:px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 ${isPlatformAdmin ? '' : 'whitespace-nowrap '}${
+                    on ? active : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Icon className="w-4 h-4 flex-shrink-0" />
+                  <span>{label}</span>
+                </Link>
 ```
 
 **Edit 6.** Find:
-```yaml
-    ports:
-      - "5173:5173"
-      - "${PORT_FRONTEND:-80}:5173"
-    depends_on:
-      - backend
-    networks:
-      - shiftboard-network
+```jsx
+              <Link to="/profile" title="Your profile" className={`hidden lg:flex items-center gap-2 pl-1 pr-2 py-1 rounded-xl transition ${
+                location.pathname === '/profile' ? 'bg-slate-800' : 'hover:bg-slate-800/60'}`}>
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
+                  <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
 ```
 Replace with:
-```yaml
-    # Two ports on your computer reach the same Vite server (5173 inside the container).
-    ports:
-      - "${PORT_FRONTEND_VITE:-5173}:5173"
-      - "${PORT_FRONTEND:-80}:5173"
-    depends_on:
-      - backend
-    # "shiftboard-frontend" was this container's fixed name before Phase 35.4. It stays as a name
-    # on this stack's own network, so a Cloudflare tunnel that points at
-    # http://shiftboard-frontend:5173 keeps working. Each stack has its own network, so the
-    # same name in two stacks doesn't clash.
-    networks:
-      shiftboard-network:
-        aliases:
-          - shiftboard-frontend
+```jsx
+              <Link to="/profile" title="Your profile" className={`hidden lg:flex items-center gap-2 pl-1 pr-2 py-1 rounded-xl transition ${
+                location.pathname === '/profile' ? 'bg-slate-800' : 'hover:bg-slate-800/60'}`}>
+                <div className="text-right hidden xl:block">
+                  <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
+                  <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
 ```
 
 **Edit 7.** Find:
-```yaml
-    image: cloudflare/cloudflared:latest
-    container_name: shiftboard-cloudflared
-    restart: unless-stopped
+```jsx
+      {/* Mobile menu panel */}
+      {user && mobileOpen && (
+        <div className="lg:hidden border-t border-slate-800 bg-slate-900 px-4 pb-4 pt-3 space-y-3 shadow-2xl">
+          <div className="flex items-center justify-between">
+            <div>
 ```
 Replace with:
-```yaml
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
+```jsx
+      {/* Mobile menu panel */}
+      {user && mobileOpen && (
+        <div className="lg:hidden border-t border-slate-800 bg-black px-4 pb-4 pt-3 space-y-3 shadow-2xl">
+          <div className="flex items-center justify-between">
+            <div>
+```
+
+**Edit 8.** Find:
+```jsx
+          </div>
+
+          <nav className="grid gap-2">
+            {[...links, { to: '/profile', label: 'My profile', icon: UserRound, active: 'bg-slate-800 text-brand-400' }].map(({ to, label, icon: Icon, active }) => (
+              <Link
+                key={to}
+                to={to}
+                className={`px-4 py-3 rounded-xl text-base font-semibold transition flex items-center space-x-3 ${
+                  (location.pathname === to || (to === '/venues' && location.pathname.startsWith('/venues/'))) ? active : 'text-slate-200 bg-slate-800/60 hover:bg-slate-800'
+                }`}
+              >
+```
+Replace with:
+```jsx
+          </div>
+
+          <nav className="grid gap-2">
+            {[...links, { to: '/profile', label: 'My profile', icon: UserRound, active: 'bg-slate-800 text-brand-400', on: location.pathname === '/profile' }].map(({ to, label, icon: Icon, active, on }) => (
+              <Link
+                key={to}
+                to={to}
+                aria-current={on ? 'page' : undefined}
+                className={`px-4 py-3 rounded-xl text-base font-semibold transition flex items-center space-x-3 ${
+                  on ? active : 'text-slate-200 bg-slate-800/60 hover:bg-slate-800'
+                }`}
+              >
 ```
 
 ---
 
-## A2. NEW FILE `docker-compose.demo.yaml`
-In the repository root, next to `docker-compose.yaml`. It does not exist yet; create it. (If it does exist, replace its whole content with this.) The first line is `# ----...` and the **last line is `    profiles: ["tunnel-not-used-by-demo"]`**. `!override` is written exactly as shown, with no quotes.
-
-```yaml
-# ------------------------------------------------------------------------------
-# A SECOND, separate copy of ShiftBoard for demo data (Phase 35.3; file added in 35.4).
-#
-# It runs next to your normal stack with its own database, so nothing you or your
-# testers have entered is touched. Same code, same settings files, different ports:
-#
-#   web app   http://localhost:5183        API docs  http://localhost:8010/docs
-#   Postgres  localhost:5442               Redis     localhost:6389
-#
-# Start it (from the repository root):
-#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build
-# Load the demo data into it:
-#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml exec backend python -m src.demo_data load
-# Stop it / throw it away completely (-v deletes ONLY the demo copy's database):
-#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml down
-#   docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml down -v
-#
-# "-p shiftboard-demo" is the stack name. It is what keeps the copy separate (its own
-# containers, network and volumes), and it wins over COMPOSE_PROJECT_NAME in .env.
-# Never run these commands without it. See docs/DEPLOYMENT.md, section D.
-# The copy is always called shiftboard-demo, so run it from one folder only.
-# Needs Docker Compose 2.24 or newer (for "!override").
-# ------------------------------------------------------------------------------
-services:
-  database:
-    ports: !override
-      - "${DEMO_POSTGRES_PORT:-5442}:5432"
-
-  redis:
-    ports: !override
-      - "${DEMO_REDIS_PORT:-6389}:6379"
-
-  backend:
-    ports: !override
-      - "${DEMO_PORT_BACKEND:-8010}:8000"
-    # The demo copy never sends real email or texts, and its links point at itself.
-    environment:
-      - EMAIL_PROVIDER=console
-      - SMS_PROVIDER=off
-      - APP_BASE_URL=http://localhost:${DEMO_PORT_FRONTEND:-5183}
-
-  frontend:
-    ports: !override
-      - "${DEMO_PORT_FRONTEND:-5183}:5173"
-
-  # The Cloudflare tunnel belongs to the normal stack. It is NOT started for the demo copy
-  # (two tunnels with the same token would split your visitors between the two).
-  cloudflared:
-    profiles: ["tunnel-not-used-by-demo"]
-```
-
----
-
-## A3. `.env.template` (EDITS)
+## D5. `frontend/src/components/WorkerTabBar.jsx` (2 EDITS)
+The phone tab bar: "Find" becomes **ShiftBoard**, and the bar reads the saved tab once more after it starts listening.
 
 **Edit 1.** Find:
-```bash
-# Upgrading? Run scripts/consolidate_env.py once (see README).
-# ==============================================================================
+```jsx
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { ListChecks, Search, CalendarDays, ArrowRightLeft, UserRound } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+
+const ITEMS = [
+  { id: 'schedule', label: 'My shifts', icon: ListChecks },
+  { id: 'find', label: 'Find', icon: Search },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft },
 ```
 Replace with:
-```bash
-# Upgrading? Run scripts/consolidate_env.py once (see README).
-# ==============================================================================
+```jsx
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { ListChecks, LayoutGrid, CalendarDays, ArrowRightLeft, UserRound } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { BOARD_NAME } from '../brand';   // Phase 37
 
-# ------------------------------------------------------------------------------
-# Stack name (only matters when more than one stack runs on this computer)
-# ------------------------------------------------------------------------------
-# Docker Compose puts this name in front of every container, the network and the volumes,
-# for example shiftboard-prod-backend-1 and shiftboard-prod_postgres_data.
-# Not set = the name of this folder.
-#   * One stack on this computer: leave it commented out.
-#   * A second stack (for example prod next to dev): remove the "# " and give it its own name
-#     here AND its own ports below, BEFORE its first "docker compose up".
-#     See docs/DEPLOYMENT.md, section E.
-#   * Never change it on a stack that already has data. The database volume is found by this
-#     name, so a new name starts with an empty database (the old one is kept, not deleted).
-# COMPOSE_PROJECT_NAME=shiftboard-prod
+const ITEMS = [
+  { id: 'schedule', label: 'My shifts', icon: ListChecks },
+  { id: 'find', label: BOARD_NAME, icon: LayoutGrid },   // Phase 37: was "Find"
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft },
 ```
 
 **Edit 2.** Find:
-```bash
-PORT_BACKEND=8000
-PORT_FRONTEND=80
-# The Cloudflare tunnel token (TUNNEL_TOKEN) is in .secrets/stack.env
+```jsx
+    const onState = (e) => setState(e.detail);
+    window.addEventListener('worker_tab_state', onState);
+    return () => window.removeEventListener('worker_tab_state', onState);
+  }, []);
 ```
 Replace with:
-```bash
-# Each stack on this computer needs its own five ports: POSTGRES_PORT and REDIS_PORT above and
-# the three below. A second stack could use 5433, 6380, 8001, 8080 and 5174.
-PORT_BACKEND=8000
-# The web app is published on two ports. Both reach the same Vite server.
-PORT_FRONTEND=80
-PORT_FRONTEND_VITE=5173
-# The Cloudflare tunnel token (TUNNEL_TOKEN) is in .secrets/stack.env.
-# Each stack needs its OWN tunnel and token: one token in two stacks splits visitors between them.
+```jsx
+    const onState = (e) => setState(e.detail);
+    window.addEventListener('worker_tab_state', onState);
+    setState(savedState());   // Phase 37: the dashboard may have reported its tab before this listener existed
+    return () => window.removeEventListener('worker_tab_state', onState);
+  }, []);
 ```
 
 ---
 
-# PART B: Guides
-
-## B1. `docs/DEPLOYMENT.md` (EDITS)
-A new row in the first table, one bullet in section D, the new section E, and two rows in Troubleshooting.
+## D6. `frontend/src/pages/LoginPage.jsx` (3 EDITS)
+The logo above the form, a black page, and the back link says **ShiftBoard**.
 
 **Edit 1.** Find:
-```markdown
-| **D. Full demo data in a separate copy** | The same, but in its own database so your current data and testers aren't affected. | [D](#d-full-demo-data-in-a-separate-copy) |
+```jsx
+import { useAuth } from '../context/AuthContext';
+import {
+  Calendar,
+  Shield,
+  UserCheck,
 ```
 Replace with:
-```markdown
-| **D. Full demo data in a separate copy** | The same, but in its own database so your current data and testers aren't affected. | [D](#d-full-demo-data-in-a-separate-copy) |
-| **E. Two stacks on one computer** | A second, fully separate ShiftBoard (for example prod next to dev) with its own code, settings, database and public address. | [E](#e-two-stacks-on-one-computer-for-example-dev-and-prod) |
+```jsx
+import { useAuth } from '../context/AuthContext';
+import {
+  Shield,
+  UserCheck,
 ```
 
-**Edit 2.** The *Replace with* block is wrapped in four backticks; the three-backtick lines inside it are content. Find:
-```markdown
-* Needs Docker Compose 2.24 or newer (`docker compose version`).
-
----
-
-## Saving and restoring a snapshot
+**Edit 2.** Find:
+```jsx
+} from 'lucide-react';
+import { getPublicConfig } from '../utils/publicConfig';   // Phase 36
+import {
+  getFirebaseStatus,
 ```
 Replace with:
-````markdown
-* Needs Docker Compose 2.24 or newer (`docker compose version`).
-* The copy is always called `shiftboard-demo`, whichever folder you start it from. With two stacks on one computer (setup E), run the copy from one folder only.
-
----
-
-## E. Two stacks on one computer (for example dev and prod)
-
-Use this to run a second, fully separate ShiftBoard next to the one you already have. Each stack has its own folder, code, settings files, database, ports and public address.
-
-What keeps them apart:
-
-| | Where it comes from | Example: first stack (dev) | Example: second stack (prod) |
-| :--- | :--- | :--- | :--- |
-| Stack name | `COMPOSE_PROJECT_NAME` in that folder's `.env`. Not set = the folder's name. | `shift-scheduler` | `shiftboard-prod` |
-| Containers | `<stack name>-<service>-1` | `shift-scheduler-backend-1` | `shiftboard-prod-backend-1` |
-| Database volume | `<stack name>_postgres_data` | `shift-scheduler_postgres_data` | `shiftboard-prod_postgres_data` |
-| Ports on this computer | `.env` in that folder | 80, 5173, 8000, 5432, 6379 | 8080, 5174, 8001, 5433, 6380 |
-| Public address | that folder's own Cloudflare tunnel (`TUNNEL_TOKEN`) | its own | its own |
-
-Every `docker compose` command acts on the stack whose folder you are in.
-
-### The stack you already have
-
-* Its `.env` doesn't need to change, as long as its folder keeps its name.
-* After updating to 0.35.6, run `docker compose up -d` in its folder once. The containers are re-created under their new names (`<stack name>-backend-1` and so on). The data is kept. Don't run `down`.
-* `docker compose ls` shows its stack name. To make sure the name never changes (for example if the folder is renamed), put that exact name in its `.env`: `COMPOSE_PROJECT_NAME=<the name docker compose ls shows>`.
-* **Never give a stack that has data a different name.** The database volume is found by the stack name, so a new name starts with an empty database. Nothing is deleted: put the old name back and the data is there again.
-* Commands of your own that use the old container names (`docker exec shiftboard-backend ...`) become `docker compose exec backend ...`.
-
-### Setting up the second stack
-
-1. Clone the repository into a second folder, for example `shift-scheduler-prod`.
-2. In that folder, copy the templates and fill them in (see *Steps every setup starts with*). Give it its own `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY` and `SUPER_ADMIN_PASSWORD`.
-3. In its `.env`, set the name and five free ports **before the first start**:
-   ```
-   COMPOSE_PROJECT_NAME=shiftboard-prod
-   POSTGRES_PORT=5433
-   REDIS_PORT=6380
-   PORT_BACKEND=8001
-   PORT_FRONTEND=8080
-   PORT_FRONTEND_VITE=5174
-   ```
-   For a real (non-demo) stack also set `APP_BASE_URL` to its public address, `SUPER_ADMIN_USERNAME`, `SEED_DEMO_ACCOUNTS=false` and `SHOW_DEMO_LOGINS=false` (setup A).
-4. Give it its own Cloudflare tunnel: create a second tunnel, put its token in this folder's `.secrets/stack.env` as `TUNNEL_TOKEN`, and point the tunnel's public hostname at `http://frontend:5173`. **Never use one token in two stacks**: Cloudflare would split visitors between them.
-5. Check the name before starting. This prints `name: shiftboard-prod`:
-   ```bash
-   docker compose config | grep "^name:"            # PowerShell: docker compose config | Select-String "^name:"
-   ```
-   If it prints the first stack's name, stop: starting now would replace the first stack's containers and use its database.
-6. Start it and check:
-   ```bash
-   docker compose up -d --build
-   docker compose ls            # two stacks, both "running"
-   ```
-
-### Things to know
-
-* `http://frontend:5173` in a tunnel means "the frontend of the tunnel's own stack", so both tunnels can use the same address.
-* The public hostname must be listed under `allowedHosts` in `frontend/vite.config.js`, or the web app answers "Blocked request".
-* For Firebase sign-in, add the second public hostname in the Firebase Console under Authentication → Settings → Authorized domains.
-* `docker compose down -v` deletes the database of the stack whose folder you are in, and only that one.
-* Both stacks run the same kind of containers (Vite dev server, auto-reloading API). The second stack runs whatever code is checked out in its folder; update it there with `git pull` and `docker compose up -d --build`.
-
----
-
-## Saving and restoring a snapshot
-````
+```jsx
+} from 'lucide-react';
+import { getPublicConfig } from '../utils/publicConfig';   // Phase 36
+import BrandLogo from '../components/BrandLogo';   // Phase 37
+import { BOARD_NAME } from '../brand';              // Phase 37
+import {
+  getFirebaseStatus,
+```
 
 **Edit 3.** Find:
-```markdown
-| `service "backend" is not running` | Start the stack first: `docker compose up -d`. |
+```jsx
+    'w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-brand-500';
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 text-slate-100">
+      {boardOn && (
+        <div className="sm:mx-auto sm:w-full sm:max-w-md px-4 mb-4">
+          <Link to="/" className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-400 hover:text-white">
+            <ArrowLeft className="w-4 h-4" /> Open shifts
+          </Link>
+        </div>
+      )}
+      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
+        <div className="inline-flex w-14 h-14 rounded-2xl bg-gradient-to-tr from-brand-500 to-teal-400 items-center justify-center shadow-xl shadow-brand-500/20 mb-4">
+          <Calendar className="w-8 h-8 text-slate-950 font-black" />
+        </div>
+        <h2 className="text-3xl font-extrabold tracking-tight text-white">
+          Shift<span className="text-brand-400">Board</span>
+        </h2>
+        <p className="mt-2 text-sm text-slate-400">Pick up shifts. Fill your staff.</p>
+      </div>
+
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
 ```
 Replace with:
-```markdown
-| `service "backend" is not running` | Start the stack first: `docker compose up -d`. |
-| `Bind for 0.0.0.0:5432 failed: port is already allocated` (any port) | Another stack on this computer already uses that port. Give this stack its own ports in `.env` (section E). |
-| A second stack shows the first stack's data, or starting it replaced the first stack's containers | Both folders have the same stack name. Set `COMPOSE_PROJECT_NAME` in the second folder's `.env` (section E), then run `docker compose up -d --force-recreate` in the first folder and then in the second. |
+```jsx
+    'w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-brand-500';
+
+  return (
+    <div className="min-h-screen bg-black flex flex-col justify-center py-12 sm:px-6 lg:px-8 text-slate-100">
+      {boardOn && (
+        <div className="sm:mx-auto sm:w-full sm:max-w-md px-4 mb-4">
+          <Link to="/" className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-400 hover:text-white">
+            <ArrowLeft className="w-4 h-4" /> {BOARD_NAME}
+          </Link>
+        </div>
+      )}
+      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
+        <h1><BrandLogo variant="stack" /></h1>
+        <p className="mt-3 text-sm text-slate-400">Pick up shifts. Fill your staff.</p>
+      </div>
+
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
 ```
 
 ---
 
-## B2. `agy_system_instructions.md` (EDITS)
-One tree line, and rule 9 added after rule 8. Leave the Standing rules section exactly as it is.
+## D7. `frontend/src/pages/JoinPage.jsx` (2 EDITS)
+
+**Edit 1.** Find:
+```jsx
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Calendar, Building2, MapPin, Check, AlertTriangle, LogOut } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import api from '../api/client';
+```
+Replace with:
+```jsx
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Building2, MapPin, Check, AlertTriangle, LogOut } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';   // Phase 37
+import { useAuth } from '../context/AuthContext';
+import api from '../api/client';
+```
+
+**Edit 2.** Find:
+```jsx
+    });
+
+  const shell = (children) => (
+    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 px-4 text-slate-100">
+      <div className="text-center mb-6">
+        <div className="inline-flex w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-500 to-teal-400 items-center justify-center shadow-xl shadow-brand-500/20 mb-3">
+          <Calendar className="w-7 h-7 text-slate-950" />
+        </div>
+        <h1 className="text-2xl font-extrabold text-white">
+          Shift<span className="text-brand-400">Board</span>
+        </h1>
+      </div>
+      <div className="w-full max-w-md mx-auto bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4">{children}</div>
+```
+Replace with:
+```jsx
+    });
+
+  const shell = (children) => (
+    <div className="min-h-screen bg-black flex flex-col justify-center py-12 px-4 text-slate-100">
+      <div className="text-center mb-6">
+        <h1><BrandLogo variant="stack" className="h-32" /></h1>
+      </div>
+      <div className="w-full max-w-md mx-auto bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4">{children}</div>
+```
+
+---
+
+## D8. `frontend/src/pages/PublicBoardPage.jsx` (3 EDITS)
+The public home page: black header with the logo, and the heading is **ShiftBoard**.
+
+**Edit 1.** Find:
+```jsx
+import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
+import { rememberPublicEvent } from '../utils/publicConfig';
+
+const REFRESH_MS = 60000;
+```
+Replace with:
+```jsx
+import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
+import { rememberPublicEvent } from '../utils/publicConfig';
+import BrandLogo from '../components/BrandLogo';   // Phase 37
+import { APP_NAME, BOARD_NAME } from '../brand';    // Phase 37
+
+const REFRESH_MS = 60000;
+```
+
+**Edit 2.** Find:
+```jsx
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-500 to-teal-400 flex items-center justify-center shadow-lg shadow-brand-500/20 flex-shrink-0">
+              <Calendar className="w-5 h-5 text-slate-950" />
+            </div>
+            <span className="text-xl font-bold tracking-tight text-white truncate">
+              Shift<span className="text-brand-400">Board</span>
+            </span>
+          </div>
+          <button type="button" onClick={() => { setPicked(null); navigate('/login'); }}
+            className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap">
+```
+Replace with:
+```jsx
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      <header className="bg-black border-b border-brand-500/25 sticky top-0 z-40">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          <BrandLogo />
+          <button type="button" onClick={() => { setPicked(null); navigate('/login'); }}
+            className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap">
+```
+
+**Edit 3.** Find:
+```jsx
+      <main className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">Open shifts</h1>
+          <p className="mt-1 text-sm text-slate-400 max-w-2xl">
+            Shifts posted by venues on ShiftUp.{' '}
+            {canRegister
+              ? 'Create a free worker account to see the pay and the full details, and to book.'
+```
+Replace with:
+```jsx
+      <main className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">{BOARD_NAME}</h1>
+          <p className="mt-1 text-sm text-slate-400 max-w-2xl">
+            Open shifts posted by venues on {APP_NAME}.{' '}
+            {canRegister
+              ? 'Create a free worker account to see the pay and the full details, and to book.'
+```
+
+---
+
+## D9. `frontend/src/pages/WorkerDashboard.jsx` (13 EDITS)
+* Removed state: `hideRequested`. No new state.
+* New values: `offeredShiftIds`, `boardListings` (the listings that aren't on My shifts) and `onMyShifts` (how many were left out).
+* The first tab is chosen in the existing `setActiveTab((prev) => ...)` call inside `loadAll`. No new request to the server.
+* The tab's id stays `find`. Only its label and icon change.
+
+**Edit 1.** Find:
+```jsx
+import {
+  Calendar, AlertCircle, Briefcase, Check, Search, Filter, ArrowRightLeft, Zap, Info, CalendarDays, AlertTriangle,
+  ListChecks, Send, ChevronRight, RotateCcw, X,
+} from 'lucide-react';
+import TransferModal from '../components/TransferModal';
+```
+Replace with:
+```jsx
+import {
+  Calendar, AlertCircle, Briefcase, Check, Search, Filter, ArrowRightLeft, Zap, Info, CalendarDays, AlertTriangle,
+  ListChecks, Send, ChevronRight, RotateCcw, X, LayoutGrid,
+} from 'lucide-react';
+import TransferModal from '../components/TransferModal';
+```
+
+**Edit 2.** Find:
+```jsx
+} from '../utils/listingFormat';
+import { getCurrentPosition } from '../utils/geo';
+
+const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in'];
+const TAB_IDS = ['schedule', 'find', 'calendar', 'transfers'];
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+
+/**
+ * Worker home. Phase 29.4 layout:
+ *   Tabs: My shifts (default when you have something coming up) · Find shifts · Calendar · Hand-offs.
+ *   Each shift card has ONE main button (clock in/out, read the update, withdraw, ask to come back)
+ *   and a ⋯ menu for the rest (details, directions, calendar, chat, hand off, drop).
+```
+Replace with:
+```jsx
+} from '../utils/listingFormat';
+import { getCurrentPosition } from '../utils/geo';
+import { BOARD_NAME } from '../brand';   // Phase 37
+
+const UPCOMING_STATUSES = ['pending', 'pending_manager_approval', 'approved', 'confirmed', 'checked_in'];
+const WEEK_MS = 7 * 86400000;   // Phase 37: "this week" for choosing the first tab
+const TAB_IDS = ['schedule', 'find', 'calendar', 'transfers'];
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+
+/**
+ * Worker home. Phase 29.4 layout:
+ *   Tabs: My shifts · ShiftBoard · Calendar · Hand-offs.
+ *   Phase 37: "Find shifts" is now the ShiftBoard: every shift that is up and is NOT already on My shifts
+ *   (nothing they asked for, are booked on, are waitlisted for, or were offered).
+ *   With no ?tab= in the address, the first tab is My shifts when they have something booked or waiting in the
+ *   next 7 days, otherwise the ShiftBoard.
+ *   Each shift card has ONE main button (clock in/out, read the update, withdraw, ask to come back)
+ *   and a ⋯ menu for the rest (details, directions, calendar, chat, hand off, drop).
+```
+
+**Edit 3.** Find:
+```jsx
+  const [venueFilter, setVenueFilter] = useState('ALL');
+  const [instantOnly, setInstantOnly] = useState(false);
+  const [hideRequested, setHideRequested] = useState(false);
+  const [fitsOnly, setFitsOnly] = useState(false);            // Phase 31: fits my availability, not on time off
+  const [mineOnly, setMineOnly] = useState(false);            // Phase 32.2: hide other departments
+```
+Replace with:
+```jsx
+  const [venueFilter, setVenueFilter] = useState('ALL');
+  const [instantOnly, setInstantOnly] = useState(false);
+  const [fitsOnly, setFitsOnly] = useState(false);            // Phase 31: fits my availability, not on time off
+  const [mineOnly, setMineOnly] = useState(false);            // Phase 32.2: hide other departments
+```
+
+**Edit 4.** Find:
+```jsx
+      setOutgoingTransfers(outRes.data || []);
+      setActiveClockIns(new Set((activeClocksRes.data || []).map((te) => te.shift_id)));
+      // First load: open My shifts when there's something coming up, otherwise Find shifts
+      setActiveTab((prev) => {
+        if (prev) return prev;
+        const upcoming = (myRes.data || []).some((r) => {
+          const st = String(r.status || '').toLowerCase();
+          return UPCOMING_STATUSES.includes(st) && new Date(r.shift?.end_time).getTime() >= Date.now();
+        });
+        const waitOffer = (waitRes.data || []).some((w) => w.status === 'offered');
+        return upcoming || waitOffer || (offersRes.data || []).length ? 'schedule' : 'find';
+      });
+    } catch (err) {
+```
+Replace with:
+```jsx
+      setOutgoingTransfers(outRes.data || []);
+      setActiveClockIns(new Set((activeClocksRes.data || []).map((te) => te.shift_id)));
+      // First load (Phase 37): My shifts when something is booked or waiting in the next 7 days, otherwise the ShiftBoard.
+      //   booked or asked for  a request whose shift starts within 7 days (or is running now)
+      //   waiting on them      an offer from a manager, or a waitlist spot being held
+      //   in line              a waitlist place for a shift that starts within 7 days
+      setActiveTab((prev) => {
+        if (prev) return prev;
+        const now = Date.now();
+        const soon = (start) => {
+          const t = new Date(start).getTime();
+          return !Number.isNaN(t) && t <= now + WEEK_MS;
+        };
+        const upcoming = (myRes.data || []).some((r) => {
+          const st = String(r.status || '').toLowerCase();
+          if (!UPCOMING_STATUSES.includes(st)) return false;
+          if (st === 'checked_in') return true;
+          return new Date(r.shift?.end_time).getTime() >= now && soon(r.shift?.start_time);
+        });
+        const waiting = (waitRes.data || []).some((w) => w.status === 'offered' || soon(w.start_time));
+        return upcoming || waiting || (offersRes.data || []).length ? 'schedule' : 'find';
+      });
+    } catch (err) {
+```
+
+**Edit 5.** Find:
+```jsx
+  }, [pendingDeepLink, calendarByRequest]);
+
+  // Find Shifts
+  const openListingCount = listings.filter((l) => l.total_spots_left > 0 && !l.my_request).length;   // Phase 34: full events don't count
+  const roleOptions = useMemo(
+    () => Array.from(new Set(listings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN' || p.can_waitlist).map((p) => p.role_type)))).sort(),
+    [listings]
+  );
+  const venueOptions = useMemo(() => {
+    const m = new Map();
+    listings.forEach((l) => l.venue && m.set(l.venue.id, l.venue.name));
+    return Array.from(m.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [listings]);
+  const filteredListings = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const weekEnd = Date.now() + 7 * 86400000;
+    return listings.filter((l) => {
+      const tz = l.venue?.timezone;
+      if (q) {
+```
+Replace with:
+```jsx
+  }, [pendingDeepLink, calendarByRequest]);
+
+  // The ShiftBoard (Phase 37): everything that is up and is NOT already on My shifts.
+  // Left out: an event they asked for or are booked on, one they are waitlisted for, and one they were offered.
+  const offeredShiftIds = useMemo(() => new Set(offers.map((o) => o.shift_id)), [offers]);
+  const boardListings = useMemo(
+    () => listings.filter((l) => !l.my_request && !l.positions.some((p) => p.my_waitlist || offeredShiftIds.has(p.shift_id))),
+    [listings, offeredShiftIds]
+  );
+  const onMyShifts = listings.length - boardListings.length;
+  const openListingCount = boardListings.filter((l) => l.total_spots_left > 0).length;   // Phase 34: full events don't count
+  const roleOptions = useMemo(
+    () => Array.from(new Set(boardListings.flatMap((l) => l.positions.filter((p) => p.status === 'OPEN' || p.can_waitlist).map((p) => p.role_type)))).sort(),
+    [boardListings]
+  );
+  const venueOptions = useMemo(() => {
+    const m = new Map();
+    boardListings.forEach((l) => l.venue && m.set(l.venue.id, l.venue.name));
+    return Array.from(m.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [boardListings]);
+  const filteredListings = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const weekEnd = Date.now() + 7 * 86400000;
+    return boardListings.filter((l) => {
+      const tz = l.venue?.timezone;
+      if (q) {
+```
+
+**Edit 6.** Find:
+```jsx
+      if (whenFilter === 'tomorrow' && !isOnDay(l.start_time, tz, 1)) return false;
+      if (whenFilter === 'week' && new Date(l.start_time).getTime() > weekEnd) return false;
+      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.my_status || p.can_waitlist || p.my_waitlist))) return false;
+      if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
+      if (instantOnly && !l.any_instant) return false;
+      if (hideRequested && l.my_request) return false;
+      if (fitsOnly && (l.availability === 'outside' || l.time_off === 'blocked')) return false;   // Phase 31 / 32.1
+      if (mineOnly && isOtherDept(l)) return false;                                              // Phase 32.2
+      return true;
+    });
+  }, [listings, search, whenFilter, roleFilter, venueFilter, instantOnly, hideRequested, fitsOnly, mineOnly]);
+  // Phase 32.2: shifts in my departments first; everything else under "Other departments"
+  const listingGroups = useMemo(() => groupByDay(filteredListings.filter((l) => !isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
+  const otherGroups = useMemo(() => groupByDay(filteredListings.filter((l) => isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
+  const fullListings = useMemo(() => filteredListings.filter(isFullOnly), [filteredListings]);                 // Phase 34
+  const fullGroups = useMemo(() => groupByDay(fullListings), [fullListings]);
+  const myWaitCount = fullListings.filter((l) => l.positions.some((p) => p.my_waitlist)).length;
+  const coverByRequest = useMemo(() => new Map(myCovers.map((c) => [c.request_id, c])), [myCovers]);
+  const waitOffers = waitlists.filter((w) => w.status === 'offered').length;
+  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || hideRequested || fitsOnly || mineOnly;
+  const clearFilters = () => {
+    setSearch('');
+    setWhenFilter('all');
+    setRoleFilter('ALL');
+    setVenueFilter('ALL');
+    setInstantOnly(false);
+    setHideRequested(false);
+    setFitsOnly(false);
+    setMineOnly(false);
+```
+Replace with:
+```jsx
+      if (whenFilter === 'tomorrow' && !isOnDay(l.start_time, tz, 1)) return false;
+      if (whenFilter === 'week' && new Date(l.start_time).getTime() > weekEnd) return false;
+      if (roleFilter !== 'ALL' && !l.positions.some((p) => p.role_type === roleFilter && (p.status === 'OPEN' || p.can_waitlist))) return false;
+      if (venueFilter !== 'ALL' && l.venue?.id !== venueFilter) return false;
+      if (instantOnly && !l.any_instant) return false;
+      if (fitsOnly && (l.availability === 'outside' || l.time_off === 'blocked')) return false;   // Phase 31 / 32.1
+      if (mineOnly && isOtherDept(l)) return false;                                              // Phase 32.2
+      return true;
+    });
+  }, [boardListings, search, whenFilter, roleFilter, venueFilter, instantOnly, fitsOnly, mineOnly]);
+  // Phase 32.2: shifts in my departments first; everything else under "Other departments"
+  const listingGroups = useMemo(() => groupByDay(filteredListings.filter((l) => !isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
+  const otherGroups = useMemo(() => groupByDay(filteredListings.filter((l) => isOtherDept(l) && !isFullOnly(l))), [filteredListings]);
+  const fullListings = useMemo(() => filteredListings.filter(isFullOnly), [filteredListings]);                 // Phase 34
+  const fullGroups = useMemo(() => groupByDay(fullListings), [fullListings]);
+  const coverByRequest = useMemo(() => new Map(myCovers.map((c) => [c.request_id, c])), [myCovers]);
+  const waitOffers = waitlists.filter((w) => w.status === 'offered').length;
+  const filtersActive = search || whenFilter !== 'all' || roleFilter !== 'ALL' || venueFilter !== 'ALL' || instantOnly || fitsOnly || mineOnly;
+  const clearFilters = () => {
+    setSearch('');
+    setWhenFilter('all');
+    setRoleFilter('ALL');
+    setVenueFilter('ALL');
+    setInstantOnly(false);
+    setFitsOnly(false);
+    setMineOnly(false);
+```
+
+**Edit 7.** Find:
+```jsx
+  const tabs = [
+    { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length, badge: waitOffers },
+    { id: 'find', label: 'Find shifts', icon: Search, count: openListingCount, badge: coverOpen.filter((c) => c.can_take).length },
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays, badge: calendar.unread_count },
+    { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft, badge: incomingTransfers.length },
+```
+Replace with:
+```jsx
+  const tabs = [
+    { id: 'schedule', label: 'My shifts', icon: ListChecks, count: upcomingRequests.length, badge: waitOffers },
+    { id: 'find', label: BOARD_NAME, icon: LayoutGrid, count: openListingCount, badge: coverOpen.filter((c) => c.can_take).length },   // Phase 37
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays, badge: calendar.unread_count },
+    { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft, badge: incomingTransfers.length },
+```
+
+**Edit 8.** Find:
+```jsx
+                  <h3 className="text-sm font-semibold text-slate-300">Nothing coming up</h3>
+                  <button type="button" onClick={() => setActiveTab('find')} className="mt-2 text-xs text-brand-400 hover:text-brand-300 font-semibold">
+                    Find a shift →
+                  </button>
+                </div>
+```
+Replace with:
+```jsx
+                  <h3 className="text-sm font-semibold text-slate-300">Nothing coming up</h3>
+                  <button type="button" onClick={() => setActiveTab('find')} className="mt-2 text-xs text-brand-400 hover:text-brand-300 font-semibold">
+                    Open the {BOARD_NAME} →
+                  </button>
+                </div>
+```
+
+**Edit 9.** Find:
+```jsx
+        )}
+
+        {/* Find shifts */}
+        {activeTab === 'find' && (
+          <div className="mt-6">
+            <CoverBoard items={coverOpen} busyId={coverBusy} onTake={(c) => setCoverTake(c)} />
+            <div className="mt-6 bg-slate-900/60 border border-slate-800 rounded-2xl p-3 sm:p-4 space-y-3">
+```
+Replace with:
+```jsx
+        )}
+
+        {/* The ShiftBoard (Phase 37; the tab id is still 'find') */}
+        {activeTab === 'find' && (
+          <div className="mt-6">
+            <div className="mb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-2">
+              <div>
+                <h2 className="hidden md:flex text-xl font-extrabold text-white items-center gap-2">
+                  <LayoutGrid className="w-5 h-5 text-brand-400" /> {BOARD_NAME}
+                </h2>
+                <p className="text-sm text-slate-400 md:mt-0.5">Every shift that's up and isn't yours yet.</p>
+              </div>
+              {onMyShifts > 0 && (
+                <button type="button" onClick={() => setActiveTab('schedule')}
+                  className="self-start sm:self-auto text-xs font-semibold text-brand-400 hover:text-brand-300 inline-flex items-center gap-1">
+                  {plural(onMyShifts, 'event')} {onMyShifts === 1 ? 'is' : 'are'} already on My shifts <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <CoverBoard items={coverOpen} busyId={coverBusy} onTake={(c) => setCoverTake(c)} />
+            <div className="mt-6 bg-slate-900/60 border border-slate-800 rounded-2xl p-3 sm:p-4 space-y-3">
+```
+
+**Edit 10.** Find:
+```jsx
+                  <Zap className="w-3.5 h-3.5" /> Instant book
+                </button>
+                <button type="button" onClick={() => setHideRequested((v) => !v)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                    hideRequested ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'}`}>
+                  Hide ones I've requested
+                </button>
+                <button type="button" onClick={() => setFitsOnly((v) => !v)}
+                  title="Hide shifts outside your weekly availability or on days you have time off"
+```
+Replace with:
+```jsx
+                  <Zap className="w-3.5 h-3.5" /> Instant book
+                </button>
+                <button type="button" onClick={() => setFitsOnly((v) => !v)}
+                  title="Hide shifts outside your weekly availability or on days you have time off"
+```
+
+**Edit 11.** Find:
+```jsx
+              <div className="mt-6 text-center py-20 bg-slate-900/40 rounded-2xl border border-slate-800">
+                <Briefcase className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-slate-300">{listings.length === 0 ? 'No shifts open right now' : 'Nothing matches these filters'}</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {listings.length === 0 ? "Check back soon. You'll get a notification when a venue you work with posts a shift." : 'Try clearing a filter or two.'}
+                </p>
+              </div>
+```
+Replace with:
+```jsx
+              <div className="mt-6 text-center py-20 bg-slate-900/40 rounded-2xl border border-slate-800">
+                <Briefcase className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-slate-300">{boardListings.length === 0 ? (onMyShifts > 0 ? 'Nothing else is open right now' : 'No shifts open right now') : 'Nothing matches these filters'}</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {boardListings.length === 0 ? "Check back soon. You'll get a notification when a venue you work with posts a shift." : 'Try clearing a filter or two.'}
+                </p>
+              </div>
+```
+
+**Edit 12.** Find:
+```jsx
+                {/* Phase 34: full events, so people can get in line */}
+                {fullGroups.length > 0 && (
+                  <details className="group border-t border-slate-800 pt-6" open={myWaitCount > 0}>
+                    <summary className="cursor-pointer select-none list-none">
+                      <span className="text-sm font-bold text-slate-200">Full: join a waitlist ({fullListings.length})</span>
+                      {myWaitCount > 0 && <span className="ml-2 text-[11px] text-emerald-300">You're in line for {plural(myWaitCount, 'event')}</span>}
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        No spots left. Join the line and we'll book you (or offer you the spot) if one opens.
+```
+Replace with:
+```jsx
+                {/* Phase 34: full events, so people can get in line */}
+                {fullGroups.length > 0 && (
+                  <details className="group border-t border-slate-800 pt-6">
+                    <summary className="cursor-pointer select-none list-none">
+                      <span className="text-sm font-bold text-slate-200">Full: join a waitlist ({fullListings.length})</span>
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        No spots left. Join the line and we'll book you (or offer you the spot) if one opens.
+```
+
+**Edit 13.** Find:
+```jsx
+              <WorkerCalendar
+                items={calendar.items}
+                openListings={listings.filter((l) => !isFullOnly(l))}
+                onSelectItem={(item) => setDetailRequestId(item.request_id)}
+                onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
+```
+Replace with:
+```jsx
+              <WorkerCalendar
+                items={calendar.items}
+                openListings={boardListings.filter((l) => !isFullOnly(l))}
+                onSelectItem={(item) => setDetailRequestId(item.request_id)}
+                onSelectListing={(l) => setOpenListing({ eventId: l.event_id, initial: l })}
+```
+
+---
+
+# PART E: Delete one file
+
+## E1. DELETE `frontend/public/icons/favicon.svg`
+It is the old calendar icon. After Part B nothing refers to it (`frontend/index.html` now links `favicon-32.png` and `favicon-64.png`). Delete only this file: `git rm frontend/public/icons/favicon.svg` (or delete it in the file tree).
+
+---
+
+# PART F: Guides
+
+## F1. `agy_system_instructions.md` (2 EDITS)
+The title line, and a new rule 13 at the end of the file. **Leave the Standing rules section exactly as it is.**
 
 **Edit 1.** Find:
 ```markdown
-├── docker-compose.yaml      # reads .env + .secrets/stack.env + .secrets/integrations.env (Phase 35.1.1)
+# Project Context: "ShiftBoard" Scheduling Platform
+
+You are an expert full-stack developer and DevOps engineer. Your task is to build a shift-scheduling and community call-board application designed for the service industry (bartenders, servers, dishwashers, AV techs, etc.). 
 ```
 Replace with:
 ```markdown
-├── docker-compose.yaml      # reads .env + .secrets/stack.env + .secrets/integrations.env. No container names, no fixed ports (Phase 35.4)
+# Project Context: "ShiftUp" Scheduling Platform (called "ShiftBoard" until 0.37.0)
+
+You are an expert full-stack developer and DevOps engineer. Your task is to build a shift-scheduling and community call-board application designed for the service industry (bartenders, servers, dishwashers, AV techs, etc.). 
 ```
 
 **Edit 2.** Find:
 ```markdown
-`deploy_test_data.sh` (bash) and `deploy_test_data.ps1` (PowerShell) run the loader and must behave the same: a change to one goes into the other in the same phase.
+   * Every text value written to a feed goes through `ics_text()` (it escapes the value and neutralises every kind of line break), and every link through `app_link()`.
+   * Feeds are one-way and written by hand as iCalendar text (no new package). Don't add sign-in-with-Google or Microsoft calendar connections unless a phase asks.
 ```
 Replace with:
 ```markdown
-`deploy_test_data.sh` (bash) and `deploy_test_data.ps1` (PowerShell) run the loader and must behave the same: a change to one goes into the other in the same phase.
-9. **Several stacks on one computer (Phase 35.4):** dev and prod run side by side from two folders, kept apart by the stack name (`COMPOSE_PROJECT_NAME` in each folder's `.env`; not set = the folder's name) and by their own ports.
-   * Never add `container_name:` to a service, and never add a top-level `name:` or a `name:` under a network or volume in a compose file.
-   * Never write a fixed number on the left side of a `ports:` line. A new published port is a `${NAME:-default}` setting, documented in `.env.template`.
-   * Never rename a service, the network or a volume: the database volume is found by `<stack name>_postgres_data`.
-   * Refer to a container as `docker compose exec <service>`, never by a container name.
-   * Never run `docker compose` yourself on this computer: a command in the wrong folder acts on the wrong stack.
+   * Every text value written to a feed goes through `ics_text()` (it escapes the value and neutralises every kind of line break), and every link through `app_link()`.
+   * Feeds are one-way and written by hand as iCalendar text (no new package). Don't add sign-in-with-Google or Microsoft calendar connections unless a phase asks.
+13. **Brand (Phase 37):** the service is **ShiftUp**. **ShiftBoard** is only the board of open shifts (the worker's tab, id `find`, and the heading of the public home page).
+   * New screens import `APP_NAME` and `BOARD_NAME` from `frontend/src/brand.js` and show the logo with `<BrandLogo />` (`frontend/src/components/BrandLogo.jsx`). Never type "ShiftBoard" as the service's name.
+   * **Colour:** gold `brand-*` for main buttons, the active tab or link, links, focus rings and section icons; text on solid gold is `text-slate-950`, never white. Green `emerald-*` only for confirmed / booked / on / verified / done. Amber = waiting. Rose = problem.
+   * **Logo files** are in `frontend/public/brand/` and `frontend/public/icons/`, cut from `assets/main_logo_shift-up.png`. Don't redraw, recolour or regenerate them, and don't add an SVG version.
+   * **Keep these as they are** (people never see them, and renaming breaks things): the database name and user, the Docker network and `shiftboard-demo` stack, demo sign-ins `@shiftboard.com`, browser storage keys starting `shiftboard_`, calendar entry ids ending `@shiftboard`, the time-tracking value `'shiftboard'`, the FCM app name, and the `ShiftBoard.jsx` / `ShiftBoardModal` component names.
+   * A worker's ShiftBoard never lists an event they have requested, are waitlisted for or have been offered: those are on My shifts (`boardListings` in `frontend/src/pages/WorkerDashboard.jsx`).
+```
+
+---
+
+## F2. `product-roadmap.md` (1 EDIT)
+
+**Edit 1.** Find:
+```markdown
+  - **Read a worker's own calendar** (they paste its private link) to warn before they request a shift that clashes with something personal.
+
+### Later / nice to have
+- **Admin "needs attention" dashboard:**
+```
+Replace with:
+```markdown
+  - **Read a worker's own calendar** (they paste its private link) to warn before they request a shift that clashes with something personal.
+
+### Phase 37: ShiftUp branding and the ShiftBoard tab (shipped in 0.37.0)
+- ✅ **New name and look:** the service is ShiftUp (shift-up.team), with the gold logo, a black header and gold buttons. Green is kept for "confirmed".
+- ✅ **Worker view split in two:** **My shifts** (what's theirs) and the **ShiftBoard** (everything else that's up). The app opens whichever fits their week.
+- ⏳ **Later, if wanted:** a light theme; the logo in emails.
+
+### Later / nice to have
+- **Admin "needs attention" dashboard:**
 ```
 
 ---
 
 # PART V: Version, changelog & README (the standing directive, done for you)
 
-## V1. `frontend/package.json` (EDIT)
+## V1. `frontend/package.json` (1 EDIT)
 
 **Edit 1.** Find:
 ```json
   "name": "shiftboard-frontend",
   "private": true,
-  "version": "0.35.5",
+  "version": "0.36.1",
   "type": "module",
   "scripts": {
 ```
@@ -405,169 +1373,240 @@ Replace with:
 ```json
   "name": "shiftboard-frontend",
   "private": true,
-  "version": "0.35.6",
+  "version": "0.37.0",
   "type": "module",
   "scripts": {
 ```
 
 ---
 
-## V2. `backend/src/version.py` (EDIT)
+## V2. `backend/src/version.py` (1 EDIT)
 
 **Edit 1.** Find:
 ```python
 container is still running an old build.
 """
-APP_VERSION = "0.35.5"
+APP_VERSION = "0.36.1"
 ```
 Replace with:
 ```python
 container is still running an old build.
 """
-APP_VERSION = "0.35.6"
+APP_VERSION = "0.37.0"
 ```
 
 ---
 
-## V3. `CHANGELOG.md` (EDIT)
-The new section goes above `[0.35.5]`.
+## V3. `CHANGELOG.md` (1 EDIT)
+The intro line, and the new section above `[0.36.1]`.
 
 **Edit 1.** Find:
 ```markdown
+# Changelog
+
+All notable changes to ShiftBoard. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/): while pre-1.0, **0.&lt;phase&gt;.&lt;sub-phase&gt;** (see README → Versioning & releases).
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
-## [0.35.5] - 2026-10-02 - Phase 35.3.1: Demo data script for PowerShell
+## [0.36.1] - 2026-10-06 - Phase 36.1: Calendar sync
 ```
 Replace with:
 ```markdown
+# Changelog
+
+All notable changes to ShiftUp (called ShiftBoard until 0.37.0). The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/): while pre-1.0, **0.&lt;phase&gt;.&lt;sub-phase&gt;** (see README → Versioning & releases).
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
-## [0.35.6] - 2026-10-04 - Phase 35.4: Dev and prod stacks on one computer
-
-### Changed
-- **`docker-compose.yaml` no longer gives containers fixed names.** Compose names them `<stack name>-<service>-1` and puts the stack name in front of the network and the volumes, so several stacks can run on one computer.
-  - The stack name is `COMPOSE_PROJECT_NAME` in `.env`. Not set = the folder's name, as before, so an existing stack keeps its database volume.
-  - After updating, `docker compose up -d` re-creates the containers under their new names. The data is kept.
-  - Commands that used a container name (`docker exec shiftboard-backend ...`) become `docker compose exec backend ...`.
-- The web app's second port on your computer (5173) is now a setting, `PORT_FRONTEND_VITE`, so no port is fixed any more.
-- The frontend keeps `shiftboard-frontend` as a name on its own stack's network, so a Cloudflare tunnel that points at that name keeps working.
+## [0.37.0] - 2026-10-06 - Phase 37: ShiftUp branding and the ShiftBoard tab
 
 ### Added
-- `COMPOSE_PROJECT_NAME` (commented out) and `PORT_FRONTEND_VITE` in `.env.template`.
-- `docs/DEPLOYMENT.md`, section E: running two stacks (for example dev and prod) on one computer.
+- **ShiftBoard tab** for workers: every shift that's up and isn't theirs yet. It replaces "Find shifts".
+  - An event leaves the ShiftBoard once the worker requests it, joins its waitlist or is offered a shift in it. It is then on **My shifts**. A line at the top of the board says how many are there.
+  - **My shifts** and **ShiftBoard** are two links in the top bar, and two tabs on a phone.
+  - With no tab chosen, the app opens My shifts when the worker has something booked, requested, offered or waitlisted in the next 7 days, and the ShiftBoard when they don't.
+  - `/shiftboard` opens the ShiftBoard directly.
+- **Logo and icons** from `assets/main_logo_shift-up.png`: the header, the sign-in and invite pages, the public home page, the browser tab, the installed app and notification badges. The pictures are in `frontend/public/brand/` and `frontend/public/icons/`.
+- `frontend/src/brand.js` (`APP_NAME`, `APP_TAGLINE`, `BOARD_NAME`) and `frontend/src/components/BrandLogo.jsx`.
+- `scripts/phase37_rebrand.py`: the one-off script that renamed and recoloured more than 100 files in this version.
 
-### Fixed
-- `docker-compose.demo.yaml` was described in 0.35.4 but missing from the repository, so `--demo-copy` stopped with "docker-compose.demo.yaml is missing". The file is added.
+### Changed
+- **The service is now ShiftUp** (shift-up.team). Every screen, email, text message, notification, calendar name and the API title say ShiftUp. "ShiftBoard" now means the board of open shifts: the worker tab, and the heading of the public home page.
+- **Gold brand colour** (`brand-*` in `frontend/tailwind.config.js`, taken from the logo) on a black header. Main buttons, active tabs, links, focus rings and section icons are gold with dark text.
+  - Green now only means confirmed, booked, on, verified or done. Amber still means waiting, and rose a problem.
+  - Every link in the top bar uses the same gold when it is the current page.
+- The default `EMAIL_FROM` is `ShiftUp <no-reply@example.com>`. A stack whose `.env` sets `EMAIL_FROM` keeps sending under the name written there until that line is changed.
+- The shift chat is called **Shift chat** everywhere (two buttons said "Board"), and "the public shift board" in cover requests is now "the ShiftBoard".
+- Downloads are named `shiftup-hours-….csv` and `shiftup.ics`.
+- The manager calendar's selected view button and today's column are gold.
+- The installed app's name, colours and icons (`manifest.webmanifest`), the offline page, and the service worker's cache name (`shiftup-shell-v2`).
+- One sentence of text in `backend/src/auth.py` and `backend/src/routers/auth.py` ("Contact your venue or ShiftUp…"). Sign-in itself is unchanged.
 
-## [0.35.5] - 2026-10-02 - Phase 35.3.1: Demo data script for PowerShell
+### Removed
+- The "Hide ones I've requested" filter: requested shifts are no longer on the board.
+- `frontend/public/icons/favicon.svg` (the old calendar icon).
+
+### Not changed, on purpose
+- No database change. Names people never see still say `shiftboard`: the database and its user, the Docker network, the demo stack and demo sign-ins (`@shiftboard.com`), browser storage keys, calendar entry ids and the time-tracking value `shiftboard`.
+
+## [0.36.1] - 2026-10-06 - Phase 36.1: Calendar sync
 ```
 
 ---
 
-## V4. `README.md` (EDITS)
+## V4. `README.md` (5 EDITS)
 
 **Edit 1.** Find:
 ```markdown
-| Web app | http://localhost:5173 (also on `PORT_FRONTEND`, default 80) |
+| **Waitlist** | A line for a full shift. | | `WaitlistEntry` / `waitlist_entries` |
+| **Offer** | A manager offers a shift to one or more people; the first to accept gets it. | | `ShiftOffer` / `shift_offers` |
+
+Many API fields still say `positions` for an event's shifts (for example `EventListing.positions[]`). That's a historical name: the UI says **shifts**.
+
+---
 ```
 Replace with:
 ```markdown
-| Web app | http://localhost:5173 (`PORT_FRONTEND_VITE`) and http://localhost (`PORT_FRONTEND`, default 80) |
+| **Waitlist** | A line for a full shift. | | `WaitlistEntry` / `waitlist_entries` |
+| **Offer** | A manager offers a shift to one or more people; the first to accept gets it. | | `ShiftOffer` / `shift_offers` |
+| **ShiftBoard** | The board of open shifts. For a worker: every shift that's up and isn't theirs yet. For a visitor: the public home page. | | `BOARD_NAME` in `frontend/src/brand.js`; the worker tab's id is still `find` |
+
+Many API fields still say `positions` for an event's shifts (for example `EventListing.positions[]`). That's a historical name: the UI says **shifts**.
+
+**The name.** The service is **ShiftUp** (shift-up.team). Until 0.37.0 it was called ShiftBoard; that word now means only the board of open shifts. Names people never see still say `shiftboard`, on purpose: the database and its user, the Docker network and demo stack, the demo sign-ins (`@shiftboard.com`), browser storage keys, calendar entry ids and the `ShiftBoard.jsx` component. Don't rename them: it would sign people out, duplicate calendar entries or break a running stack.
+
+---
 ```
 
 **Edit 2.** Find:
 ```markdown
-| Full demo data in a separate copy | `docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build`, then the same loader inside it (or both in one: `bash deploy_test_data.sh load --demo-copy --start`, or `.\deploy_test_data.ps1 load --demo-copy --start`). Its own database, on http://localhost:5183. |
-
-**Everyday commands**
+### Home page and the public board
+* **`PUBLIC_EVENT_BOARD=false` (the default):** the home page (`/`) sends people who aren't signed in to the sign-in page.
+* **`PUBLIC_EVENT_BOARD=true`:** the home page is a **public board** of every posted, upcoming event, with a **Sign in / Sign up** button in the corner.
+  * It shows only: event name, date and time, venue name, city, positions and open spots (`GET /api/public/board`, no sign-in needed).
+  * It never shows pay, the street address, map pin, location name, notes, requirements or venue ids. Those need a worker account.
 ```
 Replace with:
 ```markdown
-| Full demo data in a separate copy | `docker compose -p shiftboard-demo -f docker-compose.yaml -f docker-compose.demo.yaml up -d --build`, then the same loader inside it (or both in one: `bash deploy_test_data.sh load --demo-copy --start`, or `.\deploy_test_data.ps1 load --demo-copy --start`). Its own database, on http://localhost:5183. |
-| Two stacks on one computer (dev + prod) | A second clone in its own folder, with its own `COMPOSE_PROJECT_NAME` and ports in its `.env`, its own secrets and its own Cloudflare tunnel. See `docs/DEPLOYMENT.md`, section E. |
-
-**Everyday commands**
+### Home page and the public board
+* **`PUBLIC_EVENT_BOARD=false` (the default):** the home page (`/`) sends people who aren't signed in to the sign-in page.
+* **`PUBLIC_EVENT_BOARD=true`:** the home page is a **public board** (titled **ShiftBoard**) of every posted, upcoming event, with a **Sign in / Sign up** button in the corner.
+  * It shows only: event name, date and time, venue name, city, positions and open spots (`GET /api/public/board`, no sign-in needed).
+  * It never shows pay, the street address, map pin, location name, notes, requirements or venue ids. Those need a worker account.
 ```
 
 **Edit 3.** Find:
 ```markdown
-* After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
+* Feeds cover 30 days back and 180 days ahead.
+
+### For workers
+* **Find shifts**: upcoming events, grouped by day, with filters:
+  * date
+  * position
 ```
 Replace with:
 ```markdown
-* After changing any of them: `docker compose up -d --force-recreate` (keeps your data).
-* **Stack name and ports (since 0.35.6).** No container has a fixed name: Compose names them `<stack name>-<service>-1`, and the network and volumes start with the stack name too. The stack name is `COMPOSE_PROJECT_NAME` in `.env` (not set = the folder's name), and every port on your computer is a setting. That is what lets two stacks (dev and prod) run on one computer. Never change the name of a stack that has data: the database volume is found by it.
+* Feeds cover 30 days back and 180 days ahead.
+
+### For workers
+* Two main tabs since 0.37.0: **My shifts** (everything that's theirs) and the **ShiftBoard** (everything else that's up). Both are links in the top bar and tabs on a phone.
+  * With no tab in the address, the app opens **My shifts** when the worker has something booked, requested, offered or waitlisted in the next 7 days, and the **ShiftBoard** when they don't.
+  * `/worker?tab=schedule` and `/worker?tab=find` open one or the other. `/shiftboard` is a short address for the second.
+* **ShiftBoard**: upcoming events that aren't theirs yet, grouped by day. An event leaves the board once they request it, join its waitlist or are offered a shift in it; it is then on My shifts. Filters:
+  * date
+  * position
 ```
 
 **Edit 4.** Find:
 ```markdown
-| :--- | :--- |
-| Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
+                     PublicBoardPage (home page when the board is on), LeadPage (/lead), OrganizationPage (/org)
+  components/        shared UI; admin/, manager/, worker/, profile/, lead/, org/ sub-folders
+  context/AuthContext.jsx, api/client.js   (locked: change only when asked)
+  utils/             formatting, time zones, errors, push, version
+database/init.sql    the whole schema (runs on an empty database)
+database/upgrades/   "keep your data" SQL per version, for a database you don't want to wipe
 ```
 Replace with:
 ```markdown
-| :--- | :--- |
-| Stack name and ports | `COMPOSE_PROJECT_NAME` (only for a second stack on one computer), `POSTGRES_PORT`, `REDIS_PORT`, `PORT_BACKEND`, `PORT_FRONTEND`, `PORT_FRONTEND_VITE` (read by Docker Compose, not by the app) |
-| Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
+                     PublicBoardPage (home page when the board is on), LeadPage (/lead), OrganizationPage (/org)
+  components/        shared UI; admin/, manager/, worker/, profile/, lead/, org/ sub-folders
+                     BrandLogo.jsx = the logo (bar, stack or mark)
+  brand.js           the names: APP_NAME ("ShiftUp"), APP_TAGLINE, BOARD_NAME ("ShiftBoard")
+  context/AuthContext.jsx, api/client.js   (locked: change only when asked)
+  utils/             formatting, time zones, errors, push, version
+frontend/public/brand/   the logo pictures the app shows · frontend/public/icons/ = app icons and favicons
+assets/                  the original logo (main_logo_shift-up.png); the files above are cut from it
+frontend/tailwind.config.js   the brand colours (brand-50 … brand-950; brand-500 is the logo's gold)
+scripts/phase37_rebrand.py    the one-off rename and recolour of Phase 37 (kept for the record; it does nothing on a second run)
+database/init.sql    the whole schema (runs on an empty database)
+database/upgrades/   "keep your data" SQL per version, for a database you don't want to wipe
+```
+
+**Edit 5.** Find:
+```markdown
+7. **No new packages** unless the phase says so.
+8. **Every phase ends with a version bump and a CHANGELOG entry** (section 9).
+
+---
+```
+Replace with:
+```markdown
+7. **No new packages** unless the phase says so.
+8. **Every phase ends with a version bump and a CHANGELOG entry** (section 9).
+9. **Brand and colour** (since 0.37.0):
+   * The service is **ShiftUp**; the board of open shifts is the **ShiftBoard**. In new screens import `APP_NAME` and `BOARD_NAME` from `frontend/src/brand.js`, and show the logo with `<BrandLogo />`.
+   * **Gold (`brand-*`)** is for main buttons, the active tab or link, links, focus rings and section icons. Text on solid gold is `text-slate-950`, never white.
+   * **Green (`emerald-*`)** only means confirmed, booked, on, verified or done. **Amber** means waiting. **Rose** means a problem. Don't use green for a button that isn't one of those.
+   * Two areas keep their own accent from before 0.37.0: the admin screens and the shift chat are indigo, and the organization screens are teal.
+   * Don't redraw or recolour the logo. New sizes are cut from `assets/main_logo_shift-up.png`.
+
+---
 ```
 
 ---
 
-# PART R: For Andrew: deploying prod next to dev (AGY: don't run any of this)
+# PART R: For Andrew: restart and try it (AGY: don't run any of this)
 
-No database change, so no SQL and no wipe. **Never run `docker compose down -v` for this.**
+## 1. Restart (no database change)
 
-### 1. The dev stack (the one that's running now)
-1. Before pulling, note its stack name: `docker compose ls`. It is the dev folder's name (probably `shift-scheduler`).
-2. Open the dev tunnel in Cloudflare Zero Trust → Networks → Tunnels → Public hostname and look at the service address:
-   - `http://frontend:5173` or `http://shiftboard-frontend:5173`: both keep working.
-   - an address with this computer's IP or `localhost` and a port: it keeps working, because dev keeps its ports.
-3. Pull this phase into the dev folder, then run `docker compose up -d` there. The containers are re-created as `<stack name>-backend-1` and so on. The database is the same volume as before.
-4. Optional, and recommended: pin the name so a renamed folder can't detach the database. Add this line to dev's `.env`, using exactly the name from step 1: `COMPOSE_PROJECT_NAME=shift-scheduler`.
-5. Dev's ports stay as they are. You don't need to add `PORT_FRONTEND_VITE` to dev's `.env`; it defaults to 5173.
+Nothing in the database changes, so **no wipe is needed** and there is no SQL. In each stack's folder:
+```
+docker compose restart frontend
+```
+* The frontend needs the restart to show 0.37.0 and to read the new colours. The backend reloads by itself.
+* Your usual `docker compose up -d --build` works too. A wipe (`docker compose down -v`, then `docker compose up -d --build`) is only if you want one for other reasons.
 
-Dev can be updated before or after prod is started. Prod doesn't depend on it.
+## 2. Things only you can do
 
-### 2. The prod stack
-1. Clone the repository into a second folder (for example `shift-scheduler-prod`) at this phase's commit or later.
-2. Copy the four templates and fill them in. Use new values for `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SECRET_KEY` and `SUPER_ADMIN_PASSWORD` in prod's `.secrets/stack.env`; don't copy dev's file.
-3. In prod's `.env`:
-   ```
-   COMPOSE_PROJECT_NAME=shiftboard-prod
-   POSTGRES_PORT=5433
-   REDIS_PORT=6380
-   PORT_BACKEND=8001
-   PORT_FRONTEND=8080
-   PORT_FRONTEND_VITE=5174
-   APP_BASE_URL=https://<prod's public address>
-   SUPER_ADMIN_USERNAME=<your admin email>
-   SEED_DEMO_ACCOUNTS=false
-   SHOW_DEMO_LOGINS=false
-   ENV=production
-   DEBUG=false
-   ```
-4. Create a **second Cloudflare tunnel** for prod. Put its token in prod's `.secrets/stack.env` as `TUNNEL_TOKEN` and point its public hostname at `http://frontend:5173`. Never reuse dev's token.
-5. Check prod's public hostname is in `allowedHosts` in `frontend/vite.config.js`. Today the list is: `dev-scheduler.jaccollective.com`, `shiftboard.local`, `dev-scheduler-local.jaccollective.com`, `dev.shift-up.team`, `shift-up.team`, `dev-local.shift-up.team`. A hostname that isn't there needs a one-line phase.
-6. Add prod's hostname to Firebase Console → Authentication → Settings → Authorized domains.
-7. In the prod folder, check the name **before** the first start:
-   ```bash
-   docker compose config | grep "^name:"            # PowerShell: docker compose config | Select-String "^name:"
-   ```
-   It must print `name: shiftboard-prod`. If it prints dev's name, stop and fix `.env` first.
-8. Start it: `docker compose up -d --build`
+* **`EMAIL_FROM`:** if a stack's `.env` has `EMAIL_FROM=ShiftBoard <...>`, change the name to ShiftUp there, then `docker compose up -d --force-recreate`. Only the default changed; your `.env` wins.
+* **Names outside the code:** the Firebase project's public name (shown on the Google sign-in screen and in Firebase emails), the Cloudflare tunnel's hostnames, and the sender name in Resend or your SMTP service.
+* **Phones that already installed the app** keep the old icon and name for a while. Android updates them by itself within a day or two. On an iPhone, remove the home screen icon and add it again.
+* **The browser tab icon** can stay cached. A hard refresh (Ctrl+F5) shows the new one.
+* **Calendar apps** show the calendar's old name ("ShiftBoard: My shifts") until they next read the link. Some keep the name they first saw; renaming it in the calendar app is safe. Entries are not duplicated.
 
-### Checklist
-1. `docker compose ls` lists two stacks, dev's name and `shiftboard-prod`, both running.
-2. `docker ps --format "table {{.Names}}\t{{.Ports}}"` shows ten containers: five starting with dev's stack name and five starting with `shiftboard-prod-`. No port appears twice.
-3. `docker volume ls` shows `<dev's name>_postgres_data` and `shiftboard-prod_postgres_data`.
-4. Dev: sign in at the dev address. The testers' venues and people are still there, and Admin → System shows *Web app 0.35.6 · Server 0.35.6*.
-5. Prod: sign in at the prod address as the new admin. Admin → Venues is empty and Admin → People lists only you.
-6. In the repo: `docker-compose.demo.yaml` exists, and searching `docker-compose.yaml` for `container_name:` finds nothing.
+## 3. Checklist
+1. Admin → System: *Web app 0.37.0 · Server 0.37.0*.
+2. The header is black with the gold triangle logo and "ShiftUp". The browser tab says ShiftUp and has the new icon.
+3. Signed out, with the public board on: the page is headed **ShiftBoard**, and the **Sign in / Sign up** button is gold with dark text.
+4. The sign-in page shows the full logo with "Teams App" on black.
+5. Sign in as a worker with shifts this week (demo: `diego.price@demo.example.com`, password `Demo12345!`): the app opens on **My shifts**. The top bar has **My shifts** and **ShiftBoard**.
+6. Open **ShiftBoard**: nothing you have asked for or been offered is listed, and a line at the top says how many events are already on My shifts. There is no "Hide ones I've requested" button.
+7. Ask for a shift on the ShiftBoard: it leaves the board and shows on My shifts.
+8. Create a new worker account, or use one with nothing coming up: the app opens on the **ShiftBoard**.
+9. On a phone: the bottom bar reads My shifts, ShiftBoard, Calendar, Hand-offs, Profile.
+10. Booked and confirmed things are still green (for example the "Booked" badge on My shifts). Waiting things are still amber.
+11. As a manager: main buttons are gold with dark text, and the posted events calendar's selected view (Month / Week) is gold.
+12. `https://<your address>/shiftboard` opens the ShiftBoard after sign-in.
+
+## 4. Things to know
+* **Amber and gold are close.** Amber still means "waiting" and gold is the brand. They are different shades and are never used for the same thing, but if they read too alike on your screen, say so and the waiting colour can move to orange.
+* **Admin screens are still indigo and organization screens teal.** Say if you want those gold too.
+* **The logo's mark** (three gold triangles) is very close to a well-known video game emblem. Worth a trademark check before the site goes public.
+* **The 10 pictures** picked up a small content-credentials tag (about 6 KB each) when they were copied onto this computer. The pixels are identical to the tested ones.
+* **`test_deployment.md`**, `scripts/consolidate_env.py`, the `.secrets/*.template` headings and old CHANGELOG entries still say ShiftBoard. They are records of earlier versions and were left alone.
 
 ---
 
 **"CRITICAL SYSTEM DIRECTIVE: Starting immediately, upon the successful completion of any future phase or feature implementation, you must autonomously bump the version number in `frontend/package.json`, append a bulleted summary of changes to `CHANGELOG.md`, and update `README.md` if the architecture changed. Do not ask for permission to do this."**
 
-(For this phase, Part V already does all three for 0.35.6. Apply it as written and don't bump again.)
+(For this phase, Part V already does all three for 0.37.0. Apply it as written and don't bump again.)

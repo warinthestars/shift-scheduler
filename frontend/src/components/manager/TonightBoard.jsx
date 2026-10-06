@@ -35,10 +35,14 @@ function agoText(ms) {
  *        onOpenBoard({ id, title, role_type }), onOpenEvent(eventId), onTimesheet(eventId), onOpenWorker(workerId),
  *        onChanged(message)   -> parent reloads everything and shows the message
  *        onSummary({ late, openSpots })
+ * Phase 36: also the shift lead's board (pages/LeadPage.jsx). Lead mode passes
+ *        tonightPath = `/lead/venues/${venueId}/tonight` and timesLabel = 'Clock times', and leaves out
+ *        onOpenEvent / onOpenWorker (those buttons then aren't drawn). Everything else is the same.
  */
 export default function TonightBoard({
   venueId, timeZone, refreshKey = 0, reliabilityMap = {},
   onOpenBoard, onOpenEvent, onTimesheet, onOpenWorker, onChanged, onSummary,
+  tonightPath = null, timesLabel = 'Time sheet',
 }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -57,7 +61,7 @@ export default function TonightBoard({
     if (!venueId) return;
     if (!quiet) setLoading(true);
     try {
-      const res = await api.get(`/venues/${venueId}/tonight`);
+      const res = await api.get(tonightPath || `/venues/${venueId}/tonight`);
       if (venueRef.current !== venueId) return;
       setData(res.data);
       setError('');
@@ -68,7 +72,7 @@ export default function TonightBoard({
     } finally {
       setLoading(false);
     }
-  }, [venueId]);
+  }, [venueId, tonightPath]);
 
   useEffect(() => {
     setData(null);
@@ -172,7 +176,7 @@ export default function TonightBoard({
       if (person.p.phone) {
         out.push(<a key="call" href={`tel:${person.p.phone}`} className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}><Phone className="w-3 h-3" /> Call</a>);
       }
-      out.push(<button key="in" type="button" onClick={() => askClockIn(person.p)} className={`${btn} border-emerald-500/40 bg-emerald-600/20 text-emerald-200`}><LogIn className="w-3 h-3" /> Clock in</button>);
+      out.push(<button key="in" type="button" onClick={() => askClockIn(person.p)} className={`${btn} border-brand-500/40 bg-brand-600/20 text-brand-200`}><LogIn className="w-3 h-3" /> Clock in</button>);
       out.push(<button key="ns" type="button" onClick={() => askNoShow(person.p, person.ev)} className={`${btn} border-rose-500/40 bg-rose-600/15 text-rose-200`}><UserX className="w-3 h-3" /> No-show</button>);
     }
     if (a.kind === 'missed' && person) {
@@ -186,7 +190,7 @@ export default function TonightBoard({
       out.push(<button key="board" type="button" onClick={() => openBoard(ev.positions[0], ev)} className={`${btn} border-slate-700 bg-slate-800 text-slate-200`}><MessageSquare className="w-3 h-3" /> Message</button>);
     }
     if (a.kind === 'geo' && a.event_id) {
-      out.push(<button key="ts" type="button" onClick={() => onTimesheet?.(a.event_id)} className={`${btn} border-slate-700 bg-slate-800 text-slate-200`}><ClipboardList className="w-3 h-3" /> Time sheet</button>);
+      out.push(<button key="ts" type="button" onClick={() => onTimesheet?.(a.event_id)} className={`${btn} border-slate-700 bg-slate-800 text-slate-200`}><ClipboardList className="w-3 h-3" /> {timesLabel}</button>);
     }
     return out;
   };
@@ -300,6 +304,7 @@ export default function TonightBoard({
                   onOpenEvent={onOpenEvent}
                   onTimesheet={onTimesheet}
                   onOpenWorker={onOpenWorker}
+                  timesLabel={timesLabel}
                 />
               ))}
             </div>

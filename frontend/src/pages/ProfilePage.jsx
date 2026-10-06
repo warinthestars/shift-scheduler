@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { UserRound, CalendarDays, CalendarOff, Award, Bell, Check, AlertCircle, X, CircleDot } from 'lucide-react';
+import { UserRound, CalendarDays, CalendarOff, CalendarPlus, Award, Bell, Check, AlertCircle, X, CircleDot } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Avatar } from '../components/WorkerProfilePanel';
@@ -8,6 +8,7 @@ import AboutSection from '../components/profile/AboutSection';
 import AvailabilityEditor from '../components/profile/AvailabilityEditor';
 import TimeOffPanel from '../components/profile/TimeOffPanel';
 import CertificatesPanel from '../components/profile/CertificatesPanel';
+import CalendarSyncPanel from '../components/profile/CalendarSyncPanel';   // Phase 36.1
 import NotificationSettingsModal from '../components/NotificationSettingsModal';
 
 const MISSING_TEXT = {
@@ -20,8 +21,9 @@ const MISSING_TEXT = {
 
 /**
  * Phase 31 + 32: The signed-in person's profile.
- * Tabs (?tab=): about · availability · time-off · certificates · notifications. Workers see all of them;
- * managers and admins see About and Notifications.
+ * Tabs (?tab=): about · availability · time-off · certificates · calendar · notifications. Workers see all of them;
+ * managers and admins see About, Calendar sync and Notifications.
+ * Phase 36.1: Calendar sync is for every account type (hidden when CALENDAR_SYNC is off).
  */
 export default function ProfilePage() {
   const { refreshProfile } = useAuth();
@@ -30,6 +32,7 @@ export default function ProfilePage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState(null);   // { type, text }
   const [showNotif, setShowNotif] = useState(false);
+  const [calendars, setCalendars] = useState(null);   // Phase 36.1: { enabled, public_address_ok, calendars } (null = not loaded)
 
   const load = async () => {
     try {
@@ -43,6 +46,10 @@ export default function ProfilePage() {
 
   useEffect(() => {
     load();
+    // Phase 36.1: which calendars this account may connect. A failure just hides the tab.
+    api.get('/me/calendar-links')
+      .then((res) => setCalendars(res.data))
+      .catch(() => setCalendars({ enabled: false, public_address_ok: true, calendars: [] }));
   }, []);
 
   const isWorker = profile?.role === 'worker';
@@ -51,6 +58,7 @@ export default function ProfilePage() {
     isWorker && { id: 'availability', label: 'Availability', icon: CalendarDays },
     isWorker && { id: 'time-off', label: 'Time off', icon: CalendarOff },   // Phase 32.1: blocks, nothing to wait for
     isWorker && { id: 'certificates', label: 'Certificates', icon: Award, badge: (profile?.certifications || []).filter((c) => c.expired || c.status === 'rejected').length },
+    (calendars === null || calendars.enabled) && { id: 'calendar', label: 'Calendar sync', icon: CalendarPlus },   // Phase 36.1
     { id: 'notifications', label: 'Notifications', icon: Bell },
   ].filter(Boolean);
   const requested = params.get('tab');
@@ -115,7 +123,7 @@ export default function ProfilePage() {
           {tabs.map((t) => (
             <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
               className={`px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition ${
-                tab === t.id ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>
+                tab === t.id ? 'bg-brand-500 text-slate-950' : 'text-slate-300 hover:bg-slate-800'}`}>
               <t.icon className="w-4 h-4" /> {t.label}
               {t.badge > 0 && <span className="px-1.5 rounded-full bg-amber-500 text-slate-950 text-[10px]">{t.badge}</span>}
             </button>
@@ -142,11 +150,12 @@ export default function ProfilePage() {
         {tab === 'certificates' && (
           <CertificatesPanel certifications={profile.certifications} types={profile.cert_types} onChanged={reload} onError={fail} />
         )}
+        {tab === 'calendar' && <CalendarSyncPanel data={calendars} onData={setCalendars} onSaved={ok} onError={fail} />}
         {tab === 'notifications' && (
           <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-2">
             <p className="text-sm text-slate-300">Choose what gets emailed or texted to you, quiet hours, and who can find you.</p>
             <button type="button" onClick={() => setShowNotif(true)}
-              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
+              className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
               <Bell className="w-4 h-4" /> Notification settings
             </button>
           </div>

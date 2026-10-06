@@ -8,11 +8,13 @@ from sqlalchemy import select, delete, func, distinct
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import Venue, Shift, User, ShiftRequest, UserRole, VenueManager, VenueWhitelist, TimeEntry
+from src.models import OrganizationMember                                       # Phase 36
 from src.schemas import VenueResponse, UserResponse, UserCreateAdmin, UserUpdateAdmin, AdminPasswordReset, AdminPasswordResetResponse
 from src.auth import require_admin, get_password_hash, normalize_role
 from src.serializers import auth_source_for
 from src.services.always_admin import is_always_admin_email
 from src.services import admin_audit
+from src.services.organizations import drop_memberships_unless_manager, sync_managers   # Phase 36
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 VALID_ROLES = ("worker", "venue_manager", "platform_admin")
@@ -286,7 +288,10 @@ async def update_admin_user(
                 missing = [str(v) for v in target_ids if v not in set(found)]
                 if missing:
                     raise HTTPException(status_code=400, detail=f"Unknown venue id(s): {', '.join(missing)}")
-            if new_role == "venue_manager" and not target_ids:
+            owns_org = bool(await db.scalar(                                 # Phase 36: an owner's venues come from the organization
+                select(func.count(OrganizationMember.user_id)).where(OrganizationMember.user_id == user.id)
+            ))
+            if new_role == "venue_manager" and not target_ids and not (owns_org and old_role == "venue_manager"):
                 raise HTTPException(
                     status_code=400,
                     detail="Assign at least one venue when making someone a Venue Manager."
@@ -312,7 +317,12 @@ async def update_admin_user(
                 user.email = new_email
 
         if rebuild_venues:
-            await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id))
+            # Phase 36: rows an organization gave them (via_org) are not part of "venue assignments".
+            # They are left alone here and settled by sync_managers() below.
+            org_venue_ids = set((await db.execute(
+                select(VenueManager.venue_id).where(VenueManager.user_id == user.id, VenueManager.via_org == True)
+            )).scalars().all())
+            await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id, VenueManager.via_org == False))
             # Phase 29: keep team notes / positions / blocks. Only ACTIVE team rows for venues that were
             # unticked are deleted (as before); removed/blocked rows are kept; ticked venues are (re)activated.
             wl_rows = {
@@ -325,6 +335,8 @@ async def update_admin_user(
                     await db.delete(r)
             for idx, vid in enumerate(target_ids):
                 if new_role == "venue_manager":
+                    if vid in org_venue_ids:
+                        continue                                    # already theirs through the organization
                     db.add(VenueManager(venue_id=vid, user_id=user.id, is_primary=(idx == 0)))
                 elif new_role == "worker":
                     existing_wl = wl_rows.get(vid)
@@ -333,6 +345,16 @@ async def update_admin_user(
                         existing_wl.is_active = True
                     else:
                         db.add(VenueWhitelist(venue_id=vid, worker_id=user.id, is_active=True, status="active", source="admin"))
+
+        if role_changed:                                            # Phase 36: owners are manager accounts
+            await db.flush()
+            await drop_memberships_unless_manager(db, user)
+            await sync_managers(db)
+            if new_role != "worker":                                # a shift lead is a worker
+                for r in (await db.execute(
+                    select(VenueWhitelist).where(VenueWhitelist.worker_id == user.id, VenueWhitelist.is_lead == True)
+                )).scalars().all():
+                    r.is_lead = False
 
         await db.commit()
     except HTTPException:
@@ -401,7 +423,7 @@ async def admin_reset_password(
     if not user.hashed_password:
         raise HTTPException(
             status_code=400,
-            detail="This person signs in with Firebase, so there's no ShiftBoard password to reset. "
+            detail="This person signs in with Firebase, so there's no ShiftUp password to reset. "
                    "They can use 'Forgot password' on the login page, or you can reset it in the Firebase Console."
         )
 

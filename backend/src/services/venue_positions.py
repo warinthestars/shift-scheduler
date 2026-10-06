@@ -26,6 +26,7 @@ NOT_NULL_VENUE_FIELDS = (
     "allow_public_cover",                                                                            # Phase 34
     "team_time_tracking", "work_week_start", "pay_period", "pay_period_approval",                    # Phase 35
     "tips_enabled", "tip_pool_split", "tip_pool_payroll", "tips_shown_to_workers",                   # Phase 35.2
+    "public_board",                                                                                  # Phase 36
 )
 VALID_TIP_SPLITS = ("hours", "equal")                                                                 # Phase 35.2
 VALID_TIME_TRACKING = ("shiftboard", "payroll")                                                      # Phase 35
@@ -34,6 +35,7 @@ TEXT_VENUE_FIELDS = (
     "name", "address", "phone", "arrival_instructions", "dress_code",
     "default_shift_notes", "description", "logo_url", "timezone", "approval_policy",
     "website_url",                                                                                   # Phase 34.6
+    "city",                                                                                          # Phase 36
 )
 WEBSITE_ERROR = "Enter the venue's web address, like www.yourvenue.com."
 _HOST = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.IGNORECASE)
@@ -103,6 +105,9 @@ def clean_venue_payload(data: dict) -> dict:
 
     if "website_url" in data:                                                # Phase 34.6
         data["website_url"] = clean_website(data["website_url"])
+
+    if data.get("city") and any(ch.isdigit() for ch in data["city"]):         # Phase 36: a city, not a street address
+        raise HTTPException(status_code=400, detail="Enter just the city or area, like Denver, CO. No street numbers.")
 
     if "approval_policy" in data and data["approval_policy"] not in VALID_APPROVAL_POLICIES:
         raise HTTPException(status_code=400, detail="Choose how shift requests are approved.")

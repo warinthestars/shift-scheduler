@@ -105,14 +105,14 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
             <Row state={sys.push_route === 'fcm' ? 'ok' : 'warn'} label="Phone notifications">
               {sys.push_route === 'fcm'
                 ? `Sending through Firebase Cloud Messaging · ${sys.push_devices} device${sys.push_devices === 1 ? '' : 's'} turned on.`
-                : `Sending with ShiftBoard's own Web Push (works without Firebase) · ${sys.push_devices} device${sys.push_devices === 1 ? '' : 's'} turned on.`}
+                : `Sending with ShiftUp's own Web Push (works without Firebase) · ${sys.push_devices} device${sys.push_devices === 1 ? '' : 's'} turned on.`}
               {sys.push_route !== 'fcm' && (sys.push_firebase_missing || []).length > 0 && (
                 <span className="block text-slate-500">To use Firebase, add: {sys.push_firebase_missing.join('; ')}.</span>
               )}
               {sys.push_firebase_error && <span className="block text-amber-300">{sys.push_firebase_error}</span>}
             </Row>
             <Row state={sys.firebase === 'real' ? 'ok' : 'warn'} label="Google / Firebase sign-in">
-              {sys.firebase === 'real' ? 'On' : sys.firebase === 'mock' ? 'Mock mode (testing only)' : 'Off: people sign in with a ShiftBoard password only'}
+              {sys.firebase === 'real' ? 'On' : sys.firebase === 'mock' ? 'Mock mode (testing only)' : 'Off: people sign in with a ShiftUp password only'}
             </Row>
             <Row state="ok" label="Self sign-up">
               {sys.self_registration ? 'Anyone can create a worker account.' : 'Off: only admins and invites create accounts.'}
@@ -125,7 +125,7 @@ export default function AdminSystem({ refreshKey = 0, onFlash }) {
         </section>
 
         <section className={`${card} p-4`}>
-          <SectionTitle icon={Activity} title="Background worker" tone="text-emerald-400" />
+          <SectionTitle icon={Activity} title="Background worker" tone="text-brand-400" />
           <div className="divide-y divide-slate-800">
             <Row state={workerState} label={!sys.worker_enabled ? 'Turned off' : workerState === 'ok' ? 'Running' : 'Not responding'}>
               {sys.worker_enabled

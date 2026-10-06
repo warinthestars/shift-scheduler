@@ -40,10 +40,14 @@ function startsText(event, nowMs) {
  * Props: event (TonightEvent), timeZone, nowMs, reliabilityMap, highlightRequestId,
  *        onBoard(position), onClockIn(person, position), onNoShow(person, position), onFindCover(position),
  *        onOpenEvent(eventId), onTimesheet(eventId), onOpenWorker(workerId)
+ * Phase 36: without onOpenEvent there's no Roster button, and without onOpenWorker names aren't links
+ *        (the shift lead's board). timesLabel names the time-sheet button. reliabilityMap = null hides
+ *        the reliability badges (leads don't get that data).
  */
 export default function TodayEventCard({
   event, timeZone, nowMs, reliabilityMap = {}, highlightRequestId,
   onBoard, onClockIn, onNoShow, onFindCover, onOpenEvent, onTimesheet, onOpenWorker,
+  timesLabel = 'Time sheet',
 }) {
   const ended = event.state === 'ended';
   const [open, setOpen] = useState(!ended || event.missed > 0);
@@ -86,7 +90,7 @@ export default function TodayEventCard({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {event.event_id && !ended && (
+          {event.event_id && !ended && onOpenEvent && (
             <button type="button" onClick={() => onOpenEvent?.(event.event_id)}
               className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1">
               <Users className="w-3.5 h-3.5" /> Roster
@@ -95,7 +99,7 @@ export default function TodayEventCard({
           {event.event_id && event.state !== 'upcoming' && (
             <button type="button" onClick={() => onTimesheet?.(event.event_id)}
               className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1">
-              <ClipboardList className="w-3.5 h-3.5" /> Time sheet
+              <ClipboardList className="w-3.5 h-3.5" /> {timesLabel}
             </button>
           )}
           <button type="button" onClick={() => setOpen((o) => !o)} aria-label={open ? 'Hide people' : 'Show people'} className={iconBtn}>
@@ -144,17 +148,21 @@ export default function TodayEventCard({
                       <div className="flex-1 min-w-0 flex items-center gap-2">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${st.cls}`}>{st.label}</span>
                         <div className="min-w-0">
-                          <button type="button" onClick={() => onOpenWorker?.(p.worker_id)} className="text-sm font-semibold text-white hover:underline truncate text-left">
-                            {p.first_name} {p.last_name}
-                          </button>
+                          {onOpenWorker ? (
+                            <button type="button" onClick={() => onOpenWorker(p.worker_id)} className="text-sm font-semibold text-white hover:underline truncate text-left">
+                              {p.first_name} {p.last_name}
+                            </button>
+                          ) : (
+                            <span className="text-sm font-semibold text-white truncate block">{p.first_name} {p.last_name}</span>
+                          )}
                           <p className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-2">
                             {sub && <span className={p.clock_state === 'late' ? 'text-rose-300 font-semibold' : ''}>{sub}</span>}
-                            {p.manager_clock && <span className="text-indigo-300">clocked in by a manager</span>}
+                            {p.manager_clock && <span className="text-indigo-300">clocked in for them</span>}
                             {p.geo_flag && <span className="text-amber-300 inline-flex items-center gap-0.5"><MapPinOff className="w-3 h-3" /> away from site</span>}
                             {p.info_seen === false && ['upcoming', 'due', 'late'].includes(p.clock_state) && (
                               <span className="text-amber-200 inline-flex items-center gap-0.5"><EyeOff className="w-3 h-3" /> hasn't read the update</span>
                             )}
-                            <ReliabilityBadge data={reliabilityMap[p.worker_id]} />
+                            {reliabilityMap && <ReliabilityBadge data={reliabilityMap[p.worker_id]} />}
                           </p>
                         </div>
                       </div>
@@ -168,7 +176,7 @@ export default function TodayEventCard({
                         )}
                         {canClockIn && (
                           <button type="button" onClick={() => onClockIn?.(p, pos)}
-                            className={`${actBtn} bg-emerald-600/20 border border-emerald-500/40 text-emerald-200 hover:bg-emerald-600/30`}>
+                            className={`${actBtn} bg-brand-600/20 border border-brand-500/40 text-brand-200 hover:bg-brand-600/30`}>
                             <LogIn className="w-3.5 h-3.5" /> Clock in
                           </button>
                         )}

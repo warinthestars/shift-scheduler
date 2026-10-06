@@ -72,6 +72,7 @@ KINDS = {
     "cover_manager": ("manager", True),      # Phase 34: managers: cover asked / covered / still uncovered
     "waitlist_offer": ("booking", True),     # Phase 34: a spot opened and you're next (short time to take it)
     "waitlist_update": ("booking", False),   # Phase 34: booked / request sent / offer ran out / waitlist closed
+    "shift_message": ("booking", True),      # Phase 36: a manager or shift lead sent an update to everyone booked on the shift
     "test": ("test", True),
 }
 NEW_SHIFT_MODES = ("off", "instant", "daily")
@@ -167,7 +168,7 @@ def push_payload(n: Notification) -> dict:
     lines = [l.strip() for l in (n.body or "").split("\n") if l.strip()]
     body = " · ".join(lines[:2])
     return {
-        "title": (n.title or "ShiftBoard")[:120],
+        "title": (n.title or "ShiftUp")[:120],
         "body": body[:240],
         "url": n.link or "/",
         "tag": str(n.id),
@@ -289,7 +290,7 @@ def deliver_soon() -> None:
 
 def _sms_text(n: Notification) -> str:
     first = (n.body or "").strip().split("\n")[0]
-    parts = [f"ShiftBoard: {n.title}."]
+    parts = [f"ShiftUp: {n.title}."]
     if first:
         parts.append(first)
     parts.append(absolute_link(n.link))

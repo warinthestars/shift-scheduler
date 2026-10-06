@@ -11,8 +11,8 @@ export default function ProtectedRoute({ children, allowedRoles = [] }) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
         <div className="animate-pulse flex items-center space-x-2">
-          <div className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce"></div>
-          <span>Authenticating ShiftBoard session...</span>
+          <div className="w-3 h-3 bg-brand-500 rounded-full animate-bounce"></div>
+          <span>Authenticating ShiftUp session...</span>
         </div>
       </div>
     );
@@ -38,7 +38,7 @@ export default function ProtectedRoute({ children, allowedRoles = [] }) {
             {allowedRoles.map((r) => String(r).toLowerCase()).includes('venue_manager') && !allowedRoles.map((r) => String(r).toLowerCase()).includes('worker')
               ? 'This page is for venue managers.'
               : allowedRoles.map((r) => String(r).toLowerCase()).every((r) => r === 'platform_admin')
-              ? 'This page is for ShiftBoard admins.'
+              ? 'This page is for ShiftUp admins.'
               : 'Your account can’t open this page.'} Head back to your own page instead.
           </p>
           <Link

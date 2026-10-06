@@ -6,7 +6,7 @@ import { TIMEZONE_OPTIONS } from '../utils/venueTime';
 import PushDeviceCard from './PushDeviceCard';   // Phase 33
 
 const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 const cardCls = 'p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3';
 
 const HOURS = Array.from({ length: 24 }, (_, h) => ({
@@ -22,7 +22,7 @@ function Toggle({ checked, onChange, title, body, disabled = false }) {
         checked={!!checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500"
+        className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500"
       />
       <span>
         <span className="block text-sm font-semibold text-white">{title}</span>
@@ -112,7 +112,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
         <Send className="w-4 h-4" /> {testing ? 'Sending…' : 'Send me a test'}
       </button>
       <button type="button" onClick={save} disabled={saving || !prefs}
-        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+        className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
         {saving ? 'Saving…' : 'Save'}
       </button>
     </>
@@ -122,7 +122,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
     <ModalShell
       title="Notifications & privacy"
       subtitle="Everything always shows in the bell. Choose what also reaches your email and phone, and who can find you."
-      icon={<Bell className="w-5 h-5 text-emerald-400" />}
+      icon={<Bell className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-3xl"
       footer={footer}
@@ -141,7 +141,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
             <PushDeviceCard pushEnabled={prefs.push_enabled !== false} onPushEnabled={(v) => set('push_enabled', v)} />
 
             <div className={cardCls}>
-              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Mail className="w-4 h-4 text-emerald-400" /> Email</div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Mail className="w-4 h-4 text-brand-400" /> Email</div>
               <Toggle
                 checked={prefs.email_enabled}
                 onChange={(v) => set('email_enabled', v)}
@@ -156,7 +156,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
             </div>
 
             <div className={cardCls}>
-              <div className="flex items-center gap-2 text-sm font-semibold text-white"><MessageSquare className="w-4 h-4 text-emerald-400" /> Text messages</div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white"><MessageSquare className="w-4 h-4 text-brand-400" /> Text messages</div>
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Mobile number</label>
                 <input value={phone} onChange={(e) => setPhone(e.target.value)} className={inputCls} placeholder="(555) 555-0100" />
@@ -176,7 +176,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
 
           <div className="space-y-4">
             <div className={cardCls}>
-              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Bell className="w-4 h-4 text-emerald-400" /> What to send</div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Bell className="w-4 h-4 text-brand-400" /> What to send</div>
               <Toggle
                 checked={prefs.reminders_enabled}
                 onChange={(v) => set('reminders_enabled', v)}
@@ -202,7 +202,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
             </div>
 
             <div className={cardCls}>
-              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Moon className="w-4 h-4 text-emerald-400" /> Quiet hours</div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Moon className="w-4 h-4 text-brand-400" /> Quiet hours</div>
               <Toggle
                 checked={quietOn}
                 onChange={setQuietOn}
@@ -235,15 +235,15 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
 
             {/* Phase 29.1: who can find me */}
             <div className={cardCls}>
-              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Eye className="w-4 h-4 text-emerald-400" /> Who can find me</div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white"><Eye className="w-4 h-4 text-brand-400" /> Who can find me</div>
               <p className="text-xs text-slate-400">
                 Lets venue managers find you by name or email to add you to their team. Venues you've worked for or
                 requested shifts at can always see you, and anyone can add you if they type your exact email.
               </p>
               {[
                 ['private', 'Only venues I work with', 'Nobody else can look you up by name.'],
-                ['venues', 'Any venue on ShiftBoard', 'Managers can find you by name or email. Your email is partly hidden until you work together.'],
-                ['everyone', 'Anyone on ShiftBoard', 'Venues, plus future features like finding coworkers.'],
+                ['venues', 'Any venue on ShiftUp', 'Managers can find you by name or email. Your email is partly hidden until you work together.'],
+                ['everyone', 'Anyone on ShiftUp', 'Venues, plus future features like finding coworkers.'],
               ].map(([value, title, body]) => (
                 <label key={value} className="flex items-start gap-3 cursor-pointer">
                   <input
@@ -251,7 +251,7 @@ export default function NotificationSettingsModal({ onClose, onSent }) {
                     name="discoverable"
                     checked={(prefs.discoverable || 'private') === value}
                     onChange={() => set('discoverable', value)}
-                    className="mt-1 w-4 h-4 bg-slate-800 border-slate-700 text-emerald-500"
+                    className="mt-1 w-4 h-4 bg-slate-800 border-slate-700 text-brand-500"
                   />
                   <span>
                     <span className="block text-sm font-semibold text-white">{title}</span>

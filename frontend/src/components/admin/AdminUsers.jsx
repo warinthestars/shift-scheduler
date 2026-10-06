@@ -199,7 +199,7 @@ export default function AdminUsers({ refreshKey = 0, venues = [], onOpenUser, on
                   <td className="py-2.5 px-3"><VenueChips row={u} /></td>
                   <td className="py-2.5 px-3 text-center font-mono">
                     <span className={u.shifts_worked ? 'text-slate-100 font-bold' : 'text-slate-600'}>{u.shifts_worked}</span>
-                    {u.upcoming > 0 && <span className="text-emerald-300"> · {u.upcoming}</span>}
+                    {u.upcoming > 0 && <span className="text-brand-300"> · {u.upcoming}</span>}
                   </td>
                   <td className="py-2.5 px-3 whitespace-nowrap">
                     {u.rating_count > 0 ? (

@@ -27,6 +27,10 @@ from src.routers.profile import router as profile_router   # Phase 31 + 32
 from src.routers.cover import router as cover_router       # Phase 34
 from src.routers.pay_periods import router as pay_periods_router   # Phase 35
 from src.routers.tips import router as tips_router                 # Phase 35.2
+from src.routers.public import router as public_router             # Phase 36
+from src.routers.organizations import router as organizations_router   # Phase 36
+from src.routers.lead import router as lead_router                 # Phase 36
+from src.routers.calendar_sync import router as calendar_sync_router   # Phase 36.1
 from src.services.notification_worker import notification_worker_loop
 from src.version import APP_VERSION                          # Phase 34.5
 from src.json_guard import RejectNonFiniteJSON                # Phase 34.5
@@ -42,7 +46,7 @@ logger = logging.getLogger("shiftboard.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup & shutdown lifecycle: seeds database on startup"""
-    logger.info("Initializing ShiftBoard Backend Application...")
+    logger.info("Initializing ShiftUp Backend Application...")
 
     # Ensure tables and standard VARCHAR columns exist in database
     try:
@@ -90,11 +94,11 @@ async def lifespan(app: FastAPI):
         except BaseException:
             pass
 
-    logger.info("Shutting down ShiftBoard Backend Application...")
+    logger.info("Shutting down ShiftUp Backend Application...")
     await engine.dispose()
 
 app = FastAPI(
-    title="ShiftBoard API",
+    title="ShiftUp API",
     description="Shift scheduling and community call-board platform for the service industry",
     version=APP_VERSION,                                     # Phase 34.5 (was a fixed "0.2.0")
     lifespan=lifespan
@@ -147,6 +151,10 @@ app.include_router(profile_router)   # Phase 31 + 32
 app.include_router(cover_router)     # Phase 34
 app.include_router(pay_periods_router)   # Phase 35
 app.include_router(tips_router)          # Phase 35.2
+app.include_router(public_router)        # Phase 36: no sign-in needed
+app.include_router(organizations_router) # Phase 36
+app.include_router(lead_router)          # Phase 36
+app.include_router(calendar_sync_router) # Phase 36.1
 
 
 @app.get("/healthz", tags=["System"])
@@ -161,7 +169,7 @@ async def health_check():
 @app.get("/", tags=["System"])
 async def root():
     return {
-        "message": "Welcome to ShiftBoard API",
+        "message": "Welcome to ShiftUp API",
         "docs_url": "/docs",
         "version": "0.2.0"
     }

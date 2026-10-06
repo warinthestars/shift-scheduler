@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, addMonths, isSameMonth, format,
 } from 'date-fns';
 import {
-  ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertTriangle, MapPin, Clock, Eye, EyeOff, ArrowRight,
+  ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertTriangle, MapPin, Clock, Eye, EyeOff, ArrowRight, CalendarPlus,
 } from 'lucide-react';
 import { fmtTime, fmtTimeRange, fmtLongDate, tzAbbrev } from '../utils/venueTime';
 import {
@@ -26,7 +27,7 @@ function AgendaRow({ entry, onSelectItem, onSelectListing }) {
       <button
         type="button"
         onClick={() => onSelectListing(l)}
-        className="w-full text-left p-3 sm:p-4 rounded-xl border border-dashed border-slate-600 bg-slate-950/40 hover:border-emerald-500/60 transition flex items-center gap-4"
+        className="w-full text-left p-3 sm:p-4 rounded-xl border border-dashed border-slate-600 bg-slate-950/40 hover:border-brand-500/60 transition flex items-center gap-4"
       >
         <div className="w-24 sm:w-28 flex-shrink-0">
           <div className="text-base sm:text-lg font-black text-slate-200 leading-tight">{fmtTime(l.start_time, tz)}</div>
@@ -218,7 +219,12 @@ export default function WorkerCalendar({ items = [], openListings = [], onSelect
             Today
           </button>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Phase 36.1: these shifts in Google / Apple / Outlook */}
+          <Link to="/profile?tab=calendar" title="See these shifts in Google, Apple or Outlook calendar"
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold border bg-slate-900 text-slate-400 border-slate-800 hover:text-white inline-flex items-center gap-1.5">
+            <CalendarPlus className="w-3.5 h-3.5" /> Sync
+          </Link>
           <button
             type="button"
             onClick={() => setShowOpen((v) => !v)}
@@ -230,11 +236,11 @@ export default function WorkerCalendar({ items = [], openListings = [], onSelect
           </button>
           <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5">
             <button type="button" onClick={() => setView('month')}
-              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'month' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}>
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'month' ? 'bg-brand-500 text-slate-950' : 'text-slate-400'}`}>
               <CalendarDays className="w-3.5 h-3.5" /> Month
             </button>
             <button type="button" onClick={() => setView('list')}
-              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'list' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}>
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'list' ? 'bg-brand-500 text-slate-950' : 'text-slate-400'}`}>
               <ListIcon className="w-3.5 h-3.5" /> List
             </button>
           </div>
@@ -274,12 +280,12 @@ export default function WorkerCalendar({ items = [], openListings = [], onSelect
                     onClick={() => setSelectedKey(key)}
                     className={`relative flex flex-col justify-start min-h-[3.5rem] sm:min-h-[6.5rem] p-1 sm:p-1.5 text-left border-b border-r border-slate-800/70 transition ${
                       inMonth ? 'bg-slate-950' : 'bg-slate-950/40'
-                    } ${isSelected ? 'ring-2 ring-inset ring-emerald-500 bg-emerald-500/5' : 'hover:bg-slate-900'}`}
+                    } ${isSelected ? 'ring-2 ring-inset ring-brand-500 bg-brand-500/5' : 'hover:bg-slate-900'}`}
                   >
                     <div className="w-full flex items-center justify-between">
                       <span
                         className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
-                          isToday ? 'bg-emerald-500 text-slate-950' : inMonth ? 'text-slate-200' : 'text-slate-600'
+                          isToday ? 'bg-brand-500 text-slate-950' : inMonth ? 'text-slate-200' : 'text-slate-600'
                         }`}
                       >
                         {d.getDate()}

@@ -70,13 +70,13 @@ export function AuthBadge({ source }) {
   }
   if (source === 'both') {
     return (
-      <span title="Has a ShiftBoard password and is linked to Firebase" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
+      <span title="Has a ShiftUp password and is linked to Firebase" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
         <KeyRound className="w-3 h-3" /> Password + <Flame className="w-3 h-3 text-amber-300" />
       </span>
     );
   }
   return (
-    <span title="Signs in with a ShiftBoard password" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-700/40 text-slate-300 border border-slate-600/50">
+    <span title="Signs in with a ShiftUp password" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-700/40 text-slate-300 border border-slate-600/50">
       <KeyRound className="w-3 h-3" /> Password
     </span>
   );

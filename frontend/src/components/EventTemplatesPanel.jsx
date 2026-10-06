@@ -54,7 +54,7 @@ export default function EventTemplatesPanel({ venue, onError, onUseTemplate }) {
           as a template from its ⋯ menu.
         </p>
         <button type="button" onClick={() => setEditing({ template: null })}
-          className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 flex-shrink-0 self-start">
+          className="px-3.5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 flex-shrink-0 self-start">
           <Plus className="w-4 h-4" /> New template
         </button>
       </div>
@@ -112,7 +112,7 @@ export default function EventTemplatesPanel({ venue, onError, onUseTemplate }) {
                 <div className="flex items-center gap-1.5 mt-auto pt-1">
                   {onUseTemplate && (
                     <button type="button" onClick={() => onUseTemplate(t)}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1">
+                      className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1">
                       <Send className="w-3 h-3" /> Use
                     </button>
                   )}

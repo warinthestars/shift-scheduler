@@ -31,7 +31,7 @@ export default function ConfirmDialog({
   return (
     <ModalShell
       title={title}
-      icon={danger ? <AlertTriangle className="w-5 h-5 text-rose-400" /> : <HelpCircle className="w-5 h-5 text-emerald-400" />}
+      icon={danger ? <AlertTriangle className="w-5 h-5 text-rose-400" /> : <HelpCircle className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-md"
       footer={(
@@ -40,7 +40,7 @@ export default function ConfirmDialog({
             Go back
           </button>
           <button type="button" onClick={submit} disabled={saving}
-            className={`px-5 py-2 rounded-xl text-sm font-bold disabled:opacity-50 ${danger ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'}`}>
+            className={`px-5 py-2 rounded-xl text-sm font-bold disabled:opacity-50 ${danger ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-brand-500 hover:bg-brand-400 text-slate-950'}`}>
             {saving ? 'Working…' : confirmLabel}
           </button>
         </>
@@ -53,7 +53,7 @@ export default function ConfirmDialog({
           {input.label}
           <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder={input.placeholder || ''}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
-            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500" />
+            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500" />
         </label>
       )}
     </ModalShell>

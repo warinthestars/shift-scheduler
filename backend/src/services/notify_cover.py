@@ -71,12 +71,12 @@ async def _cover_posted(db: AsyncSession, cover_id) -> None:
         problem, _mode, _note = await taker_check(db, u, cover, shift, venue, depts=depts)
         if problem is None:
             told.append(u.id)
-    body = what + (f"\n“{cover.note}”" if cover.note else "") + "\nOpen Find shifts to take it."
+    body = what + (f"\n“{cover.note}”" if cover.note else "") + "\nOpen the ShiftBoard to take it."
     await notify_in(db, told, "cover_needed", f"{_first(frm)} needs someone to cover their shift", body, FIND,
                     urgent=urgent, dedupe_key=f"cover:{cover.id}:posted", **common)
     await notify_in(db, await manager_ids(db, venue.id), "cover_manager",
                     f"{person(frm)} asked for cover", f"{what}\nThey stay booked until someone takes it."
-                    + (" Posted on the public shift board too." if cover.audience == "public" and venue.allow_public_cover else ""),
+                    + (" Posted on the ShiftBoard too." if cover.audience == "public" and venue.allow_public_cover else ""),
                     manager_link(venue.id, shift.event_id), dedupe_key=f"cover:{cover.id}:posted-mgr", **common)
 
 

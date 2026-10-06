@@ -16,8 +16,8 @@ const POLICIES = [
 
 // Phase 35: time tracking, overtime and pay periods
 const TRACKING = [
-  { id: 'shiftboard', title: 'Clock in with ShiftBoard', body: 'Your team clocks in and out here. Their hours show on time sheets, exports and pay periods.' },
-  { id: 'payroll', title: "Your venue's payroll tracks their time", body: "Team members use your own time clock or payroll system. ShiftBoard shows no clock-in button and sends no \"not clocked in\" alerts for them." },
+  { id: 'shiftboard', title: 'Clock in with ShiftUp', body: 'Your team clocks in and out here. Their hours show on time sheets, exports and pay periods.' },
+  { id: 'payroll', title: "Your venue's payroll tracks their time", body: "Team members use your own time clock or payroll system. ShiftUp shows no clock-in button and sends no \"not clocked in\" alerts for them." },
 ];
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];   // 0 = Monday
 const PAY_PERIODS = [
@@ -27,9 +27,9 @@ const PAY_PERIODS = [
   { id: 'monthly', label: 'Monthly' },
 ];
 
-const fieldCls = 'px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';   // Phase 35: no width
+const fieldCls = 'px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';   // Phase 35: no width
 const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
 const cardCls = 'p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3';
 
@@ -50,6 +50,8 @@ function emptyForm(venue) {
     approval_policy: venue?.approval_policy || 'team_auto',
     show_rates_publicly: venue?.show_rates_publicly ?? true,
     allow_public_cover: venue?.allow_public_cover ?? true,                        // Phase 34
+    public_board: venue?.public_board ?? true,                                    // Phase 36
+    city: venue?.city || '',                                                      // Phase 36
     auto_approve_rating_threshold:
       venue?.auto_approve_rating_threshold != null ? String(venue.auto_approve_rating_threshold) : '',
     arrival_instructions: venue?.arrival_instructions || '',
@@ -143,7 +145,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
         <input value={draft.name} disabled={disabled} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className={`${inputCls} flex-1`} />
         <select aria-label="Department" value={draft.department} disabled={disabled}
           onChange={(e) => setDraft({ ...draft, department: e.target.value })}
-          className="px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 w-36">
+          className="px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-brand-500 w-36">
           {DEPARTMENTS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}
         </select>
         <button
@@ -201,7 +203,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
         <label className="flex items-center gap-2 text-xs text-slate-300">
           <input type="checkbox" disabled={disabled} checked={draft.hide_rate}
             onChange={(e) => setDraft({ ...draft, hide_rate: e.target.checked })}
-            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+            className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
           <EyeOff className="w-3.5 h-3.5" /> Hide pay
         </label>
       </div>
@@ -223,7 +225,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
       <div className="flex justify-end">
         {position.is_active && dirty && (
           <button type="button" onClick={save} disabled={saving}
-            className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+            className="ml-auto px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
             <Save className="w-3.5 h-3.5" /> Save
           </button>
         )}
@@ -305,6 +307,8 @@ export default function VenueSettingsModal({
       approval_policy: form.approval_policy,
       show_rates_publicly: !!form.show_rates_publicly,
       allow_public_cover: !!form.allow_public_cover,                              // Phase 34
+      public_board: !!form.public_board,                                          // Phase 36
+      city: form.city.trim(),                                                     // Phase 36: "" = work it out from the address
       auto_approve_rating_threshold: form.auto_approve_rating_threshold === '' ? null : parseFloat(form.auto_approve_rating_threshold),
       arrival_instructions: form.arrival_instructions,
       dress_code: form.dress_code,
@@ -385,7 +389,7 @@ export default function VenueSettingsModal({
         { id: 'templates', label: 'Event templates' },   // Phase 29.3
       ].map((t) => (
         <button key={t.id} type="button" onClick={() => setTab(t.id)}
-          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-brand-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
           {t.label}
         </button>
       ))}
@@ -399,7 +403,7 @@ export default function VenueSettingsModal({
       </button>
       {(tab === 'details' || tab === 'timepay') && (
         <button type="button" onClick={handleSave} disabled={saving}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
           {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create venue'}
         </button>
       )}
@@ -409,7 +413,7 @@ export default function VenueSettingsModal({
   return (
     <ModalShell
       title={isEdit ? `Venue settings — ${venue.name}` : 'Add a venue'}
-      icon={<Building2 className="w-5 h-5 text-emerald-400" />}
+      icon={<Building2 className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       headerExtra={tabs}
       footer={footer}
@@ -453,10 +457,10 @@ export default function VenueSettingsModal({
             <div className={cardCls}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <MapPin className="w-4 h-4 text-emerald-400" /> Location for clock-in
+                  <MapPin className="w-4 h-4 text-brand-400" /> Location for clock-in
                 </div>
                 <button type="button" onClick={useMyLocation} disabled={locating}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+                  className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
                   <Crosshair className="w-3.5 h-3.5" /> {locating ? 'Locating…' : 'Use my current location'}
                 </button>
               </div>
@@ -475,7 +479,7 @@ export default function VenueSettingsModal({
                 </div>
               </div>
               {mapUrl && (
-                <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300">
+                <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-brand-400 hover:text-brand-300">
                   Check this spot on Google Maps <ExternalLink className="w-3 h-3" />
                 </a>
               )}
@@ -484,7 +488,7 @@ export default function VenueSettingsModal({
               <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-slate-800">
                 <input type="checkbox" checked={!!form.geofence_enabled}
                   onChange={(e) => setForm({ ...form, geofence_enabled: e.target.checked })}
-                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
                 <span>
                   <span className="block text-sm font-semibold text-white">Check location when workers clock in</span>
                   <span className="block text-xs text-slate-400">
@@ -507,7 +511,7 @@ export default function VenueSettingsModal({
             {/* Phase 27: clock-in window + auto clock-out */}
             <div className={cardCls}>
               <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Clock className="w-4 h-4 text-emerald-400" /> Clock-in rules
+                <Clock className="w-4 h-4 text-brand-400" /> Clock-in rules
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -545,8 +549,8 @@ export default function VenueSettingsModal({
               <div className="grid gap-2">
                 {POLICIES.map((p) => (
                   <label key={p.id}
-                    className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${form.approval_policy === p.id ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'}`}>
-                    <input type="radio" name="approval_policy" value={p.id} checked={form.approval_policy === p.id} onChange={set('approval_policy')} className="mt-1 text-emerald-500" />
+                    className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${form.approval_policy === p.id ? 'border-brand-500 bg-brand-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'}`}>
+                    <input type="radio" name="approval_policy" value={p.id} checked={form.approval_policy === p.id} onChange={set('approval_policy')} className="mt-1 text-brand-500" />
                     <span>
                       <span className="block text-sm font-semibold text-white">{p.title}</span>
                       <span className="block text-xs text-slate-400">{p.body}</span>
@@ -570,12 +574,12 @@ export default function VenueSettingsModal({
               <label className="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" checked={!!form.allow_public_cover}
                   onChange={(e) => setForm({ ...form, allow_public_cover: e.target.checked })}
-                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
                 <span>
-                  <span className="block text-sm font-semibold text-white">Workers can post cover on the public shift board</span>
+                  <span className="block text-sm font-semibold text-white">Workers can post cover on the ShiftBoard</span>
                   <span className="block text-xs text-slate-400">
                     When someone can't make a shift they can always ask your team. With this on they can also list it
-                    for anyone on Find shifts. People outside your team still follow the approval rule above.
+                    for anyone on the ShiftBoard. People outside your team still follow the approval rule above.
                   </span>
                 </span>
               </label>
@@ -585,12 +589,33 @@ export default function VenueSettingsModal({
               <label className="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" checked={!!form.show_rates_publicly}
                   onChange={(e) => setForm({ ...form, show_rates_publicly: e.target.checked })}
-                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
                 <span>
                   <span className="block text-sm font-semibold text-white">Show default pay on the public venue page</span>
                   <span className="block text-xs text-slate-400">Positions marked "Hide pay" stay hidden either way.</span>
                 </span>
               </label>
+            </div>
+
+            {/* Phase 36: the public event board (people who aren't signed in) */}
+            <div className={cardCls}>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!form.public_board}
+                  onChange={(e) => setForm({ ...form, public_board: e.target.checked })}
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-white">List our shifts on the public board</span>
+                  <span className="block text-xs text-slate-400">
+                    If ShiftUp's public board is switched on, people who aren't signed in can see your event names, dates,
+                    positions and open spots. Never pay, your address or your notes. They need a worker account to see more or to book.
+                  </span>
+                </span>
+              </label>
+              <div className="mt-3">
+                <label className={labelCls} htmlFor="venue-city">City shown on the public board</label>
+                <input id="venue-city" type="text" value={form.city} onChange={set('city')} className={inputCls} maxLength={120}
+                  placeholder="Leave blank to use the city in your address, e.g. Denver, CO" />
+              </div>
             </div>
 
             <div className={cardCls}>
@@ -647,7 +672,7 @@ export default function VenueSettingsModal({
             <div className="flex flex-wrap items-center gap-2">
               <input value={newPos.name} onChange={(e) => setNewPos({ ...newPos, name: e.target.value })} placeholder="e.g. Coat Check" className={`${inputCls} flex-1 min-w-[10rem]`} />
               <select aria-label="Department" value={newPos.department || ''} onChange={(e) => setNewPos({ ...newPos, department: e.target.value })}
-                className="px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500">
+                className="px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-brand-500">
                 <option value="">Department: pick for me</option>
                 {DEPARTMENTS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}
               </select>
@@ -677,11 +702,11 @@ export default function VenueSettingsModal({
               )}
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input type="checkbox" checked={newPos.hide_rate} onChange={(e) => setNewPos({ ...newPos, hide_rate: e.target.checked })}
-                  className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+                  className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
                 <EyeOff className="w-3.5 h-3.5" /> Hide pay
               </label>
               <button type="button" onClick={addPosition}
-                className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1">
+                className="ml-auto px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1">
                 <Plus className="w-3.5 h-3.5" /> Add
               </button>
             </div>
@@ -699,14 +724,14 @@ function TimePayTab({ form, setForm, set }) {
       <div className="space-y-4">
         <div className={cardCls}>
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Timer className="w-4 h-4 text-emerald-400" /> How your team's time is tracked
+            <Timer className="w-4 h-4 text-brand-400" /> How your team's time is tracked
           </div>
           <div className="grid gap-2">
             {TRACKING.map((t) => (
               <label key={t.id}
-                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${form.team_time_tracking === t.id ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'}`}>
+                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${form.team_time_tracking === t.id ? 'border-brand-500 bg-brand-500/10' : 'border-slate-700 bg-slate-800/40 hover:border-slate-500'}`}>
                 <input type="radio" name="team_time_tracking" value={t.id} checked={form.team_time_tracking === t.id}
-                  onChange={set('team_time_tracking')} className="mt-1 text-emerald-500" />
+                  onChange={set('team_time_tracking')} className="mt-1 text-brand-500" />
                 <span>
                   <span className="block text-sm font-semibold text-white">{t.title}</span>
                   <span className="block text-xs text-slate-400">{t.body}</span>
@@ -718,7 +743,7 @@ function TimePayTab({ form, setForm, set }) {
             <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
             <span>
               This is for people on your team. People booked from outside your team, and team members who work through
-              a staffing company, always clock in with ShiftBoard. You can change any one person under Team → Edit.
+              a staffing company, always clock in with ShiftUp. You can change any one person under Team → Edit.
               A shift keeps the setting it had when it started, so changing this later doesn't rewrite past hours.
             </span>
           </p>
@@ -733,7 +758,7 @@ function TimePayTab({ form, setForm, set }) {
             <input type="checkbox" checked={!!form.tips_enabled} onChange={(e) => setForm({ ...form, tips_enabled: e.target.checked })}
               className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-amber-500" />
             <span>
-              <span className="block text-sm font-semibold text-white">Track tips in ShiftBoard</span>
+              <span className="block text-sm font-semibold text-white">Track tips in ShiftUp</span>
               <span className="block text-xs text-slate-400">
                 After an event, enter its tip pool and anyone's own tips on the event's time sheet. Positions marked
                 "Tips" can get their own tips; positions marked "Tip pool" share the pool.
@@ -782,15 +807,15 @@ function TimePayTab({ form, setForm, set }) {
       <div className="space-y-4">
         <div className={cardCls}>
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Clock className="w-4 h-4 text-emerald-400" /> Overtime flags
+            <Clock className="w-4 h-4 text-brand-400" /> Overtime flags
           </div>
           <p className="text-[11px] text-slate-500">
-            ShiftBoard marks hours past these limits as overtime on time sheets, pay periods and the hours download.
-            It doesn't change the pay it shows. Only hours clocked in ShiftBoard count.
+            ShiftUp marks hours past these limits as overtime on time sheets, pay periods and the hours download.
+            It doesn't change the pay it shows. Only hours clocked in ShiftUp count.
           </p>
           <label className="flex items-center gap-3 flex-wrap">
             <input type="checkbox" checked={!!form.ot_weekly_on} onChange={(e) => setForm({ ...form, ot_weekly_on: e.target.checked })}
-              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
             <span className="text-sm text-white">Over</span>
             <input type="number" min="1" max="168" step="0.5" aria-label="Weekly overtime hours" disabled={!form.ot_weekly_on}
               value={form.ot_weekly_hours} onChange={set('ot_weekly_hours')} className={`${fieldCls} w-20 disabled:opacity-40`} />
@@ -798,7 +823,7 @@ function TimePayTab({ form, setForm, set }) {
           </label>
           <label className="flex items-center gap-3 flex-wrap">
             <input type="checkbox" checked={!!form.ot_daily_on} onChange={(e) => setForm({ ...form, ot_daily_on: e.target.checked })}
-              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+              className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
             <span className="text-sm text-white">Over</span>
             <input type="number" min="1" max="24" step="0.5" aria-label="Daily overtime hours" disabled={!form.ot_daily_on}
               value={form.ot_daily_hours} onChange={set('ot_daily_hours')} className={`${fieldCls} w-20 disabled:opacity-40`} />
@@ -814,7 +839,7 @@ function TimePayTab({ form, setForm, set }) {
 
         <div className={cardCls}>
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <CalendarRange className="w-4 h-4 text-emerald-400" /> Pay periods
+            <CalendarRange className="w-4 h-4 text-brand-400" /> Pay periods
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -835,7 +860,7 @@ function TimePayTab({ form, setForm, set }) {
           <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-slate-800">
             <input type="checkbox" checked={!!form.pay_period_approval}
               onChange={(e) => setForm({ ...form, pay_period_approval: e.target.checked })}
-              className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+              className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
             <span>
               <span className="block text-sm font-semibold text-white">Approve and lock each pay period</span>
               <span className="block text-xs text-slate-400">

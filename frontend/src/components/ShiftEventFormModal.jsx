@@ -21,7 +21,7 @@ const POLICY_TEXT = {
 };
 
 const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
 
 function tipsText(p) {
@@ -447,7 +447,7 @@ export default function ShiftEventFormModal({
   };
 
   const isDraft = isEdit && eventStatus === 'draft';
-  const primaryCls = 'px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50 inline-flex items-center gap-1.5';
+  const primaryCls = 'px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50 inline-flex items-center gap-1.5';
   const secondaryCls = 'px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 text-sm font-semibold disabled:opacity-50 inline-flex items-center gap-1.5';
   const footer = (
     <>
@@ -485,7 +485,7 @@ export default function ShiftEventFormModal({
     <ModalShell
       title={modalTitle}
       subtitle={venue?.name}
-      icon={<Calendar className="w-5 h-5 text-emerald-400" />}
+      icon={<Calendar className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       footer={footer}
     >
@@ -571,7 +571,7 @@ export default function ShiftEventFormModal({
             {/* Phase 27: Where */}
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-300">
-                <MapPin className="w-3.5 h-3.5 text-emerald-400" /> Where
+                <MapPin className="w-3.5 h-3.5 text-brand-400" /> Where
               </label>
               <EventLocationPicker key={pickerKey} venue={venue} value={where} onChange={setWhere} />
 
@@ -678,12 +678,12 @@ export default function ShiftEventFormModal({
           <div className="lg:col-span-3 space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                <Users className="w-4 h-4 text-emerald-400" /> Shifts
+                <Users className="w-4 h-4 text-brand-400" /> Shifts
               </h4>
               <button
                 type="button"
                 onClick={addRow}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1"
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-brand-300 text-xs font-semibold inline-flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" /> Add a shift
               </button>
@@ -746,7 +746,7 @@ export default function ShiftEventFormModal({
                             <button
                               type="button"
                               onClick={() => pickPosition(r.key, activePositions[0].name)}
-                              className="text-[11px] text-emerald-400 hover:text-emerald-300"
+                              className="text-[11px] text-brand-400 hover:text-brand-300"
                             >
                               ← Pick from venue positions
                             </button>
@@ -786,7 +786,7 @@ export default function ShiftEventFormModal({
                         <button
                           type="button"
                           onClick={() => resetToDefault(r.key, r.role_type)}
-                          className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
+                          className="inline-flex items-center gap-1 text-brand-400 hover:text-brand-300"
                         >
                           <RotateCcw className="w-3 h-3" /> Reset to venue default
                         </button>
@@ -830,7 +830,7 @@ export default function ShiftEventFormModal({
                         type="checkbox"
                         checked={r.hide_rate}
                         onChange={(e) => updateRow(r.key, { hide_rate: e.target.checked })}
-                        className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500"
+                        className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500"
                       />
                       <EyeOff className="w-3.5 h-3.5" /> Hide pay from workers
                     </label>
@@ -900,7 +900,7 @@ export default function ShiftEventFormModal({
                     <button
                       type="button"
                       onClick={() => updateRow(r.key, { showNotes: true })}
-                      className="text-xs text-emerald-400 hover:text-emerald-300"
+                      className="text-xs text-brand-400 hover:text-brand-300"
                     >
                       + Add notes for this shift (public or staff-only)
                     </button>

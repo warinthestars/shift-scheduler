@@ -13,7 +13,7 @@ from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
-from src.models import User, VenueManager, VenueWhitelist
+from src.models import User, VenueManager, VenueWhitelist, OrganizationMember
 
 logger = logging.getLogger("shiftboard.always_admin")
 
@@ -46,6 +46,7 @@ async def promote_always_admin(db: AsyncSession, user: User) -> bool:
     changed = False
     if (user.role or "").lower() != "platform_admin":
         await db.execute(delete(VenueManager).where(VenueManager.user_id == user.id))
+        await db.execute(delete(OrganizationMember).where(OrganizationMember.user_id == user.id))   # Phase 36: admins manage everything already
         await db.execute(delete(VenueWhitelist).where(VenueWhitelist.worker_id == user.id))
         user.role = "platform_admin"
         changed = True

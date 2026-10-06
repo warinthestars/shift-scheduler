@@ -10,7 +10,7 @@ const isPhone = () => window.matchMedia && window.matchMedia('(max-width: 767px)
 
 /**
  * Phase 33: one small, dismissible card on the dashboard:
- *   1. on a phone, not installed yet  -> "Get the ShiftBoard app" (Install button, or iPhone steps)
+ *   1. on a phone, not installed yet  -> "Get the ShiftUp app" (Install button, or iPhone steps)
  *   2. installed / on a computer, notifications not on here -> "Turn on notifications"
  * Dismissing hides it on this device (localStorage).
  * Props: manager (bool) for the manager dashboard's wording.
@@ -78,11 +78,11 @@ export default function AppNudge({ manager = false }) {
   };
 
   return (
-    <div className="mb-5 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/5 flex items-start gap-3">
-      {mode === 'install' ? <Smartphone className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" /> : <BellRing className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />}
+    <div className="mb-5 p-3.5 rounded-xl border border-brand-500/40 bg-brand-500/5 flex items-start gap-3">
+      {mode === 'install' ? <Smartphone className="w-5 h-5 text-brand-400 flex-shrink-0 mt-0.5" /> : <BellRing className="w-5 h-5 text-brand-400 flex-shrink-0 mt-0.5" />}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-bold text-white">
-          {mode === 'install' ? 'Get the ShiftBoard app on your phone' : 'Get shift alerts on this device'}
+          {mode === 'install' ? 'Get the ShiftUp app on your phone' : 'Get shift alerts on this device'}
         </p>
         <p className="text-xs text-slate-400 mt-0.5">
           {mode === 'install'
@@ -95,13 +95,13 @@ export default function AppNudge({ manager = false }) {
           <div className="mt-2 text-xs text-slate-300 space-y-1">
             <p className="flex items-start gap-1.5"><Share className="w-3.5 h-3.5 text-sky-400 flex-shrink-0 mt-0.5" /><span>1. Tap <b>Share</b> at the bottom of Safari.</span></p>
             <p className="flex items-start gap-1.5"><PlusSquare className="w-3.5 h-3.5 text-sky-400 flex-shrink-0 mt-0.5" /><span>2. Tap <b>Add to Home Screen</b>, then <b>Add</b>.</span></p>
-            <p>3. Open ShiftBoard from your Home Screen.</p>
+            <p>3. Open ShiftUp from your Home Screen.</p>
           </div>
         )}
         {error && <p className="mt-1.5 text-xs text-rose-300">{error}</p>}
         {!showSteps && (
           <button type="button" onClick={mode === 'install' ? install : turnOn} disabled={busy}
-            className="mt-2 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+            className="mt-2 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
             {mode === 'install' ? <Download className="w-3.5 h-3.5" /> : <BellRing className="w-3.5 h-3.5" />}
             {busy ? 'One moment…' : mode === 'install' ? (isIOS() ? 'Show me how' : 'Install') : 'Turn on notifications'}
           </button>

@@ -32,7 +32,7 @@ function ShiftLine({ shift }) {
         <span>·</span>
         <span>{shift?.venue?.name}</span>
         <span>·</span>
-        <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} className="text-emerald-400 font-semibold" />
+        <PayLabel rate={shift?.hourly_rate} rateMax={shift?.hourly_rate_max} className="text-brand-400 font-semibold" />
         <TipBadge shift={shift} />
       </p>
       <p className="text-xs text-slate-500 mt-0.5">{fmtDateTime(shift?.start_time, shift?.venue?.timezone)}</p>
@@ -78,7 +78,7 @@ export default function HandoffsPanel({ incoming = [], outgoing = [], busyId, on
                 <X className="w-3.5 h-3.5" /> Decline
               </button>
               <button type="button" onClick={() => onAccept(t)} disabled={busyId === t.id}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+                className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
                 <Check className="w-3.5 h-3.5" /> {busyId === t.id ? 'Working…' : 'Accept'}
               </button>
             </div>

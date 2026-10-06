@@ -5,7 +5,7 @@ import api from '../../api/client';
 import { Avatar } from '../WorkerProfilePanel';
 import { resizeImage, uploadFile } from '../../utils/files';
 
-const inputCls = 'mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500';
+const inputCls = 'mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500';
 const labelCls = 'block text-xs font-semibold text-slate-300';
 const SUGGESTED = ['Bartender', 'Barback', 'Server', 'Host', 'Runner', 'Busser', 'Line cook', 'Prep cook', 'Dishwasher', 'Security', 'AV tech', 'Event staff'];
 const BIO_MAX = 600;
@@ -102,7 +102,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
           <p className="text-sm font-semibold text-white">Profile photo</p>
           <p className="text-xs text-slate-400">A clear photo of your face helps the door staff and managers know who you are.</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            <label className={`px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer ${photoBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+            <label className={`px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer ${photoBusy ? 'opacity-50 pointer-events-none' : ''}`}>
               <Camera className="w-3.5 h-3.5" /> {profile.avatar_url ? 'Change photo' : 'Add a photo'}
               <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={pickPhoto} />
             </label>
@@ -154,9 +154,9 @@ export default function AboutSection({ profile, onSaved, onError }) {
                 return (
                   <button key={d.key} type="button" aria-pressed={on}
                     onClick={() => set('departments', on ? form.departments.filter((k) => k !== d.key) : [...form.departments, d.key])}
-                    className={`p-2.5 rounded-xl border text-left transition ${on ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-slate-700 bg-slate-950 hover:border-slate-500'}`}>
+                    className={`p-2.5 rounded-xl border text-left transition ${on ? 'border-brand-500/60 bg-brand-500/10' : 'border-slate-700 bg-slate-950 hover:border-slate-500'}`}>
                     <span className="flex items-center gap-2">
-                      <span className={`w-4 h-4 rounded border flex items-center justify-center ${on ? 'bg-emerald-500 border-emerald-500' : 'border-slate-600'}`}>
+                      <span className={`w-4 h-4 rounded border flex items-center justify-center ${on ? 'bg-brand-500 border-brand-500' : 'border-slate-600'}`}>
                         {on && <Check className="w-3 h-3 text-slate-950" />}
                       </span>
                       <span className="text-sm font-semibold text-white">{d.label}</span>
@@ -173,7 +173,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
             <p className={labelCls}>Specific roles <span className="text-slate-500 font-normal">(optional, shown to managers)</span></p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {form.skills.map((s) => (
-                <span key={s} className="px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-xs font-semibold inline-flex items-center gap-1">
+                <span key={s} className="px-2 py-1 rounded-lg bg-brand-500/10 border border-brand-500/30 text-brand-200 text-xs font-semibold inline-flex items-center gap-1">
                   {s}
                   <button type="button" aria-label={`Remove ${s}`} onClick={() => set('skills', form.skills.filter((x) => x !== s))} className="hover:text-white">
                     <X className="w-3 h-3" />
@@ -187,7 +187,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
                     addSkill(skillDraft);
                   }
                 }}
-                className="px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white w-36 focus:outline-none focus:border-emerald-500" />
+                className="px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white w-36 focus:outline-none focus:border-brand-500" />
             </div>
             <div className="mt-2 flex flex-wrap gap-1">
               {SUGGESTED.filter((s) => !form.skills.some((x) => x.toLowerCase() === s.toLowerCase())).map((s) => (
@@ -232,7 +232,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
           <p className="text-sm text-emerald-300 inline-flex items-center gap-1.5"><Check className="w-4 h-4" /> {saveStatus.text}</p>
         ) : null}
         <button type="button" onClick={save} disabled={saving}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
+          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
           <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save profile'}
         </button>
       </div>

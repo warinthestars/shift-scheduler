@@ -140,7 +140,7 @@ export async function sendPasswordReset(email) {
   await sendPasswordResetEmail(auth, email);
 }
 
-/** Signs out of the Firebase browser session (ShiftBoard JWT is cleared separately). */
+/** Signs out of the Firebase browser session (ShiftUp JWT is cleared separately). */
 export async function firebaseSignOut() {
   if (!getApps().length) return;
   await signOut(getAuth(getApps()[0]));
