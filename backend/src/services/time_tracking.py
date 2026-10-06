@@ -1,8 +1,8 @@
 """
-Phase 35: Who clocks in with ShiftBoard, and who is on the venue's own payroll system.
+Phase 35: Who clocks in with ShiftUp, and who is on the venue's own payroll system.
 
-  'shiftboard' : clock in / out in ShiftBoard; hours count in time sheets, exports, Hours & pay.
-  'payroll'    : the venue's own payroll / time clock tracks their time. ShiftBoard shows no clock button,
+  'shiftboard' : clock in / out in ShiftUp; hours count in time sheets, exports, Hours & pay.
+  'payroll'    : the venue's own payroll / time clock tracks their time. ShiftUp shows no clock button,
                  sends no "not clocked in" alerts, and leaves them out of hours and pay. The shift counts as
                  worked unless a manager marks a no-show.
 

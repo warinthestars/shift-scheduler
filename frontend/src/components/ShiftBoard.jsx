@@ -141,7 +141,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
         ) : messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500 space-y-2">
             <MessageSquare className="w-8 h-8 opacity-40" />
-            <p className="text-xs">No messages yet on this shift board.</p>
+            <p className="text-xs">No messages yet in this shift chat.</p>
             <p className="text-[11px] text-slate-600">
               Coordinate logistics, uniforms, or announcements here.
             </p>
@@ -186,7 +186,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
                 <div
                   className={`px-3.5 py-2 rounded-2xl text-xs max-w-[85%] break-words shadow-sm ${
                     isMe
-                      ? 'bg-emerald-600 text-white rounded-br-none'
+                      ? 'bg-brand-500 text-slate-950 rounded-br-none'
                       : isAuthorManager
                       ? 'bg-slate-800 text-slate-100 border border-amber-500/20 rounded-bl-none'
                       : 'bg-slate-800 text-slate-200 border border-slate-700/60 rounded-bl-none'

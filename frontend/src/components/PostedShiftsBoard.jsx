@@ -128,7 +128,7 @@ export default function PostedShiftsBoard({
 
   const toggleBtn = (active) =>
     `flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-      active ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+      active ? 'bg-brand-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-white'
     }`;
 
   return (
@@ -136,7 +136,7 @@ export default function PostedShiftsBoard({
       {/* Phase 29.1: title row, then the controls (fits the narrower 2/3 column) */}
       <div className="flex flex-col gap-3 mb-5">
         <div className="flex items-start gap-2">
-          <CalendarIcon className="w-5 h-5 text-emerald-400 mt-0.5 flex-shrink-0" />
+          <CalendarIcon className="w-5 h-5 text-brand-400 mt-0.5 flex-shrink-0" />
           <div className="min-w-0">
             <h2 className="text-base font-bold text-white">Posted events ({events.length})</h2>
             <p className="text-xs text-slate-400">
@@ -213,7 +213,7 @@ export default function PostedShiftsBoard({
           {eventsByDate.map(({ dateKey, items }) => (
             <div key={dateKey}>
               <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 flex items-center space-x-2">
-                <CalendarIcon className="w-3.5 h-3.5 text-emerald-400" />
+                <CalendarIcon className="w-3.5 h-3.5 text-brand-400" />
                 <span>{dateKey}</span>
               </h3>
               <div className="space-y-3">
@@ -241,7 +241,7 @@ export default function PostedShiftsBoard({
                           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mt-0.5">
                             <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{timeStr}</span>
                             {ev.location_name && (
-                              <span className="inline-flex items-center gap-1 text-emerald-300"><MapPin className="w-3 h-3" />{ev.location_name}</span>
+                              <span className="inline-flex items-center gap-1 text-brand-300"><MapPin className="w-3 h-3" />{ev.location_name}</span>
                             )}
                             <span>Staffed <strong className="text-white">{ev.total_assigned}/{ev.total_capacity}</strong></span>
                             {ev.total_requested > 0 && (
@@ -255,7 +255,7 @@ export default function PostedShiftsBoard({
                           <button
                             type="button"
                             onClick={() => setSelectedKey(ev.event_key)}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-semibold text-xs border border-emerald-600/30 transition inline-flex items-center gap-1.5"
+                            className="px-3 py-1.5 rounded-lg bg-brand-600/20 hover:bg-brand-500 text-brand-300 hover:text-slate-950 font-semibold text-xs border border-brand-600/30 transition inline-flex items-center gap-1.5"
                           >
                             <Eye className="w-3.5 h-3.5" /> Details
                           </button>
@@ -265,7 +265,7 @@ export default function PostedShiftsBoard({
                               onClick={() => onPublishEvent(ev)}
                               disabled={!upcoming}
                               title={upcoming ? 'Workers can see and request it, and your team is told' : 'The start time has passed. Edit the date first.'}
-                              className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition inline-flex items-center gap-1.5 disabled:opacity-40"
+                              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold text-xs transition inline-flex items-center gap-1.5 disabled:opacity-40"
                             >
                               <Send className="w-3.5 h-3.5" /> Publish
                             </button>
@@ -340,7 +340,7 @@ export default function PostedShiftsBoard({
                                 <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{pos.role_type}</span>
                                 {pos.status === 'CANCELLED' && <span className="text-[10px] text-rose-300">cancelled</span>}
                               </div>
-                              <div className="md:col-span-3 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0 text-emerald-400 font-semibold whitespace-nowrap">
+                              <div className="md:col-span-3 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0 text-brand-400 font-semibold whitespace-nowrap">
                                 <PayLabel rate={pos.hourly_rate} rateMax={pos.hourly_rate_max} />
                                 {pos.hide_rate && <EyeOff className="w-3 h-3 text-slate-500" title="Pay hidden from workers" />}
                                 {pos.approval_mode === 'auto' && <span className="text-[10px] text-emerald-400">Instant</span>}

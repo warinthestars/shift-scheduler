@@ -61,7 +61,7 @@ function LocationRow({ venue, loc, onChanged, onError }) {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-white flex items-center gap-1.5">
-            <MapPin className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <MapPin className="w-4 h-4 text-brand-400 flex-shrink-0" />
             <span className="truncate">{loc.name}</span>
             {loc.is_archived && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">Archived</span>}
           </div>
@@ -118,7 +118,7 @@ function LocationRow({ venue, loc, onChanged, onError }) {
               <X className="w-3.5 h-3.5" /> Cancel
             </button>
             <button type="button" onClick={save} disabled={busy}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
               <Save className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save location'}
             </button>
           </div>
@@ -207,14 +207,14 @@ export default function VenueLocationsPanel({ venue, onError }) {
             <button type="button" onClick={() => { setAdding(false); setDraft(blankLocationDraft()); }}
               className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-slate-700">Cancel</button>
             <button type="button" onClick={add} disabled={busy}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50">
+              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold disabled:opacity-50">
               {busy ? 'Saving…' : 'Add location'}
             </button>
           </div>
         </div>
       ) : (
         <button type="button" onClick={() => setAdding(true)}
-          className="px-3 py-2 rounded-xl border border-dashed border-slate-600 text-xs font-semibold text-emerald-400 hover:border-emerald-500 inline-flex items-center gap-1.5">
+          className="px-3 py-2 rounded-xl border border-dashed border-slate-600 text-xs font-semibold text-brand-400 hover:border-brand-500 inline-flex items-center gap-1.5">
           <Plus className="w-4 h-4" /> Add a location
         </button>
       )}

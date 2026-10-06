@@ -265,7 +265,7 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
         <div className="flex justify-end gap-2">
           <button type="button" onClick={() => setForm(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 inline-flex items-center gap-1"><X className="w-3 h-3" /> Cancel</button>
           <button type="button" onClick={submitForm} disabled={busy}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50 ${f.kind === 'delete' || f.kind === 'noshow' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50 ${f.kind === 'delete' || f.kind === 'noshow' ? 'bg-rose-600 text-white' : 'bg-brand-500 text-slate-950'}`}>
             <Check className="w-3 h-3" /> {busy ? 'Saving…' : 'Save'}
           </button>
         </div>
@@ -277,13 +277,13 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
     <ModalShell
       title={data ? `Time sheet — ${data.title}` : 'Time sheet'}
       subtitle={data ? `${fmtDate(data.start_time, tz)} • ${fmtTimeRange(data.start_time, data.end_time, tz)}` : null}
-      icon={<ClipboardList className="w-5 h-5 text-emerald-400" />}
+      icon={<ClipboardList className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-4xl"
       footer={data ? (
         <div className="w-full flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm text-slate-300">
-            Total <strong className="text-white">{data.total_hours.toFixed(2)} h</strong> · Est. pay <strong className="text-emerald-400">{money(data.total_pay)}</strong>
+            Total <strong className="text-white">{data.total_hours.toFixed(2)} h</strong> · Est. pay <strong className="text-brand-400">{money(data.total_pay)}</strong>
           </span>
           <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">Done</button>
         </div>
@@ -325,12 +325,12 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
                   <div className="flex flex-wrap items-center gap-3 text-xs">
                     <button type="button"
                       onClick={() => setForm({ kind: 'rate', requestId: p.request_id, value: p.pay_rate_custom ? String(p.pay_rate) : '', reason: '' })}
-                      className="inline-flex items-center gap-1 text-slate-300 hover:text-emerald-300"
+                      className="inline-flex items-center gap-1 text-slate-300 hover:text-brand-300"
                       title={p.rate_max ? `Posted range $${p.rate_min}–$${p.rate_max}` : `Posted rate $${p.rate_min}`}>
                       <DollarSign className="w-3.5 h-3.5" /> {money(p.pay_rate)}/hr{p.pay_rate_custom ? ' (set)' : ''}
                     </button>
                     <span className="text-slate-400"><Clock className="w-3.5 h-3.5 inline" /> {p.total_hours.toFixed(2)} h</span>
-                    <span className="text-emerald-400 font-semibold">{money(p.est_pay)}</span>
+                    <span className="text-brand-400 font-semibold">{money(p.est_pay)}</span>
                   </div>
                 </div>
 
@@ -359,14 +359,14 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
 
                 {p.time_tracking === 'payroll' && p.entries.length === 0 && (
                   <p className="mt-2 text-[11px] text-violet-200/80">
-                    Their hours are tracked in your venue's own payroll, so there's nothing to clock here. Times you add still count in ShiftBoard.
+                    Their hours are tracked in your venue's own payroll, so there's nothing to clock here. Times you add still count in ShiftUp.
                   </p>
                 )}
                 {!formHere && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button type="button"
                       onClick={() => setForm({ kind: 'add', requestId: p.request_id, cin: utcToZonedLocalInput(data.start_time, tz), cout: utcToZonedLocalInput(data.end_time, tz), reason: '' })}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-xs inline-flex items-center gap-1">
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-brand-300 text-xs inline-flex items-center gap-1">
                       <Plus className="w-3 h-3" /> Add time
                     </button>
                     {canNoShow && (

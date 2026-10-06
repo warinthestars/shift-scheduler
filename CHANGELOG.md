@@ -1,8 +1,39 @@
 # Changelog
 
-All notable changes to ShiftBoard. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/): while pre-1.0, **0.&lt;phase&gt;.&lt;sub-phase&gt;** (see README → Versioning & releases).
+All notable changes to ShiftUp (called ShiftBoard until 0.37.0). The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/): while pre-1.0, **0.&lt;phase&gt;.&lt;sub-phase&gt;** (see README → Versioning & releases).
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
+
+## [0.37.0] - 2026-10-06 - Phase 37: ShiftUp branding and the ShiftBoard tab
+
+### Added
+- **ShiftBoard tab** for workers: every shift that's up and isn't theirs yet. It replaces "Find shifts".
+  - An event leaves the ShiftBoard once the worker requests it, joins its waitlist or is offered a shift in it. It is then on **My shifts**. A line at the top of the board says how many are there.
+  - **My shifts** and **ShiftBoard** are two links in the top bar, and two tabs on a phone.
+  - With no tab chosen, the app opens My shifts when the worker has something booked, requested, offered or waitlisted in the next 7 days, and the ShiftBoard when they don't.
+  - `/shiftboard` opens the ShiftBoard directly.
+- **Logo and icons** from `assets/main_logo_shift-up.png`: the header, the sign-in and invite pages, the public home page, the browser tab, the installed app and notification badges. The pictures are in `frontend/public/brand/` and `frontend/public/icons/`.
+- `frontend/src/brand.js` (`APP_NAME`, `APP_TAGLINE`, `BOARD_NAME`) and `frontend/src/components/BrandLogo.jsx`.
+- `scripts/phase37_rebrand.py`: the one-off script that renamed and recoloured more than 100 files in this version.
+
+### Changed
+- **The service is now ShiftUp** (shift-up.team). Every screen, email, text message, notification, calendar name and the API title say ShiftUp. "ShiftBoard" now means the board of open shifts: the worker tab, and the heading of the public home page.
+- **Gold brand colour** (`brand-*` in `frontend/tailwind.config.js`, taken from the logo) on a black header. Main buttons, active tabs, links, focus rings and section icons are gold with dark text.
+  - Green now only means confirmed, booked, on, verified or done. Amber still means waiting, and rose a problem.
+  - Every link in the top bar uses the same gold when it is the current page.
+- The default `EMAIL_FROM` is `ShiftUp <no-reply@example.com>`. A stack whose `.env` sets `EMAIL_FROM` keeps sending under the name written there until that line is changed.
+- The shift chat is called **Shift chat** everywhere (two buttons said "Board"), and "the public shift board" in cover requests is now "the ShiftBoard".
+- Downloads are named `shiftup-hours-….csv` and `shiftup.ics`.
+- The manager calendar's selected view button and today's column are gold.
+- The installed app's name, colours and icons (`manifest.webmanifest`), the offline page, and the service worker's cache name (`shiftup-shell-v2`).
+- One sentence of text in `backend/src/auth.py` and `backend/src/routers/auth.py` ("Contact your venue or ShiftUp…"). Sign-in itself is unchanged.
+
+### Removed
+- The "Hide ones I've requested" filter: requested shifts are no longer on the board.
+- `frontend/public/icons/favicon.svg` (the old calendar icon).
+
+### Not changed, on purpose
+- No database change. Names people never see still say `shiftboard`: the database and its user, the Docker network, the demo stack and demo sign-ins (`@shiftboard.com`), browser storage keys, calendar entry ids and the time-tracking value `shiftboard`.
 
 ## [0.36.1] - 2026-10-06 - Phase 36.1: Calendar sync
 

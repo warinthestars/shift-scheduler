@@ -68,7 +68,7 @@ export default function PushDeviceCard({ pushEnabled, onPushEnabled }) {
   return (
     <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
       <div className="flex items-center gap-2 text-sm font-semibold text-white">
-        <Smartphone className="w-4 h-4 text-emerald-400" /> Phone notifications
+        <Smartphone className="w-4 h-4 text-brand-400" /> Phone notifications
       </div>
       <p className="text-xs text-slate-400">
         Pop-up alerts on your phone or computer, like a text but free. Same messages as email, plus new shifts if you
@@ -77,10 +77,10 @@ export default function PushDeviceCard({ pushEnabled, onPushEnabled }) {
 
       {state === 'needs_install' && (
         <div className="p-3 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-300 space-y-1.5">
-          <p className="font-semibold text-white">On iPhone and iPad, notifications work from the ShiftBoard app on your Home Screen:</p>
+          <p className="font-semibold text-white">On iPhone and iPad, notifications work from the ShiftUp app on your Home Screen:</p>
           <p className="flex items-start gap-1.5"><Share className="w-3.5 h-3.5 text-sky-400 flex-shrink-0 mt-0.5" /><span>1. Tap <b>Share</b> in Safari.</span></p>
           <p className="flex items-start gap-1.5"><PlusSquare className="w-3.5 h-3.5 text-sky-400 flex-shrink-0 mt-0.5" /><span>2. Tap <b>Add to Home Screen</b>.</span></p>
-          <p>3. Open ShiftBoard from your Home Screen and come back here.</p>
+          <p>3. Open ShiftUp from your Home Screen and come back here.</p>
         </div>
       )}
       {state === 'unsupported' && (
@@ -89,7 +89,7 @@ export default function PushDeviceCard({ pushEnabled, onPushEnabled }) {
       {state === 'denied' && (
         <p className="text-xs text-amber-300 flex items-start gap-1.5">
           <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-          <span>Notifications are blocked for ShiftBoard on this device. Allow them in your {isIOS() ? 'iPhone Settings → Notifications → ShiftBoard' : 'browser’s site settings'}, then come back.</span>
+          <span>Notifications are blocked for ShiftUp on this device. Allow them in your {isIOS() ? 'iPhone Settings → Notifications → ShiftUp' : 'browser’s site settings'}, then come back.</span>
         </p>
       )}
 
@@ -108,7 +108,7 @@ export default function PushDeviceCard({ pushEnabled, onPushEnabled }) {
               </button>
             </>
           ) : (
-            <button type="button" onClick={turnOn} disabled={busy} className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-slate-950`}>
+            <button type="button" onClick={turnOn} disabled={busy} className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950`}>
               <BellRing className="w-3.5 h-3.5" /> {busy ? 'Turning on…' : 'Turn on for this device'}
             </button>
           )}
@@ -123,7 +123,7 @@ export default function PushDeviceCard({ pushEnabled, onPushEnabled }) {
         <div className="pt-1 space-y-1.5">
           <label className="flex items-start gap-3 cursor-pointer">
             <input type="checkbox" checked={!!pushEnabled} onChange={(e) => onPushEnabled(e.target.checked)}
-              className="mt-0.5 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+              className="mt-0.5 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
             <span className="text-xs text-slate-300">Send notifications to my devices</span>
           </label>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Your devices ({devices.length})</div>

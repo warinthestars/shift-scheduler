@@ -1,4 +1,4 @@
-# ShiftBoard
+# ShiftUp
 
 > A shift scheduling and call-board platform for the service industry: venues post events, workers pick up shifts, and everyone knows who is working, where, and when.
 
@@ -38,8 +38,11 @@ These are the words in the app. Use them in code comments, docs and every new sc
 | **Cover request** | A booked worker asks their team (or the public board) to take their shift. | | `CoverRequest` / `cover_requests` |
 | **Waitlist** | A line for a full shift. | | `WaitlistEntry` / `waitlist_entries` |
 | **Offer** | A manager offers a shift to one or more people; the first to accept gets it. | | `ShiftOffer` / `shift_offers` |
+| **ShiftBoard** | The board of open shifts. For a worker: every shift that's up and isn't theirs yet. For a visitor: the public home page. | | `BOARD_NAME` in `frontend/src/brand.js`; the worker tab's id is still `find` |
 
 Many API fields still say `positions` for an event's shifts (for example `EventListing.positions[]`). That's a historical name: the UI says **shifts**.
+
+**The name.** The service is **ShiftUp** (shift-up.team). Until 0.37.0 it was called ShiftBoard; that word now means only the board of open shifts. Names people never see still say `shiftboard`, on purpose: the database and its user, the Docker network and demo stack, the demo sign-ins (`@shiftboard.com`), browser storage keys, calendar entry ids and the `ShiftBoard.jsx` component. Don't rename them: it would sign people out, duplicate calendar entries or break a running stack.
 
 ---
 
@@ -80,7 +83,7 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
 
 ### Home page and the public board
 * **`PUBLIC_EVENT_BOARD=false` (the default):** the home page (`/`) sends people who aren't signed in to the sign-in page.
-* **`PUBLIC_EVENT_BOARD=true`:** the home page is a **public board** of every posted, upcoming event, with a **Sign in / Sign up** button in the corner.
+* **`PUBLIC_EVENT_BOARD=true`:** the home page is a **public board** (titled **ShiftBoard**) of every posted, upcoming event, with a **Sign in / Sign up** button in the corner.
   * It shows only: event name, date and time, venue name, city, positions and open spots (`GET /api/public/board`, no sign-in needed).
   * It never shows pay, the street address, map pin, location name, notes, requirements or venue ids. Those need a worker account.
   * Tapping an event asks the visitor to sign in or create a worker account, then opens that same event with its full details.
@@ -90,9 +93,9 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
 * Apart from signing in, invites, the board and private calendar links, **every API endpoint needs a sign-in** (since 0.36.0 that includes `GET /api/venues`, `GET /api/venues/{id}` and `GET /api/venues/{id}/shifts`).
 
 ### Calendar sync
-Everyone can see their ShiftBoard calendar in **Google Calendar, Apple Calendar, Outlook or any other calendar app** (Profile → **Calendar sync**, every account type; `CALENDAR_SYNC=false` turns it off).
+Everyone can see their ShiftUp calendar in **Google Calendar, Apple Calendar, Outlook or any other calendar app** (Profile → **Calendar sync**, every account type; `CALENDAR_SYNC=false` turns it off).
 * **How it works:** turning a calendar on makes a **private link** (an iCalendar feed, `GET /api/public/calendar/{token}.ics`). The calendar app subscribes to it and checks it on its own schedule: usually every few hours, and Google can take up to a day.
-  * It is **one-way**: nothing done in the calendar app changes ShiftBoard.
+  * It is **one-way**: nothing done in the calendar app changes ShiftUp.
   * Buttons add it to Google, Apple, Outlook.com or Microsoft 365 in one tap; the link can be copied for anything else.
 * **Which calendars a person can turn on** follows their access:
 
@@ -111,14 +114,17 @@ Everyone can see their ShiftBoard calendar in **Google Calendar, Apple Calendar,
 
   It also shows their time off. Everything except confirmed shifts can be switched off per link. Only confirmed shifts block the time as "busy".
 * **Venue, manager, organization and admin calendars** have one entry per event, such as "Smith Wedding (6/8 filled)", with each position and who is booked in the details. Shifts that aren't part of an event are entries of their own. Managers can add drafts, tagged `[DRAFT]`.
-* **What is never in a calendar:** pay, tips, staff-only notes, private time-off notes, email addresses and phone numbers. Each entry links back to ShiftBoard for the rest.
+* **What is never in a calendar:** pay, tips, staff-only notes, private time-off notes, email addresses and phone numbers. Each entry links back to ShiftUp for the rest.
 * **The link is the key.** Anyone who has it can read that calendar, so it is long and random. **Reset link** replaces it at once; **Turn off** deletes it.
   * Access is worked out again each time a feed is built (a built feed is reused for up to a minute): a link for a venue someone no longer runs, or for an account that was turned off, shows an empty calendar. Their settings list it as **No longer available** so they can turn it off.
-* Google and Outlook read the link from their own servers, so the site needs a public `https` address. Entries link back to ShiftBoard only when `APP_BASE_URL` is that address.
+* Google and Outlook read the link from their own servers, so the site needs a public `https` address. Entries link back to ShiftUp only when `APP_BASE_URL` is that address.
 * Feeds cover 30 days back and 180 days ahead.
 
 ### For workers
-* **Find shifts**: upcoming events, grouped by day, with filters:
+* Two main tabs since 0.37.0: **My shifts** (everything that's theirs) and the **ShiftBoard** (everything else that's up). Both are links in the top bar and tabs on a phone.
+  * With no tab in the address, the app opens **My shifts** when the worker has something booked, requested, offered or waitlisted in the next 7 days, and the **ShiftBoard** when they don't.
+  * `/worker?tab=schedule` and `/worker?tab=find` open one or the other. `/shiftboard` is a short address for the second.
+* **ShiftBoard**: upcoming events that aren't theirs yet, grouped by day. An event leaves the board once they request it, join its waitlist or are offered a shift in it; it is then on My shifts. Filters:
   * date
   * position
   * venue
@@ -172,20 +178,20 @@ Everyone can see their ShiftBoard calendar in **Google Calendar, Apple Calendar,
   * remove someone, mark a no-show
 * **Team**: members, positions, notes, blocking, invites (email / link / QR / CSV), ratings and reviews.
 * **Time sheets**: fix clock-in / clock-out times (every edit is logged). Download hours and pay as CSV in the venue's time zone, for everyone or one staffing company.
-* **Time tracking: ShiftBoard or venue payroll** (Phase 35, `services/time_tracking.py`):
-  * Each venue chooses how **team members'** time is tracked: they clock in with ShiftBoard, or the venue's own payroll / time clock tracks them.
-  * Each team member can be set differently, and can be marked as working through a **staffing company** (overhire / agency). People from a staffing company, and anyone booked from outside the team, clock in with ShiftBoard unless a manager says otherwise.
-  * First match wins: the person's own setting → works through a company (ShiftBoard) → on the team and the venue uses payroll (payroll) → ShiftBoard.
+* **Time tracking: ShiftUp or venue payroll** (Phase 35, `services/time_tracking.py`):
+  * Each venue chooses how **team members'** time is tracked: they clock in with ShiftUp, or the venue's own payroll / time clock tracks them.
+  * Each team member can be set differently, and can be marked as working through a **staffing company** (overhire / agency). People from a staffing company, and anyone booked from outside the team, clock in with ShiftUp unless a manager says otherwise.
+  * First match wins: the person's own setting → works through a company (ShiftUp) → on the team and the venue uses payroll (payroll) → ShiftUp.
   * Payroll-tracked people get no clock-in button and no "not clocked in" alerts. The shift counts as worked for reliability unless a manager marks a no-show. Their hours aren't in time sheets, exports or Hours & pay; pay periods list them separately with scheduled hours.
   * When a shift starts, the background worker writes the mode on the booking (`shift_requests.time_tracking`), so later settings changes never rewrite past hours.
 * **Overtime flags and pay periods** (Phase 35, `services/pay_periods.py`, `routers/pay_periods.py`):
   * Per venue: weekly overtime limit (default 40 h), optional daily limit, the day the work week starts, and the pay period (weekly, every two weeks, twice a month, monthly).
-  * Overtime is flagged and counted (time sheets, pay periods, the hours download). ShiftBoard doesn't add an overtime premium to pay.
+  * Overtime is flagged and counted (time sheets, pay periods, the hours download). ShiftUp doesn't add an overtime premium to pay.
   * **Pay periods** screen: totals per person and per period. When approving is on, a finished period is **approved and locked**: nobody can add, edit or delete times or change pay rates in it until a manager reopens it with a reason. Approvals keep a snapshot of the totals and are logged.
 * **Tips per event** (Phase 35.2, `services/tips.py`, `routers/tips.py`):
   * After an event starts, a manager enters its **tip pool** and anyone's **own tips** in the Tips panel of the event's time sheet.
   * Positions marked **Tips** can get own tips; positions marked **Tip pool** share the pool.
-  * The pool is split **by hours worked** or **equally** (a venue default; each event can switch). Hours are ShiftBoard clock-ins, or scheduled hours for people on the venue's payroll, who are in pools only when the venue allows it. Nobody with hours yet → equal. Shares are rounded to the cent and always add up to the pool.
+  * The pool is split **by hours worked** or **equally** (a venue default; each event can switch). Hours are ShiftUp clock-ins, or scheduled hours for people on the venue's payroll, who are in pools only when the venue allows it. Nobody with hours yet → equal. Shares are rounded to the cent and always add up to the pool.
   * No-shows get nothing. Tips count on the day the shift starts. They show in pay periods (per person and in the approval snapshot), the hours download (three columns at the end, plus "tips only" rows), and workers' Hours & pay (unless the venue hides them).
   * An approved pay period locks its tips too (409 until it's reopened). Turning tips off stops counting them; what was entered is kept.
 * **Reliability scoring** (`services/reliability.py`):
@@ -212,14 +218,14 @@ Everyone can see their ShiftBoard calendar in **Google Calendar, Apple Calendar,
 ### Notifications
 * **In the app** (bell), **email** (console, SMTP or Resend), **text** (Twilio; urgent items only, if the person turned texts on) and **phone / browser push**:
   * Firebase Cloud Messaging when it's configured
-  * otherwise ShiftBoard's own Web Push via `pywebpush` / VAPID (keys are made automatically and stored in the `app_keys` table)
+  * otherwise ShiftUp's own Web Push via `pywebpush` / VAPID (keys are made automatically and stored in the `app_keys` table)
 * People choose channels and quiet hours. New-shift alerts can be instant, a daily digest, or off.
 * The app installs as a **PWA** (manifest, service worker `public/sw.js`, offline page).
 
 ### Background worker
 * Runs inside the backend container: `backend/src/main.py` starts `notification_worker_loop()` from the FastAPI lifespan with `asyncio.create_task()`.
 * Every minute:
-  * record how each started shift's time is tracked (ShiftBoard or venue payroll)
+  * record how each started shift's time is tracked (ShiftUp or venue payroll)
   * auto clock-out
   * 24 h / 2 h reminders
   * "not clocked in" alerts
@@ -273,8 +279,14 @@ frontend/src/
   pages/             WorkerDashboard, VenueManagerDashboard, AdminPanel, EarningsPage, ProfilePage, ...
                      PublicBoardPage (home page when the board is on), LeadPage (/lead), OrganizationPage (/org)
   components/        shared UI; admin/, manager/, worker/, profile/, lead/, org/ sub-folders
+                     BrandLogo.jsx = the logo (bar, stack or mark)
+  brand.js           the names: APP_NAME ("ShiftUp"), APP_TAGLINE, BOARD_NAME ("ShiftBoard")
   context/AuthContext.jsx, api/client.js   (locked: change only when asked)
   utils/             formatting, time zones, errors, push, version
+frontend/public/brand/   the logo pictures the app shows · frontend/public/icons/ = app icons and favicons
+assets/                  the original logo (main_logo_shift-up.png); the files above are cut from it
+frontend/tailwind.config.js   the brand colours (brand-50 … brand-950; brand-500 is the logo's gold)
+scripts/phase37_rebrand.py    the one-off rename and recolour of Phase 37 (kept for the record; it does nothing on a second run)
 database/init.sql    the whole schema (runs on an empty database)
 database/upgrades/   "keep your data" SQL per version, for a database you don't want to wipe
 backend/src/seed.py        starter demo accounts at startup (off with SEED_DEMO_ACCOUNTS=false)
@@ -414,11 +426,17 @@ Changes are planned as numbered **phases**. The prompts are written against the 
 6. **Words:** Event → Shift → Position, as in section 1.
 7. **No new packages** unless the phase says so.
 8. **Every phase ends with a version bump and a CHANGELOG entry** (section 9).
+9. **Brand and colour** (since 0.37.0):
+   * The service is **ShiftUp**; the board of open shifts is the **ShiftBoard**. In new screens import `APP_NAME` and `BOARD_NAME` from `frontend/src/brand.js`, and show the logo with `<BrandLogo />`.
+   * **Gold (`brand-*`)** is for main buttons, the active tab or link, links, focus rings and section icons. Text on solid gold is `text-slate-950`, never white.
+   * **Green (`emerald-*`)** only means confirmed, booked, on, verified or done. **Amber** means waiting. **Rose** means a problem. Don't use green for a button that isn't one of those.
+   * Two areas keep their own accent from before 0.37.0: the admin screens and the shift chat are indigo, and the organization screens are teal.
+   * Don't redraw or recolour the logo. New sizes are cut from `assets/main_logo_shift-up.png`.
 
 ---
 
 ## 9. Versioning & releases
-ShiftBoard uses [Semantic Versioning](https://semver.org/). While it's pre-1.0, the version follows the phase number:
+ShiftUp uses [Semantic Versioning](https://semver.org/). While it's pre-1.0, the version follows the phase number:
 
 | Phase | Version |
 | :--- | :--- |

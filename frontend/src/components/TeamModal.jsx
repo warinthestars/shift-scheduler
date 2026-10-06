@@ -13,12 +13,12 @@ import { certShort } from '../utils/certs';
 import { fmtShortDate } from '../utils/venueTime';
 
 const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 const cardCls = 'p-4 rounded-xl bg-slate-950 border border-slate-800';
 const btnGhost =
   'px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-40';
 const btnPrimary =
-  'px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-40';
+  'px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-40';
 
 const STATUS_CHIP = {
   active: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
@@ -36,7 +36,7 @@ const SOURCE_LABEL = {
 const TRACKING_OPTIONS = [
   ['venue', 'Use the venue setting'],
   ['payroll', "Venue's payroll (no clock-in here)"],
-  ['shiftboard', 'Clock in with ShiftBoard'],
+  ['shiftboard', 'Clock in with ShiftUp'],
 ];
 
 const INVITE_CHIP = {
@@ -155,7 +155,7 @@ function TempPassword({ result, onDone }) {
       )}
       {result.temporary_password && (
         <p className="text-[11px] text-amber-200/80">
-          They sign in on the ShiftBoard login page with their email and this password. Share it privately (text or in person).
+          They sign in on the ShiftUp login page with their email and this password. Share it privately (text or in person).
         </p>
       )}
       <button type="button" className={btnGhost} onClick={onDone}>Done</button>
@@ -175,7 +175,7 @@ function PositionPicker({ options, value, onChange }) {
             type="button"
             onClick={() => onChange(on ? value.filter((v) => v.toLowerCase() !== name.toLowerCase()) : [...value, name])}
             className={`px-2.5 py-1 rounded-lg text-xs font-semibold border ${
-              on ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-800 text-slate-400 border-slate-700'
+              on ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'bg-slate-800 text-slate-400 border-slate-700'
             }`}
           >
             {on && <Check className="w-3 h-3 inline mr-0.5" />}
@@ -232,7 +232,7 @@ function MemberRow({ m, venueId, timeZone, positionOptions, companies = [], open
   };
 
   return (
-    <div className={`rounded-xl border ${open ? 'border-emerald-500/40 bg-slate-950' : 'border-slate-800 bg-slate-950 hover:border-slate-700'}`}>
+    <div className={`rounded-xl border ${open ? 'border-brand-500/40 bg-slate-950' : 'border-slate-800 bg-slate-950 hover:border-slate-700'}`}>
       <button type="button" onClick={onToggle} className="w-full text-left px-3 py-2.5 flex items-center gap-3">
         <Avatar person={m} size="w-9 h-9 text-xs" />
         <div className="min-w-0 flex-1">
@@ -374,7 +374,7 @@ function MemberRow({ m, venueId, timeZone, positionOptions, companies = [], open
               </div>
               <p className="text-[11px] text-slate-500">
                 "Use the venue setting" follows Venue settings → Time & pay periods. People who work through a staffing company
-                clock in with ShiftBoard unless you pick otherwise here. Shifts that already started keep the setting they had.
+                clock in with ShiftUp unless you pick otherwise here. Shifts that already started keep the setting they had.
               </p>
               <div className="flex gap-2">
                 <button type="button" className={btnPrimary} disabled={busy}
@@ -516,7 +516,7 @@ function AddPeoplePanel({ venueId, positionOptions, onAdded, onMessage, onGoInvi
   return (
     <div className={`${cardCls} space-y-3`}>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-bold text-white flex items-center gap-2"><UserPlus className="w-4 h-4 text-emerald-400" /> Add people</div>
+        <div className="text-sm font-bold text-white flex items-center gap-2"><UserPlus className="w-4 h-4 text-brand-400" /> Add people</div>
         <button type="button" onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800" aria-label="Close"><X className="w-4 h-4" /></button>
       </div>
       <div className="relative">
@@ -576,7 +576,7 @@ function AddPeoplePanel({ venueId, positionOptions, onAdded, onMessage, onGoInvi
       )}
 
       <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
-        <span className="text-[11px] text-slate-500 mr-auto pt-2">Not on ShiftBoard yet?</span>
+        <span className="text-[11px] text-slate-500 mr-auto pt-2">Not on ShiftUp yet?</span>
         <button type="button" className={`${btnGhost} mt-2`} onClick={onGoInvite}><Send className="w-3.5 h-3.5" /> Invite by email, text or QR</button>
         <button type="button" className={`${btnGhost} mt-2`} onClick={() => setCreating(true)}><KeyRound className="w-3.5 h-3.5" /> Create an account</button>
       </div>
@@ -639,7 +639,7 @@ function MembersTab({ venueId, timeZone, positionOptions, onChanged, onMessage, 
         <div className="flex bg-slate-800 border border-slate-700 rounded-xl p-0.5 overflow-x-auto">
           {FILTERS.map(([id, label]) => (
             <button key={id} type="button" onClick={() => setFilter(id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap ${filter === id ? 'bg-emerald-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}>
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap ${filter === id ? 'bg-brand-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}>
               {label}
             </button>
           ))}
@@ -739,7 +739,7 @@ function TeamLinkCard({ venueId, venueName, onMessage }) {
     <div className={`${cardCls} flex flex-col sm:flex-row gap-4`}>
       <img src={qrSrc} alt="Team invite QR code" className="w-40 h-40 rounded-xl bg-white p-1 self-center sm:self-start" />
       <div className="flex-1 min-w-0 space-y-2">
-        <div className="text-sm font-bold text-white flex items-center gap-2"><Link2 className="w-4 h-4 text-emerald-400" /> Team link</div>
+        <div className="text-sm font-bold text-white flex items-center gap-2"><Link2 className="w-4 h-4 text-brand-400" /> Team link</div>
         <p className="text-xs text-slate-400">
           Anyone with this link or QR code can join your team: post it in the staff group chat or print it for the back office.
           New people create an account; existing ones just sign in.
@@ -747,7 +747,7 @@ function TeamLinkCard({ venueId, venueName, onMessage }) {
         {/localhost|127\.0\.0\.1/.test(link.url) && !/localhost|127\.0\.0\.1/.test(window.location.hostname) && (
           <p className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/40 rounded-lg p-2 flex gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            This link won't open on other people's phones yet. Ask your ShiftBoard admin to set the site's public address.
+            This link won't open on other people's phones yet. Ask your ShiftUp admin to set the site's public address.
           </p>
         )}
         <div className="flex gap-2">
@@ -899,7 +899,7 @@ function InviteTab({ venueId, venueName, positionOptions, onMessage }) {
       <TeamLinkCard venueId={venueId} venueName={venueName} onMessage={onMessage} />
 
       <form onSubmit={sendOne} className={`${cardCls} space-y-3`}>
-        <div className="text-sm font-bold text-white flex items-center gap-2"><Send className="w-4 h-4 text-emerald-400" /> Invite someone</div>
+        <div className="text-sm font-bold text-white flex items-center gap-2"><Send className="w-4 h-4 text-brand-400" /> Invite someone</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <input className={inputCls} placeholder="First name" value={form.first_name} onChange={(e) => set('first_name', e.target.value)} />
           <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={(e) => set('last_name', e.target.value)} />
@@ -913,7 +913,7 @@ function InviteTab({ venueId, venueName, positionOptions, onMessage }) {
       </form>
 
       <div className={`${cardCls} space-y-3`}>
-        <div className="text-sm font-bold text-white flex items-center gap-2"><Upload className="w-4 h-4 text-emerald-400" /> Import a spreadsheet (.csv)</div>
+        <div className="text-sm font-bold text-white flex items-center gap-2"><Upload className="w-4 h-4 text-brand-400" /> Import a spreadsheet (.csv)</div>
         <p className="text-xs text-slate-400">
           First row = column names: <code className="text-slate-200">name</code> (or <code className="text-slate-200">first_name</code>, <code className="text-slate-200">last_name</code>),{' '}
           <code className="text-slate-200">email</code>, <code className="text-slate-200">phone</code>, <code className="text-slate-200">positions</code> (separate several with ;).
@@ -1039,7 +1039,7 @@ function ManagersTab({ venueId, onMessage }) {
       <div className={`${cardCls} space-y-2`}>
         <div className="text-sm font-bold text-white flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-400" /> Managers of this venue</div>
         {managers.length === 0 && (
-          <p className="text-xs text-slate-500">No managers yet. Only ShiftBoard admins can run this venue until you add one below.</p>
+          <p className="text-xs text-slate-500">No managers yet. Only ShiftUp admins can run this venue until you add one below.</p>
         )}
         <div className="divide-y divide-slate-800">
           {managers.map((m) => (
@@ -1088,7 +1088,7 @@ function ManagersTab({ venueId, onMessage }) {
           </div>
           <p className="text-[11px] text-slate-500">
             If they already have a manager account, they're added to this venue. Otherwise a manager account is created with a temporary password.
-            Worker accounts can't be made managers here (ask a ShiftBoard admin).
+            Worker accounts can't be made managers here (ask a ShiftUp admin).
           </p>
           <button type="submit" className={btnPrimary} disabled={busy}>
             <UserCog className="w-4 h-4" /> {busy ? 'Saving…' : 'Add co-manager'}
@@ -1130,7 +1130,7 @@ export default function TeamModal({ venue, positions = [], timeZone, onClose, on
       {tabs.map(([id, label, Icon, count]) => (
         <button key={id} type="button" onClick={() => { setTab(id); setMsg(null); }}
           className={`px-3 py-1.5 rounded-lg text-xs font-bold border inline-flex items-center gap-1.5 ${
-            tab === id ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+            tab === id ? 'bg-brand-500 text-slate-950 border-brand-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
           }`}>
           <Icon className="w-3.5 h-3.5" /> {label}
           {count > 0 && (
@@ -1147,7 +1147,7 @@ export default function TeamModal({ venue, positions = [], timeZone, onClose, on
     <ModalShell
       title={`${venue?.name || 'Venue'} team`}
       subtitle="Who's on your team, how to bring new people in, and who else manages this venue."
-      icon={<Users className="w-5 h-5 text-emerald-400" />}
+      icon={<Users className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-5xl"
       headerExtra={headerExtra}

@@ -38,7 +38,7 @@ export default function CoverBoard({ items = [], busyId, onTake }) {
                 {fmtDate(c.start_time, c.venue_timezone)} · {fmtTimeRange(c.start_time, c.end_time, c.venue_timezone)}
               </div>
               <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
-                <PayLabel rate={c.hourly_rate} rateMax={c.hourly_rate_max} className="text-emerald-400 font-semibold" />
+                <PayLabel rate={c.hourly_rate} rateMax={c.hourly_rate_max} className="text-brand-400 font-semibold" />
                 <TipBadge shift={c} />
                 <span className="text-slate-400">Covering for {c.from_first_name}</span>
               </div>
@@ -53,7 +53,7 @@ export default function CoverBoard({ items = [], busyId, onTake }) {
             </div>
             {c.can_take && (
               <button type="button" onClick={() => onTake(c)} disabled={busy}
-                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 self-start sm:self-auto">
+                className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 self-start sm:self-auto">
                 {c.booking === 'instant' && <Zap className="w-4 h-4" />}
                 {busy ? '…' : c.booking === 'instant' ? 'Take it' : 'Ask to take it'}
               </button>

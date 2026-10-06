@@ -48,7 +48,7 @@ export function Avatar({ person, size = 'w-10 h-10 text-sm' }) {
     );
   }
   return (
-    <div className={`${size} rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center justify-center font-bold flex-shrink-0`}>
+    <div className={`${size} rounded-full bg-brand-500/15 text-brand-300 border border-brand-500/30 flex items-center justify-center font-bold flex-shrink-0`}>
       {initials(person?.first_name, person?.last_name, person?.email)}
     </div>
   );
@@ -106,11 +106,11 @@ export default function WorkerProfilePanel({ venueId, workerId, timeZone, compac
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${statusCls}`}>{statusLabel}</span>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-1">
-              {m.phone && <a href={`tel:${m.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Phone className="w-3 h-3" />{m.phone}</a>}
+              {m.phone && <a href={`tel:${m.phone}`} className="inline-flex items-center gap-1 hover:text-brand-400"><Phone className="w-3 h-3" />{m.phone}</a>}
               {m.email && (
                 m.email.includes('*')
                   ? <span className="inline-flex items-center gap-1"><Mail className="w-3 h-3" />{m.email}</span>
-                  : <a href={`mailto:${m.email}`} className="inline-flex items-center gap-1 hover:text-emerald-400"><Mail className="w-3 h-3" />{m.email}</a>
+                  : <a href={`mailto:${m.email}`} className="inline-flex items-center gap-1 hover:text-brand-400"><Mail className="w-3 h-3" />{m.email}</a>
               )}
             </div>
           </div>
@@ -281,7 +281,7 @@ function ProfileExtras({ data, venueId, workerId, onReviewed, setConfirm }) {
                     )}
                     {c.status !== 'verified' && (
                       <button type="button" disabled={busy === c.id} onClick={() => review(c, 'verified')}
-                        className="px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold disabled:opacity-50">
+                        className="px-2 py-1 rounded-md bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold disabled:opacity-50">
                         Verify
                       </button>
                     )}
@@ -335,7 +335,7 @@ function ProfileExtras({ data, venueId, workerId, onReviewed, setConfirm }) {
             <p className="text-xs text-slate-200">
               {data.emergency_contact_name}
               {data.emergency_contact_phone && (
-                <a href={`tel:${data.emergency_contact_phone}`} className="ml-2 text-emerald-300 hover:underline">{data.emergency_contact_phone}</a>
+                <a href={`tel:${data.emergency_contact_phone}`} className="ml-2 text-brand-300 hover:underline">{data.emergency_contact_phone}</a>
               )}
             </p>
           </div>

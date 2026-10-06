@@ -44,7 +44,7 @@ async def seed_initial_data(db: AsyncSession):
        - worker2 on shift with status="approved" and available_spots decremented by 1.
     All operations are wrapped in try/except blocks with explicit error logging.
     """
-    logger.info("Initializing ShiftBoard database seed...")
+    logger.info("Initializing ShiftUp database seed...")
 
     # --------------------------------------------------------------------------
     # 1. Super Admin Seeding
@@ -67,7 +67,7 @@ async def seed_initial_data(db: AsyncSession):
                 first_name="Platform",
                 last_name="SuperAdmin",
                 phone="555-0100",
-                bio="ShiftBoard System Administrator",
+                bio="ShiftUp System Administrator",
                 is_active=True,
                 aggregate_rating=5.00,
                 rating_count=0,
@@ -467,4 +467,4 @@ async def seed_initial_data(db: AsyncSession):
         await db.rollback()
         logger.warning(f"Event backfill skipped: {e}")
 
-    logger.info("ShiftBoard database initialization complete.")
+    logger.info("ShiftUp database initialization complete.")

@@ -11,7 +11,7 @@ from src.auth import normalize_role
 
 
 def auth_source_for(user: User) -> str:
-    """'local' (ShiftBoard password), 'firebase' (Firebase only), or 'both'."""
+    """'local' (ShiftUp password), 'firebase' (Firebase only), or 'both'."""
     has_pw = bool(user.hashed_password)
     has_fb = bool(user.firebase_uid)
     if has_pw and has_fb:

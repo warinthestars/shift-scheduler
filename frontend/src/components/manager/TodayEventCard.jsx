@@ -176,7 +176,7 @@ export default function TodayEventCard({
                         )}
                         {canClockIn && (
                           <button type="button" onClick={() => onClockIn?.(p, pos)}
-                            className={`${actBtn} bg-emerald-600/20 border border-emerald-500/40 text-emerald-200 hover:bg-emerald-600/30`}>
+                            className={`${actBtn} bg-brand-600/20 border border-brand-500/40 text-brand-200 hover:bg-brand-600/30`}>
                             <LogIn className="w-3.5 h-3.5" /> Clock in
                           </button>
                         )}

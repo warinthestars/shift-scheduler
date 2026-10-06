@@ -123,7 +123,7 @@ export default function ProfilePage() {
           {tabs.map((t) => (
             <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
               className={`px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition ${
-                tab === t.id ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>
+                tab === t.id ? 'bg-brand-500 text-slate-950' : 'text-slate-300 hover:bg-slate-800'}`}>
               <t.icon className="w-4 h-4" /> {t.label}
               {t.badge > 0 && <span className="px-1.5 rounded-full bg-amber-500 text-slate-950 text-[10px]">{t.badge}</span>}
             </button>
@@ -155,7 +155,7 @@ export default function ProfilePage() {
           <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-2">
             <p className="text-sm text-slate-300">Choose what gets emailed or texted to you, quiet hours, and who can find you.</p>
             <button type="button" onClick={() => setShowNotif(true)}
-              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
+              className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5">
               <Bell className="w-4 h-4" /> Notification settings
             </button>
           </div>

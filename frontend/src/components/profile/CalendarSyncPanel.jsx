@@ -24,7 +24,7 @@ const TAGS = [
   ['[Confirmed]', 'You are booked.', 'text-emerald-200 border-emerald-500/40 bg-emerald-500/10'],
   ['[REQUESTED]', 'You asked; the venue has not answered.', 'text-amber-200 border-amber-500/40 bg-amber-500/10'],
   ['[WAITLIST]', 'You are in line for a full position.', 'text-slate-200 border-slate-600 bg-slate-800'],
-  ['[OFFERED]', 'Offered to you; answer in ShiftBoard.', 'text-sky-200 border-sky-500/40 bg-sky-500/10'],
+  ['[OFFERED]', 'Offered to you; answer in ShiftUp.', 'text-sky-200 border-sky-500/40 bg-sky-500/10'],
 ];
 const MANY_VENUES = 4;   // more venue calendars than this (admins) -> a picker instead of a long list
 
@@ -107,7 +107,7 @@ function CalendarCard({ cal, busy, onTurnOn, onOption, onAskReset, onAskOff }) {
         </div>
         {!on && (
           <button type="button" disabled={busy} onClick={() => onTurnOn(cal)}
-            className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-slate-950 disabled:opacity-50 flex-shrink-0`}>
+            className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950 disabled:opacity-50 flex-shrink-0`}>
             <CalendarPlus className="w-4 h-4" /> Turn on
           </button>
         )}
@@ -160,7 +160,7 @@ function CalendarCard({ cal, busy, onTurnOn, onOption, onAskReset, onAskOff }) {
               <div className="grid sm:grid-cols-2 gap-1.5">
                 {cal.options.map((name) => (
                   <label key={name} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-200 cursor-pointer">
-                    <input type="checkbox" className="w-4 h-4 accent-emerald-500" checked={!!cal[name]}
+                    <input type="checkbox" className="w-4 h-4 accent-brand-500" checked={!!cal[name]}
                       onChange={(e) => onOption(cal, name, e.target.checked)} />
                     <span>{OPTION_TEXT[name]?.[0] || name}</span>
                     {OPTION_TEXT[name]?.[1] && <span className="ml-auto font-mono text-[10px] text-slate-500">{OPTION_TEXT[name][1]}</span>}
@@ -273,8 +273,8 @@ export default function CalendarSyncPanel({ data, onData, onSaved, onError }) {
     <div className="space-y-4">
       <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center flex-shrink-0">
-            <CalendarPlus className="w-5 h-5 text-emerald-300" />
+          <div className="w-10 h-10 rounded-xl bg-brand-500/10 border border-brand-500/30 flex items-center justify-center flex-shrink-0">
+            <CalendarPlus className="w-5 h-5 text-brand-300" />
           </div>
           <div>
             <h2 className="text-base font-bold text-white">Calendar sync</h2>
@@ -294,9 +294,9 @@ export default function CalendarSyncPanel({ data, onData, onSaved, onError }) {
         )}
         <ul className="text-xs text-slate-400 space-y-1.5">
           <li className="flex items-start gap-2"><Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-slate-500" />
-            It works one way. Changing or deleting an entry in your calendar app does not change anything in ShiftBoard.</li>
+            It works one way. Changing or deleting an entry in your calendar app does not change anything in ShiftUp.</li>
           <li className="flex items-start gap-2"><Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-slate-500" />
-            Your calendar app decides how often it checks: usually every few hours, and Google can take up to a day. For last-minute changes rely on ShiftBoard notifications.</li>
+            Your calendar app decides how often it checks: usually every few hours, and Google can take up to a day. For last-minute changes rely on ShiftUp notifications.</li>
           <li className="flex items-start gap-2"><Lock className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-slate-500" />
             Pay is never put in a calendar. Each link is private: anyone who has it can see that calendar, so don't share it. If it gets out, use Reset link.</li>
         </ul>
@@ -325,12 +325,12 @@ export default function CalendarSyncPanel({ data, onData, onSaved, onError }) {
           <p className="text-xs text-slate-400 mt-0.5">Every event at that venue, with who is booked.</p>
           <div className="mt-2 flex flex-col sm:flex-row gap-2">
             <select id="calendar-venue-pick" value={pick} onChange={(e) => setPick(e.target.value)}
-              className="flex-1 min-w-0 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500">
+              className="flex-1 min-w-0 px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500">
               <option value="">Pick a venue…</option>
               {offVenues.map((c) => <option key={c.scope_key} value={c.scope_key}>{c.name}</option>)}
             </select>
             <button type="button" disabled={busy || !picked} onClick={() => { turnOn(picked); setPick(''); }}
-              className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-slate-950 disabled:opacity-50`}>
+              className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950 disabled:opacity-50`}>
               <CalendarPlus className="w-4 h-4" /> Turn on
             </button>
           </div>

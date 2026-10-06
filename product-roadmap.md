@@ -1,4 +1,4 @@
-# ShiftBoard: Product Review & Roadmap
+# ShiftUp: Product Review & Roadmap
 
 *Last updated Sep 25, 2026, after Phase 26.3 and a hands-on review of the dev site (see `claude/venue-readiness-review.md`).*
 
@@ -232,6 +232,11 @@ Each phase is sized for one AGY prompt. Where a phase is large it can be split i
 - ⏳ **Later, if wanted:**
   - **Sign in with Google / Microsoft** to write shifts straight into a calendar within a minute (needs a Google Cloud and a Microsoft app registration, and Google's review).
   - **Read a worker's own calendar** (they paste its private link) to warn before they request a shift that clashes with something personal.
+
+### Phase 37: ShiftUp branding and the ShiftBoard tab (shipped in 0.37.0)
+- ✅ **New name and look:** the service is ShiftUp (shift-up.team), with the gold logo, a black header and gold buttons. Green is kept for "confirmed".
+- ✅ **Worker view split in two:** **My shifts** (what's theirs) and the **ShiftBoard** (everything else that's up). The app opens whichever fits their week.
+- ⏳ **Later, if wanted:** a light theme; the logo in emails.
 
 ### Later / nice to have
 - **Admin "needs attention" dashboard:**

@@ -53,7 +53,7 @@ function InfoBlock({ icon: Icon, label, children }) {
   if (!children) return null;
   return (
     <div className="flex gap-2.5">
-      <Icon className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+      <Icon className="w-4 h-4 text-brand-400 mt-0.5 flex-shrink-0" />
       <div className="min-w-0">
         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
         <div className="text-xs text-slate-200 whitespace-pre-line break-words">{children}</div>
@@ -268,12 +268,12 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
   } else if (isBooked) {
     secondary = (
       <button type="button" onClick={addToCalendar} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5">
-        <CalendarPlus className="w-4 h-4 text-emerald-400" /> Add to calendar
+        <CalendarPlus className="w-4 h-4 text-brand-400" /> Add to calendar
       </button>
     );
     if (onGoToSchedule) {
       primary = (
-        <button type="button" onClick={onGoToSchedule} className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold">
+        <button type="button" onClick={onGoToSchedule} className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold">
           Go to My shifts
         </button>
       );
@@ -318,7 +318,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
           })))}
           disabled={submitting || !listing.can_request || selected.status !== 'OPEN' || !noteOk}
           title={noteOk ? undefined : 'Tell the manager why you can make it now'}
-          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
+          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold shadow-md shadow-brand-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
         >
           {selected.booking === 'instant' && !extraDates.length && <Zap className="w-4 h-4" />}
           {submitting ? 'Sending…' : label}
@@ -350,7 +350,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
           {listing.venue?.name} · {fmtLongDate(listing.start_time, tz)}
         </span>
       }
-      icon={<Briefcase className="w-5 h-5 text-emerald-400" />}
+      icon={<Briefcase className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-4xl"
       footer={footer}
@@ -461,13 +461,13 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                 rel="noreferrer"
                 className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1"
               >
-                <Navigation className="w-3 h-3 text-emerald-400" /> Directions
+                <Navigation className="w-3 h-3 text-brand-400" /> Directions
               </a>
               <Link
                 to={`/venues/${listing.venue?.id}`}
                 className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1"
               >
-                <ExternalLink className="w-3 h-3 text-emerald-400" /> Venue profile
+                <ExternalLink className="w-3 h-3 text-brand-400" /> Venue profile
               </Link>
             </div>
             {listing.venue?.phone && (
@@ -517,14 +517,14 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                   onClick={() => setSelectedId(p.shift_id)}
                   className={`w-full text-left p-3 rounded-xl border transition ${
                     active
-                      ? 'border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500/40'
+                      ? 'border-brand-500 bg-brand-500/10 ring-1 ring-brand-500/40'
                       : 'border-slate-800 bg-slate-950/60 hover:border-slate-600'
                   } ${disabled ? 'opacity-50 cursor-not-allowed hover:border-slate-800' : ''}`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${active ? 'border-emerald-400 bg-emerald-400' : 'border-slate-600'}`} />
+                        <span className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${active ? 'border-brand-400 bg-brand-400' : 'border-slate-600'}`} />
                         <span className="text-sm font-bold text-white">{p.role_type}</span>
                         <TipBadge shift={p} />
                         {p.booking === 'instant' ? (
@@ -558,9 +558,9 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                       )}
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-sm font-black text-emerald-400" hiddenText="Pay shared when booked" />
+                      <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-sm font-black text-brand-400" hiddenText="Pay shared when booked" />
                       {est && <div className="text-[10px] text-slate-500">{est} for the shift</div>}
-                      <div className={`text-[11px] font-semibold mt-0.5 ${full ? 'text-slate-500' : 'text-emerald-300'}`}>
+                      <div className={`text-[11px] font-semibold mt-0.5 ${full ? 'text-slate-500' : 'text-brand-300'}`}>
                         {full ? `Full${p.waitlist_count ? ` · ${p.waitlist_count} waiting` : ''}` : `${p.spots_left} of ${p.capacity} open`}
                       </div>
                     </div>
@@ -574,11 +574,11 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                         <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'pass')}
                           className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold disabled:opacity-50">Pass</button>
                         <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'take')}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold disabled:opacity-50">Take it</button>
+                          className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold disabled:opacity-50">Take it</button>
                       </div>
                     ) : wl ? (
                       <div className="flex flex-wrap items-center gap-2">
-                        <ListOrdered className="w-3.5 h-3.5 text-emerald-400" />
+                        <ListOrdered className="w-3.5 h-3.5 text-brand-400" />
                         <span>
                           <b className="text-white">{wl.place === 1 ? "You're next in line" : `You're #${wl.place} in line`}</b>
                           {wl.auto_book ? ". We'll ask for the spot for you as soon as one opens." : ". We'll offer you the spot first when one opens."}
@@ -589,11 +589,11 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                     ) : p.can_waitlist ? (
                       <div className="flex flex-wrap items-center gap-2">
                         <label className="inline-flex items-center gap-1.5 cursor-pointer">
-                          <input type="checkbox" className="w-3.5 h-3.5 accent-emerald-500" checked={wlAuto} onChange={(e) => setWlAuto(e.target.checked)} />
+                          <input type="checkbox" className="w-3.5 h-3.5 accent-brand-500" checked={wlAuto} onChange={(e) => setWlAuto(e.target.checked)} />
                           Book me automatically if a spot opens
                         </label>
                         <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'join')}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 font-bold disabled:opacity-50">
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-brand-300 border border-brand-500/40 font-bold disabled:opacity-50">
                           {wlBusy === p.shift_id ? 'Joining…' : 'Join waitlist'}
                         </button>
                         {!wlAuto && <span className="block w-full text-slate-500">You'll get a notification and a short time to take it.</span>}
@@ -625,12 +625,12 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
             <div className="p-3 rounded-xl border border-slate-800 bg-slate-950/60">
               <div className="flex items-baseline justify-between gap-2">
                 <h5 className="text-xs font-bold text-white inline-flex items-center gap-1.5">
-                  <Repeat className="w-3.5 h-3.5 text-emerald-400" /> Also request {selected.role_type} on other dates
+                  <Repeat className="w-3.5 h-3.5 text-brand-400" /> Also request {selected.role_type} on other dates
                 </h5>
                 {pickableIds.length > 1 && (
                   <button type="button" disabled={submitting}
                     onClick={() => setSeriesPicks(allPicked ? new Set() : new Set(pickableIds))}
-                    className="text-[11px] font-semibold text-emerald-300 hover:text-emerald-200 flex-shrink-0">
+                    className="text-[11px] font-semibold text-brand-300 hover:text-brand-200 flex-shrink-0">
                     {allPicked ? 'Clear' : 'Pick all'}
                   </button>
                 )}
@@ -646,9 +646,9 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                   return (
                     <label key={ev.event_id}
                       className={`flex items-center gap-2.5 p-2 rounded-lg border ${
-                        on ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-slate-800'
+                        on ? 'border-brand-500/50 bg-brand-500/5' : 'border-slate-800'
                       } ${row.pickable ? 'cursor-pointer hover:border-slate-600' : 'opacity-60 cursor-not-allowed'}`}>
-                      <input type="checkbox" className="w-4 h-4 accent-emerald-500 flex-shrink-0" checked={on}
+                      <input type="checkbox" className="w-4 h-4 accent-brand-500 flex-shrink-0" checked={on}
                         disabled={!row.pickable || submitting} onChange={() => togglePick(ev.event_id)} />
                       <span className="flex-1 min-w-0">
                         <span className="block text-xs font-semibold text-white">
@@ -660,7 +660,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                         </span>
                       </span>
                       {row.pos && row.pos.hourly_rate !== null && row.pos.hourly_rate !== undefined && (
-                        <PayLabel rate={row.pos.hourly_rate} rateMax={row.pos.hourly_rate_max} className="text-xs font-bold text-emerald-400 flex-shrink-0" />
+                        <PayLabel rate={row.pos.hourly_rate} rateMax={row.pos.hourly_rate_max} className="text-xs font-bold text-brand-400 flex-shrink-0" />
                       )}
                     </label>
                   );
@@ -685,7 +685,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                 onChange={(e) => setNote(e.target.value.slice(0, 500))}
                 rows={2}
                 placeholder={askingBack ? 'e.g. My appointment moved, I can do the full shift' : 'e.g. 3 years behind the bar, can stay late'}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-brand-500"
               />
               <div className="text-[10px] text-slate-500 text-right">{note.length}/500</div>
             </div>

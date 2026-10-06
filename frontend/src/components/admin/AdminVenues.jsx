@@ -74,7 +74,7 @@ export default function AdminVenues({ refreshKey = 0, onOpenVenue, onCreate }) {
           {shown.map((v) => (
             <li key={v.id}>
               <button type="button" onClick={() => onOpenVenue(v.id)} className="w-full text-left px-4 py-3 hover:bg-slate-800/30 space-y-1">
-                <span className="font-bold text-white flex items-center gap-2"><Building2 className="w-4 h-4 text-emerald-400" /> {v.name}</span>
+                <span className="font-bold text-white flex items-center gap-2"><Building2 className="w-4 h-4 text-brand-400" /> {v.name}</span>
                 <span className="block text-[11px] text-slate-500 truncate">{v.address}</span>
                 <span className="block text-[11px] text-slate-300">
                   {v.managers.length ? v.managers.map((m) => m.name).join(', ') : 'No manager'} · {v.team_active} on team · {v.open_spots_7d} open this week · {v.pending_requests} waiting
@@ -111,7 +111,7 @@ export default function AdminVenues({ refreshKey = 0, onOpenVenue, onCreate }) {
                 <tr key={v.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => onOpenVenue(v.id)}>
                   <td className="py-3 px-4 min-w-[14rem]">
                     <div className="font-bold text-white flex items-center gap-2">
-                      <Building2 className="w-4 h-4 text-emerald-400 flex-shrink-0" /> {v.name}
+                      <Building2 className="w-4 h-4 text-brand-400 flex-shrink-0" /> {v.name}
                     </div>
                     <div className="text-[11px] text-slate-500 truncate max-w-xs mt-0.5">{v.address}</div>
                     {v.warnings.length > 0 && (

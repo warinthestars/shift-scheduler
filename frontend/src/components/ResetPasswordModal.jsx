@@ -82,7 +82,7 @@ export default function ResetPasswordModal({ user, onClose, onDone }) {
           <div className="space-y-3">
             <p className="text-sm text-slate-300">New temporary password for <strong className="text-white">{name}</strong>:</p>
             <div className="flex items-center gap-2">
-              <code className="flex-1 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-lg tracking-wider text-emerald-300 font-mono select-all">
+              <code className="flex-1 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-lg tracking-wider text-brand-300 font-mono select-all">
                 {result.temporary_password}
               </code>
               <button type="button" onClick={copy} className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200" title="Copy">

@@ -46,7 +46,7 @@ logger = logging.getLogger("shiftboard.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup & shutdown lifecycle: seeds database on startup"""
-    logger.info("Initializing ShiftBoard Backend Application...")
+    logger.info("Initializing ShiftUp Backend Application...")
 
     # Ensure tables and standard VARCHAR columns exist in database
     try:
@@ -94,11 +94,11 @@ async def lifespan(app: FastAPI):
         except BaseException:
             pass
 
-    logger.info("Shutting down ShiftBoard Backend Application...")
+    logger.info("Shutting down ShiftUp Backend Application...")
     await engine.dispose()
 
 app = FastAPI(
-    title="ShiftBoard API",
+    title="ShiftUp API",
     description="Shift scheduling and community call-board platform for the service industry",
     version=APP_VERSION,                                     # Phase 34.5 (was a fixed "0.2.0")
     lifespan=lifespan
@@ -169,7 +169,7 @@ async def health_check():
 @app.get("/", tags=["System"])
 async def root():
     return {
-        "message": "Welcome to ShiftBoard API",
+        "message": "Welcome to ShiftUp API",
         "docs_url": "/docs",
         "version": "0.2.0"
     }

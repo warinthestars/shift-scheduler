@@ -11,7 +11,7 @@ build_tonight() returns, for one venue:
              done     - clocked out
              missed   - shift ended, never clocked in, not marked no-show yet
              no_show  - marked no-show
-             payroll  - Phase 35: the venue's own payroll tracks their time (no ShiftBoard clock-in expected)
+             payroll  - Phase 35: the venue's own payroll tracks their time (no ShiftUp clock-in expected)
   alerts : what needs the manager right now, most urgent first
   week   : today + the next 6 days at a glance (drafts included, flagged)
 """

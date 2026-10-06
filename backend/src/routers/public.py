@@ -73,7 +73,7 @@ async def calendar_feed(token: str, request: Request, db: AsyncSession = Depends
         "ETag": etag,
         "Cache-Control": "private, no-cache",
         "X-Robots-Tag": "noindex, nofollow",
-        "Content-Disposition": 'inline; filename="shiftboard.ics"',
+        "Content-Disposition": 'inline; filename="shiftup.ics"',
     }
     if etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)

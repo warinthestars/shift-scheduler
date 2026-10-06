@@ -124,7 +124,7 @@ export default function LeadTimesModal({ eventId, timeZone, onClose, onChanged }
         <div className="flex justify-end gap-2">
           <button type="button" onClick={() => { setForm(null); setError(''); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 inline-flex items-center gap-1"><X className="w-3 h-3" /> Cancel</button>
           <button type="button" onClick={submitForm} disabled={busy}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50 ${f.kind === 'delete' || f.kind === 'noshow' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`}>
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50 ${f.kind === 'delete' || f.kind === 'noshow' ? 'bg-rose-600 text-white' : 'bg-brand-500 text-slate-950'}`}>
             <Check className="w-3 h-3" /> {busy ? 'Saving…' : 'Save'}
           </button>
         </div>

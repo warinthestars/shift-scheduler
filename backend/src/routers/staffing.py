@@ -49,7 +49,7 @@ async def _lead_may_pick(db: AsyncSession, user: User, shift: Shift, worker_ids)
     """Phase 36: a shift lead fills spots from the team only, and never with themselves."""
     ids = list(dict.fromkeys(worker_ids or []))
     if user.id in ids:
-        raise HTTPException(status_code=403, detail="You can't put yourself on a shift here. Request it from Find shifts.")
+        raise HTTPException(status_code=403, detail="You can't put yourself on a shift here. Request it from the ShiftBoard.")
     on_team = await team_ids(db, shift.venue_id, ids)
     if any(w not in on_team for w in ids):
         raise HTTPException(status_code=403, detail="Shift leads can only pick people on the team. Ask a manager to add them first.")

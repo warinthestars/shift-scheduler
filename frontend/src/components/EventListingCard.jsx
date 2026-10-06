@@ -63,12 +63,12 @@ export default function EventListingCard({ listing, onOpen }) {
           open();
         }
       }}
-      className="group bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl cursor-pointer transition hover:border-emerald-600/60 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 flex flex-col"
+      className="group bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl cursor-pointer transition hover:border-brand-600/60 focus:outline-none focus:ring-2 focus:ring-brand-500/60 flex flex-col"
     >
       {/* Header: date tile + title + my status */}
       <div className="flex items-start gap-3">
         <div className="flex-shrink-0 w-14 rounded-xl bg-slate-950 border border-slate-800 text-center py-1.5">
-          <div className="text-[10px] font-bold text-emerald-400 tracking-wider">{month}</div>
+          <div className="text-[10px] font-bold text-brand-400 tracking-wider">{month}</div>
           <div className="text-xl font-black text-white leading-none">{day}</div>
           <div className="text-[10px] text-slate-400 mt-0.5">{weekday}</div>
         </div>
@@ -85,7 +85,7 @@ export default function EventListingCard({ listing, onOpen }) {
               </span>
             )}
             {listing.series_more > 0 && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold whitespace-nowrap"
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-300 border border-brand-500/30 text-[10px] font-bold whitespace-nowrap"
                 title="This event repeats. Open it to request several dates at once.">
                 <Repeat className="w-2.5 h-2.5" /> +{listing.series_more} {listing.series_more === 1 ? 'date' : 'dates'}
               </span>
@@ -95,7 +95,7 @@ export default function EventListingCard({ listing, onOpen }) {
             const where = whereOf(listing);   // Phase 27: event location if set, else the venue
             if (!where.address) return null;
             return (
-              <p className={`text-[11px] flex items-center gap-1 mt-0.5 ${where.isOffsite ? 'text-emerald-300' : 'text-slate-500'}`}>
+              <p className={`text-[11px] flex items-center gap-1 mt-0.5 ${where.isOffsite ? 'text-brand-300' : 'text-slate-500'}`}>
                 <MapPin className="w-3 h-3 flex-shrink-0" />
                 <span className="truncate">{where.isOffsite ? `At ${where.name} · ${where.address}` : where.address}</span>
               </p>
@@ -107,13 +107,13 @@ export default function EventListingCard({ listing, onOpen }) {
       {/* Time + pay */}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-slate-300 inline-flex items-center gap-1.5">
-          <Clock className="w-3.5 h-3.5 text-emerald-400" />
+          <Clock className="w-3.5 h-3.5 text-brand-400" />
           {fmtTimeRange(listing.start_time, listing.end_time, tz)}
           <span className="text-slate-500">· {hoursText(listing.hours)}</span>
         </span>
         <span className="inline-flex items-center gap-1.5">
           {pay ? (
-            <span className="text-base font-black text-emerald-400">{pay}</span>
+            <span className="text-base font-black text-brand-400">{pay}</span>
           ) : (
             <span className="text-xs italic text-slate-400">Pay shared when booked</span>
           )}
@@ -153,7 +153,7 @@ export default function EventListingCard({ listing, onOpen }) {
               <div className="flex items-center gap-2 flex-shrink-0 text-[11px]">
                 <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-slate-200 font-semibold" hiddenText="—" />
                 {est && <span className="hidden sm:inline text-slate-500">{est}</span>}
-                <span className={`font-semibold ${full ? 'text-slate-500' : 'text-emerald-300'}`}>
+                <span className={`font-semibold ${full ? 'text-slate-500' : 'text-brand-300'}`}>
                   {full ? (p.my_waitlist ? `#${p.my_waitlist.place} in line` : p.waitlist_count ? `Full · ${p.waitlist_count} waiting` : 'Full') : `${p.spots_left} open`}
                 </span>
               </div>
@@ -193,7 +193,7 @@ export default function EventListingCard({ listing, onOpen }) {
             : 'Fully staffed'}
           {listing.any_instant && <span className="text-emerald-400 font-semibold"> · Instant book</span>}
         </span>
-        <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
+        <span className="text-xs font-bold text-brand-400 inline-flex items-center gap-0.5 group-hover:gap-1.5 transition-all">
           {mine ? 'View details' : listing.dropped_here ? 'Ask to come back'
             : listing.full ? (listing.positions.some((p) => p.my_waitlist) ? "You're on the waitlist" : 'Join waitlist') : 'View & request'}
           <ChevronRight className="w-4 h-4" />

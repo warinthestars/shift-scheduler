@@ -163,7 +163,7 @@ export default function NotificationBell() {
                   onClick={() => openItem(n)}
                   className={`w-full text-left px-4 py-3 hover:bg-slate-800/70 transition flex gap-3 ${n.read ? 'opacity-70' : ''}`}
                 >
-                  <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${n.read ? 'bg-transparent' : n.urgent ? 'bg-rose-400' : 'bg-emerald-400'}`} />
+                  <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${n.read ? 'bg-transparent' : n.urgent ? 'bg-rose-400' : 'bg-brand-400'}`} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       {n.urgent && !n.read && <AlertTriangle className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />}

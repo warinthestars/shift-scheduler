@@ -37,10 +37,10 @@ export default function CoverDialog({ req, onClose, onPosted }) {
   const option = (id, Icon, title, text, disabled = false) => (
     <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${
       disabled ? 'opacity-50 cursor-not-allowed border-slate-800'
-        : audience === id ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-700 hover:border-slate-500'}`}>
+        : audience === id ? 'border-brand-500 bg-brand-500/10' : 'border-slate-700 hover:border-slate-500'}`}>
       <input type="radio" name="cover-audience" value={id} checked={audience === id} disabled={disabled}
-        onChange={() => setAudience(id)} className="mt-1 accent-emerald-500" />
-      <Icon className="w-4 h-4 mt-0.5 text-emerald-300 flex-shrink-0" />
+        onChange={() => setAudience(id)} className="mt-1 accent-brand-500" />
+      <Icon className="w-4 h-4 mt-0.5 text-brand-300 flex-shrink-0" />
       <span className="text-xs">
         <span className="block font-bold text-white text-sm">{title}</span>
         <span className="text-slate-400">{text}</span>
@@ -51,7 +51,7 @@ export default function CoverDialog({ req, onClose, onPosted }) {
   return (
     <ModalShell
       title="Ask for cover"
-      icon={<LifeBuoy className="w-5 h-5 text-emerald-400" />}
+      icon={<LifeBuoy className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-md"
       footer={(
@@ -60,7 +60,7 @@ export default function CoverDialog({ req, onClose, onPosted }) {
             Close
           </button>
           <button type="button" onClick={submit} disabled={busy}
-            className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+            className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
             {busy ? 'Posting…' : 'Post cover request'}
           </button>
         </>
@@ -79,9 +79,9 @@ export default function CoverDialog({ req, onClose, onPosted }) {
           <p className="text-xs font-semibold text-slate-300">Who can see it</p>
           {option('team', Users, `My team at ${venue.name || 'this venue'}`,
             'People on the venue team get a notification if it fits their departments.')}
-          {option('public', Globe, 'My team + the public shift board',
+          {option('public', Globe, 'My team + everyone on the ShiftBoard',
             publicAllowed
-              ? 'Also listed on Find shifts for anyone. People outside the team need the manager to approve.'
+              ? 'Also listed on the ShiftBoard for anyone. People outside the team need the manager to approve.'
               : `${venue.name || 'This venue'} only allows asking the team.`,
             !publicAllowed)}
         </div>
@@ -92,7 +92,7 @@ export default function CoverDialog({ req, onClose, onPosted }) {
             onChange={(e) => setNote(e.target.value.slice(0, 300))}
             rows={2}
             placeholder="e.g. Family thing came up. Happy to swap for a Sunday."
-            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+            className="mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500"
           />
         </label>
         <p className="text-[11px] text-slate-400 bg-slate-950 border border-slate-800 rounded-xl p-2.5 flex gap-2">

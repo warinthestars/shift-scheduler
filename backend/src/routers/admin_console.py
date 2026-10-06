@@ -581,7 +581,7 @@ async def retry_all_failed(current_user: User = Depends(require_admin), db: Asyn
 @router.post("/test-email")
 async def test_email(body: AdminTestEmail, current_user: User = Depends(require_admin)):
     to = str(body.to).strip()
-    title = "ShiftBoard test email"
+    title = "ShiftUp test email"
     text, html_body = render_email(title, f"Sent by {_name(current_user)} from the admin System page. If you can read this, email works.", "/", "/")
     ok, err = await send_email(to, title, text, html_body)
     await admin_audit.record(current_user.id, "test_email", f"Sent a test email to {to}: {'ok' if ok else 'failed'}", target_type="system")

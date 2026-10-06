@@ -26,7 +26,7 @@ async def compute_reliability(db: AsyncSession, worker_ids: List[UUID]) -> Dict[
     score = 100 * (on_time + 0.5 * late) / (completed + no_show + late_drop)
     Returns score=None when the worker has zero commitments.
     Shifts that have not ended yet are ignored. Drops with >= 72h notice are excused.
-    Phase 35: a shift whose time the venue's own payroll tracks has no ShiftBoard clock-in; it counts as worked
+    Phase 35: a shift whose time the venue's own payroll tracks has no ShiftUp clock-in; it counts as worked
     and on time unless a manager marked a no-show.
     """
     if not worker_ids:

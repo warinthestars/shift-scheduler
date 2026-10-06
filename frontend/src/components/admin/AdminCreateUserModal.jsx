@@ -55,7 +55,7 @@ export default function AdminCreateUserModal({ venues = [], onClose, onCreated, 
   if (created) {
     const loginUrl = `${window.location.origin}/login`;
     const share = created.temporary_password
-      ? `Your ShiftBoard account is ready.\nSign in at ${loginUrl}\nEmail: ${created.email}\nTemporary password: ${created.temporary_password}\nPlease change it after you sign in.`
+      ? `Your ShiftUp account is ready.\nSign in at ${loginUrl}\nEmail: ${created.email}\nTemporary password: ${created.temporary_password}\nPlease change it after you sign in.`
       : null;
     return (
       <ModalShell
@@ -66,7 +66,7 @@ export default function AdminCreateUserModal({ venues = [], onClose, onCreated, 
         footer={(
           <>
             <button type="button" onClick={() => { finish(); onOpenUser(created.id); }} className={btnGhost}>Open profile</button>
-            <button type="button" onClick={finish} className="px-5 py-2 rounded-xl text-sm font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950">Done</button>
+            <button type="button" onClick={finish} className="px-5 py-2 rounded-xl text-sm font-bold bg-brand-500 hover:bg-brand-400 text-slate-950">Done</button>
           </>
         )}
       >
@@ -78,13 +78,13 @@ export default function AdminCreateUserModal({ venues = [], onClose, onCreated, 
             <>
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
                 <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Temporary password (shown once)</div>
-                <div className="font-mono text-lg text-emerald-300 mt-1 break-all">{created.temporary_password}</div>
+                <div className="font-mono text-lg text-brand-300 mt-1 break-all">{created.temporary_password}</div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <CopyButton text={created.temporary_password} label="Copy password" />
                 <CopyButton text={share} label="Copy sign-in message" />
               </div>
-              <p className="text-xs text-slate-500">Send it to them yourself. ShiftBoard doesn't email passwords.</p>
+              <p className="text-xs text-slate-500">Send it to them yourself. ShiftUp doesn't email passwords.</p>
             </>
           ) : (
             <p className="text-xs text-slate-500">They sign in with the password you set.</p>

@@ -138,7 +138,7 @@ async def build_earnings(db: AsyncSession, user: User, period: str = "week",
                 func.upper(Shift.status) != "CANCELLED",
             )
         )).all()
-    # Phase 35: shifts a venue's own payroll tracks aren't ShiftBoard hours: leave them out, and say so
+    # Phase 35: shifts a venue's own payroll tracks aren't ShiftUp hours: leave them out, and say so
     from src.services.time_tracking import modes_for_requests, PAYROLL
     period_rows = (await db.execute(
         select(ShiftRequest, Shift, Venue)
@@ -251,5 +251,5 @@ async def earnings_csv(db: AsyncSession, user: User, period: str = "month",
     w.writerow([])
     w.writerow(["Total", "", "", "", "", "", f"{data.total_hours:.2f}", "", f"{data.total_pay:.2f}", "", "",
                 f"{data.total_tips:.2f}"])
-    name = f"shiftboard-hours-{data.start_date.isoformat()}-to-{data.end_date.isoformat()}.csv"
+    name = f"shiftup-hours-{data.start_date.isoformat()}-to-{data.end_date.isoformat()}.csv"
     return name, out.getvalue()

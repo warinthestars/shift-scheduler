@@ -1,13 +1,13 @@
 """
 Phase 33.0.1: Firebase Cloud Messaging (FCM) for phone / browser notifications.
 
-Used when all of these are in place (otherwise ShiftBoard keeps using its own Web Push, services/webpush.py):
+Used when all of these are in place (otherwise ShiftUp keeps using its own Web Push, services/webpush.py):
   * the service-account key file   .secrets/firebase_service_account.json   (FIREBASE_CREDENTIALS_PATH)
   * FIREBASE_VAPID_KEY in the root .env  (Firebase console -> Project settings -> Cloud Messaging ->
     Web Push certificates -> the "Key pair" value)
   * messagingSenderId and appId in .secrets/firebase-web-config.js (already there when sign-in with Firebase works)
 
-Messages are DATA-only, so ShiftBoard's own service worker (public/sw.js) shows them exactly like Web Push ones.
+Messages are DATA-only, so ShiftUp's own service worker (public/sw.js) shows them exactly like Web Push ones.
 Every function here returns results and never raises.
 """
 import logging

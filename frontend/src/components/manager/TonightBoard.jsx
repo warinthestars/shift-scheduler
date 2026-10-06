@@ -176,7 +176,7 @@ export default function TonightBoard({
       if (person.p.phone) {
         out.push(<a key="call" href={`tel:${person.p.phone}`} className={`${btn} border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700`}><Phone className="w-3 h-3" /> Call</a>);
       }
-      out.push(<button key="in" type="button" onClick={() => askClockIn(person.p)} className={`${btn} border-emerald-500/40 bg-emerald-600/20 text-emerald-200`}><LogIn className="w-3 h-3" /> Clock in</button>);
+      out.push(<button key="in" type="button" onClick={() => askClockIn(person.p)} className={`${btn} border-brand-500/40 bg-brand-600/20 text-brand-200`}><LogIn className="w-3 h-3" /> Clock in</button>);
       out.push(<button key="ns" type="button" onClick={() => askNoShow(person.p, person.ev)} className={`${btn} border-rose-500/40 bg-rose-600/15 text-rose-200`}><UserX className="w-3 h-3" /> No-show</button>);
     }
     if (a.kind === 'missed' && person) {

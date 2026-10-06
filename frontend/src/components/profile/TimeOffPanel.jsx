@@ -4,8 +4,8 @@ import api from '../../api/client';
 import ConfirmDialog from '../ConfirmDialog';
 import { WEEKDAYS, fmtHm, todayIso } from '../../utils/availability';
 
-const inputCls = 'mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
-const selCls = 'mt-1 px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+const inputCls = 'mt-1 w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
+const selCls = 'mt-1 px-2 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 const HALF_HOURS = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
 const END_TIMES = [...HALF_HOURS.slice(1), '24:00'];
 const REPEATS = [
@@ -84,7 +84,7 @@ export default function TimeOffPanel({ items = [], onChanged, onError }) {
           onSaved={(saved) => { setEditing(null); onChanged(savedMessage(saved)); }} />
       ) : (
         <button type="button" onClick={() => setEditing('new')}
-          className="w-full p-3 rounded-2xl border border-dashed border-slate-600 text-sm font-bold text-emerald-300 hover:bg-slate-900 inline-flex items-center justify-center gap-1.5">
+          className="w-full p-3 rounded-2xl border border-dashed border-slate-600 text-sm font-bold text-brand-300 hover:bg-slate-900 inline-flex items-center justify-center gap-1.5">
           <Plus className="w-4 h-4" /> Add time off
         </button>
       )}
@@ -201,10 +201,10 @@ function BlockForm({ block = null, onCancel, onSaved, onError }) {
     }
   };
 
-  const seg = (on) => `px-3 py-1.5 rounded-lg text-xs font-bold transition ${on ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`;
+  const seg = (on) => `px-3 py-1.5 rounded-lg text-xs font-bold transition ${on ? 'bg-brand-500 text-slate-950' : 'text-slate-300 hover:bg-slate-800'}`;
 
   return (
-    <section className="p-4 rounded-2xl bg-slate-900 border border-emerald-500/30 space-y-4">
+    <section className="p-4 rounded-2xl bg-slate-900 border border-brand-500/30 space-y-4">
       <p className="text-sm font-semibold text-white inline-flex items-center gap-1.5">
         <CalendarOff className="w-4 h-4 text-amber-300" /> {block ? 'Edit time off' : 'Add time off'}
       </p>
@@ -238,10 +238,10 @@ function BlockForm({ block = null, onCancel, onSaved, onError }) {
             Ends
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <label className="inline-flex items-center gap-1.5 text-slate-300 font-normal">
-                <input type="radio" checked={!f.has_until} onChange={() => set('has_until', false)} className="text-emerald-500" /> Never
+                <input type="radio" checked={!f.has_until} onChange={() => set('has_until', false)} className="text-brand-500" /> Never
               </label>
               <label className="inline-flex items-center gap-1.5 text-slate-300 font-normal">
-                <input type="radio" checked={f.has_until} onChange={() => set('has_until', true)} className="text-emerald-500" /> On
+                <input type="radio" checked={f.has_until} onChange={() => set('has_until', true)} className="text-brand-500" /> On
               </label>
               <input type="date" value={f.until} min={f.start_date} disabled={!f.has_until}
                 onChange={(e) => { set('until', e.target.value); set('has_until', true); }}
@@ -259,7 +259,7 @@ function BlockForm({ block = null, onCancel, onSaved, onError }) {
               const on = f.weekdays.includes(d);
               return (
                 <button key={name} type="button" aria-pressed={on} onClick={() => toggleDay(d)}
-                  className={`w-12 py-1.5 rounded-lg text-xs font-bold border transition ${on ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/40' : 'bg-slate-950 text-slate-400 border-slate-700 hover:text-white'}`}>
+                  className={`w-12 py-1.5 rounded-lg text-xs font-bold border transition ${on ? 'bg-brand-500/15 text-brand-200 border-brand-500/40' : 'bg-slate-950 text-slate-400 border-slate-700 hover:text-white'}`}>
                   {name}
                 </button>
               );
@@ -298,7 +298,7 @@ function BlockForm({ block = null, onCancel, onSaved, onError }) {
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-slate-700">Cancel</button>
         <button type="button" onClick={save} disabled={busy || (repeating && !f.weekdays.length)}
-          className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+          className="px-4 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
           <Save className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save time off'}
         </button>
       </div>

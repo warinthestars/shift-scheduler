@@ -372,7 +372,7 @@ export default function VenueManagerDashboard() {
           <Building2 className="w-10 h-10 text-amber-400 mx-auto mb-3" />
           <h1 className="text-lg font-bold text-white mb-1">No venue assigned yet</h1>
           <p className="text-sm text-slate-400">
-            You're a manager, but you haven't been added to a venue yet. Ask a ShiftBoard admin to add you.
+            You're a manager, but you haven't been added to a venue yet. Ask a ShiftUp admin to add you.
           </p>
         </div>
       </div>
@@ -418,7 +418,7 @@ export default function VenueManagerDashboard() {
             <button
               type="button"
               onClick={() => setEventForm({ mode: 'create' })}
-              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+              className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-brand-500/20"
             >
               <Plus className="w-4 h-4" /> Post an event
             </button>
@@ -426,13 +426,13 @@ export default function VenueManagerDashboard() {
               <LayoutTemplate className="w-4 h-4 text-indigo-300" /> Templates
             </button>
             <button type="button" onClick={() => setShowTeam(true)} disabled={!venueDetails} className={headerBtn}>
-              <UserPlus className="w-4 h-4 text-emerald-400" /> Team
+              <UserPlus className="w-4 h-4 text-brand-400" /> Team
             </button>
             <button type="button" onClick={() => { setSettingsTab('details'); setShowVenueSettings(true); }} disabled={!venueDetails} className={headerBtn}>
               <Settings className="w-4 h-4 text-amber-400" /> Settings
             </button>
             <button type="button" onClick={() => setShowDownload(true)} disabled={!currentVenueId} className={headerBtn}>
-              <Download className="w-4 h-4 text-emerald-400" /> Download hours
+              <Download className="w-4 h-4 text-brand-400" /> Download hours
             </button>
             <button type="button" onClick={() => setShowPayPeriods(true)} disabled={!currentVenueId} className={headerBtn}>
               <CalendarRange className="w-4 h-4 text-violet-300" /> Pay periods

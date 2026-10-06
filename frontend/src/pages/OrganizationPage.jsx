@@ -162,7 +162,7 @@ export default function OrganizationPage() {
         <p className="mt-2 text-sm text-slate-400">
           {isAdmin
             ? 'An organization groups venues under one or more owners. Create one in Admin → Organizations.'
-            : 'An organization groups several venues under one owner. A ShiftBoard admin sets it up and makes you an owner.'}
+            : 'An organization groups several venues under one owner. A ShiftUp admin sets it up and makes you an owner.'}
         </p>
         <Link to={isAdmin ? '/admin?tab=organizations' : '/venue'} className="mt-5 inline-block px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-white">
           {isAdmin ? 'Open Admin → Organizations' : 'Back to my venue'}
@@ -406,7 +406,7 @@ export default function OrganizationPage() {
                   </ul>
                 )}
                 <p className="mt-3 text-xs text-slate-500">
-                  A ShiftBoard admin adds venues to an organization or takes them out. Add a venue’s own managers from that venue’s Team page.
+                  A ShiftUp admin adds venues to an organization or takes them out. Add a venue’s own managers from that venue’s Team page.
                 </p>
               </section>
             </div>

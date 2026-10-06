@@ -47,12 +47,12 @@ export function ApprovalQueueCard({ requests, reliabilityMap = {}, timeZone, act
                 <div className="flex items-start justify-between gap-2">
                   <button type="button" onClick={() => onReview(req)} className="text-left min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-sm font-bold text-white hover:text-emerald-300">{name(w)}</span>
+                      <span className="text-sm font-bold text-white hover:text-brand-300">{name(w)}</span>
                       <RatingBadge rating={w?.aggregate_rating} count={w?.rating_count} showCount={false} />
                       <ReliabilityBadge data={reliabilityMap[w?.id]} />
                     </div>
                     <div className="text-xs text-slate-300 mt-0.5">
-                      <span className="font-semibold text-emerald-300">{s?.role_type}</span> · {s?.title}
+                      <span className="font-semibold text-brand-300">{s?.role_type}</span> · {s?.title}
                     </div>
                     <div className="text-[11px] text-slate-500">
                       {fmtDate(s?.start_time, timeZone)} · {fmtTimeRange(s?.start_time, s?.end_time, timeZone)}
@@ -89,7 +89,7 @@ export function ApprovalQueueCard({ requests, reliabilityMap = {}, timeZone, act
                   </button>
                   <button type="button" onClick={() => onApprove(req.id)} disabled={busy || full}
                     title={full ? 'Shift is full' : 'Approve'}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
+                    className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40">
                     <Check className="w-3 h-3" /> Approve
                   </button>
                 </div>
@@ -130,7 +130,7 @@ export function TransfersCard({ transfers, timeZone, actionLoading, onReview, on
                     )}
                   </div>
                   <div className="text-xs text-slate-300 mt-0.5">
-                    <span className="font-semibold text-emerald-300">{s?.role_type}</span> · {s?.title}
+                    <span className="font-semibold text-brand-300">{s?.role_type}</span> · {s?.title}
                   </div>
                   <div className="text-[11px] text-slate-500">
                     {fmtDate(s?.start_time, timeZone)} · {fmtTimeRange(s?.start_time, s?.end_time, timeZone)}
@@ -152,7 +152,7 @@ export function TransfersCard({ transfers, timeZone, actionLoading, onReview, on
                     <X className="w-3 h-3" /> Deny
                   </button>
                   <button type="button" onClick={() => onApprove(t.id)} disabled={busy}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+                    className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
                     <Check className="w-3 h-3" /> Approve
                   </button>
                 </div>

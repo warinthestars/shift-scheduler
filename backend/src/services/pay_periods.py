@@ -1,7 +1,7 @@
 """
 Phase 35: Pay periods, overtime and approving / locking a period.
 
-Everything here is in the VENUE's time zone and works on ShiftBoard time entries (people whose time the venue's
+Everything here is in the VENUE's time zone and works on ShiftUp time entries (people whose time the venue's
 own payroll tracks have no entries; they are listed separately so the manager can cross-check).
 
 Pay periods (venues.pay_period):
@@ -10,7 +10,7 @@ Pay periods (venues.pay_period):
   semimonthly  the 1st to the 15th, and the 16th to the end of the month
   monthly      calendar months
 
-Overtime (a flag and hour count; ShiftBoard does not change anyone's pay rate):
+Overtime (a flag and hour count; ShiftUp does not change anyone's pay rate):
   * daily   (venues.ot_daily_hours, None = off): hours past the limit on one day (the day the entry started)
   * weekly  (venues.ot_weekly_hours, None = off): hours past the limit in one work week, not counting hours
             already counted as daily overtime
@@ -242,7 +242,7 @@ async def summarize(db: AsyncSession, venue: Venue, start: date, end: date, comp
         p["outside_area"] += 1 if e.clock_in_geo_status == "outside_geofence" else 0
         p["auto_closed"] += 1 if e.auto_closed else 0
 
-    # People the venue's payroll tracks: booked shifts in the period (no ShiftBoard hours)
+    # People the venue's payroll tracks: booked shifts in the period (no ShiftUp hours)
     booked = (await db.execute(
         select(ShiftRequest, Shift, User)
         .join(Shift, Shift.id == ShiftRequest.shift_id).join(User, User.id == ShiftRequest.worker_id)

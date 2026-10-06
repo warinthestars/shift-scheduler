@@ -137,7 +137,7 @@ export default function MyShiftCard({
   } else if (isBooked && payroll && !ended) {
     primary = (
       <span className={`${btn} bg-violet-500/10 text-violet-200 border border-violet-500/30 font-semibold`}
-        title="This venue tracks your hours with its own time clock or payroll system. Clock in there, not in ShiftBoard.">
+        title="This venue tracks your hours with its own time clock or payroll system. Clock in there, not in ShiftUp.">
         <Timer className="w-4 h-4" /> Clock in with the venue's system
       </span>
     );
@@ -160,14 +160,14 @@ export default function MyShiftCard({
         <button type="button" onClick={onDetails} className={`${btn} bg-amber-500/15 hover:bg-amber-500 text-amber-200 hover:text-slate-950 border border-amber-500/40`}>
           <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the notes'}
         </button>
-        <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
+        <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950`}>
           <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
         </button>
       </>
     );
   } else if (isBooked && !ended && !tooEarly) {
     primary = (
-      <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
+      <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950`}>
         <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
       </button>
     );
@@ -188,7 +188,7 @@ export default function MyShiftCard({
     );
   } else if (canAskBack) {
     primary = (
-      <button type="button" onClick={onAskBack} className={`${btn} bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40`}>
+      <button type="button" onClick={onAskBack} className={`${btn} bg-slate-800 hover:bg-slate-700 text-brand-300 border border-brand-500/40`}>
         <RotateCcw className="w-4 h-4" /> Ask to come back
       </button>
     );
@@ -224,7 +224,7 @@ export default function MyShiftCard({
     <div className={`bg-slate-900 border rounded-2xl p-4 shadow-lg flex gap-4 ${
       isCheckedIn ? 'border-sky-500/50' : needsAck && isBooked ? 'border-amber-500/50' : 'border-slate-800'}`}>
       <div className="flex-shrink-0 w-14 h-fit rounded-xl bg-slate-950 border border-slate-800 text-center py-1.5">
-        <div className="text-[10px] font-bold text-emerald-400 tracking-wider">{month}</div>
+        <div className="text-[10px] font-bold text-brand-400 tracking-wider">{month}</div>
         <div className="text-xl font-black text-white leading-none">{day}</div>
         <div className="text-[10px] text-slate-400 mt-0.5">{weekday}</div>
       </div>
@@ -245,7 +245,7 @@ export default function MyShiftCard({
               </span>
             )}
             {payroll && (isBooked || isCompleted) && (
-              <span title="Your hours here are tracked by the venue's own payroll, not ShiftBoard"
+              <span title="Your hours here are tracked by the venue's own payroll, not ShiftUp"
                 className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-violet-500/10 text-violet-200 border-violet-500/30">
                 Venue payroll
               </span>
@@ -260,11 +260,11 @@ export default function MyShiftCard({
             <span>·</span>
             <span>{shift.venue?.name}</span>
             <span>·</span>
-            <PayLabel rate={shift.hourly_rate} rateMax={shift.hourly_rate_max} className="text-emerald-400 font-semibold" />
+            <PayLabel rate={shift.hourly_rate} rateMax={shift.hourly_rate_max} className="text-brand-400 font-semibold" />
             <TipBadge shift={shift} />
           </p>
           <p className="text-xs text-slate-300 inline-flex items-center gap-1">
-            <Clock className="w-3.5 h-3.5 text-emerald-400" /> {fmtTimeRange(shift.start_time, shift.end_time, tz)}
+            <Clock className="w-3.5 h-3.5 text-brand-400" /> {fmtTimeRange(shift.start_time, shift.end_time, tz)}
           </p>
           {isPending && req.notes && <p className="text-[11px] text-slate-400">Your note: <span className="text-slate-300">{req.notes}</span></p>}
           {reasonLine && <p className="text-[11px] text-rose-300">Reason: {req.status_reason}</p>}

@@ -3,7 +3,7 @@ Phase 36.1: Calendar sync by private link.
 
 A person turns a calendar on in Profile -> Calendar sync and gets a private address (an iCalendar feed).
 Google Calendar, Apple Calendar, Outlook and every other calendar app can subscribe to it. It is one-way:
-the calendar app reads ShiftBoard; nothing a person does in their calendar app changes ShiftBoard.
+the calendar app reads ShiftUp; nothing a person does in their calendar app changes ShiftUp.
 
 Which calendars a person may have (scopes_for) follows their access:
   worker            "My shifts": their own shifts, tagged
@@ -21,7 +21,7 @@ booked in the details. Shifts that aren't part of an event are entries of their 
 
 Rules that must hold:
   * NO PAY, ever: no rate, tip, cost or earnings is written to a feed (a calendar entry gets copied to shared
-    and work calendars). Staff-only notes are left out too; the entry links back to ShiftBoard.
+    and work calendars). Staff-only notes are left out too; the entry links back to ShiftUp.
   * The token in the address is the only credential. It is long and random, and "Reset link" replaces it.
   * Access is decided again every time a feed is built: a link for a venue the person no longer runs, or for an
     account that was turned off, gives an empty calendar. An unknown or replaced token gives 404 at once.
@@ -233,7 +233,7 @@ def feed_urls(token: str, calendar_name: str, base: Optional[str]) -> Dict[str, 
     url = f"{root}/api/public/calendar/{token}.ics"
     rest = url.split("://", 1)[1] if "://" in url else url.lstrip("/")
     webcal = f"webcal://{rest}"
-    name = quote(f"ShiftBoard: {calendar_name}", safe="")
+    name = quote(f"ShiftUp: {calendar_name}", safe="")
     return {
         "url": url,
         "webcal_url": webcal,
@@ -472,7 +472,7 @@ def _time_off_entries(blocks, tz: ZoneInfo, today: date) -> List[Entry]:
         if b.all_day and b.repeat == "none":
             # one entry for the whole run of days (the end date of an all-day entry is the day after)
             out.append(Entry(uid=f"timeoff-{row.id}@shiftboard", start=lo, end=hi + timedelta(days=1), summary=title,
-                             description=["Time off you set in ShiftBoard."], all_day=True, modified=modified))
+                             description=["Time off you set in ShiftUp."], all_day=True, modified=modified))
             continue
         d = lo
         while d <= hi:
@@ -480,12 +480,12 @@ def _time_off_entries(blocks, tz: ZoneInfo, today: date) -> List[Entry]:
                 uid = f"timeoff-{row.id}-{d.strftime('%Y%m%d')}@shiftboard"
                 if b.all_day:
                     out.append(Entry(uid=uid, start=d, end=d + timedelta(days=1), summary=title,
-                                     description=["Time off you set in ShiftBoard."], all_day=True, modified=modified))
+                                     description=["Time off you set in ShiftUp."], all_day=True, modified=modified))
                 else:
                     start, end = interval_on(b, d, tz)
                     if as_utc(end) > as_utc(start):         # the hour skipped when clocks go forward can leave nothing
                         out.append(Entry(uid=uid, start=start, end=end, summary=title,
-                                         description=["Time off you set in ShiftBoard."], modified=modified))
+                                         description=["Time off you set in ShiftUp."], modified=modified))
             d += timedelta(days=1)
     # most useful first if there are too many: what's coming up, then the recent past
     out.sort(key=lambda e: (_day_of(e) < today, abs((_day_of(e) - today).days)))
@@ -565,8 +565,8 @@ async def worker_entries(db: AsyncSession, user: User, feed: CalendarFeed, now: 
         url = app_link(link)
         body.append("")
         if url:
-            body.append(f"Open in ShiftBoard: {url}")
-        body.append("Pay and staff-only notes are in ShiftBoard, not in this calendar.")
+            body.append(f"Open in ShiftUp: {url}")
+        body.append("Pay and staff-only notes are in ShiftUp, not in this calendar.")
         return Entry(
             uid=uid, start=shift.start_time, end=shift.end_time, summary=summary, description=body,
             location=_place(venue, location), url=url, tentative=not booked, busy=booked,
@@ -595,7 +595,7 @@ async def worker_entries(db: AsyncSession, user: User, feed: CalendarFeed, now: 
             until = moment_text(w.offer_expires_at, zone_of(s))
             entry = base(s, TAG_OFFERED, f"waitlist-{w.id}@shiftboard",
                          ["Offered: a spot opened and it's being held for you" + (f" until {until}" if until else "")
-                          + ". Answer in ShiftBoard. This isn't your shift yet."],
+                          + ". Answer in ShiftUp. This isn't your shift yet."],
                          "/worker?tab=schedule", False, (w.updated_at,))
             if entry:
                 out.append(entry)
@@ -606,7 +606,7 @@ async def worker_entries(db: AsyncSession, user: User, feed: CalendarFeed, now: 
         venue = venues.get(s.venue_id)
         entry = base(s, TAG_OFFERED, f"offer-{o.id}@shiftboard",
                      [f"Offered: {venue.name if venue is not None else 'The venue'} offered you this shift. "
-                      f"Answer in ShiftBoard by {moment_text(o.expires_at, zone_of(s))}. This isn't your shift yet."],
+                      f"Answer in ShiftUp by {moment_text(o.expires_at, zone_of(s))}. This isn't your shift yet."],
                      "/worker?tab=find", False, (o.created_at,))
         if entry:
             out.append(entry)
@@ -713,7 +713,7 @@ async def venue_entries(
             body.append(f"Notes: {_clean(notes)}")
         url = app_link(link)
         if url:
-            body += ["", f"Open in ShiftBoard: {url}"]
+            body += ["", f"Open in ShiftUp: {url}"]
         return Entry(
             uid=uid, start=start, end=end, summary=summary, description=body, location=_place(venue, location), url=url,
             tentative=draft, busy=False,
@@ -761,7 +761,7 @@ async def build_feed(db: AsyncSession, feed: CalendarFeed, now: Optional[datetim
     if user is not None and user.is_active:
         scope = next((s for s in await scopes_for(db, user) if s.scope_key == feed.scope_key), None)
     if scope is None:
-        return render("ShiftBoard (no longer available)",
+        return render("ShiftUp (no longer available)",
                       "This calendar isn't available to this account any more. Remove it from your calendar app.", [])
     if scope.kind == CalendarKind.worker.value:
         entries = await worker_entries(db, user, feed, now)
@@ -770,7 +770,7 @@ async def build_feed(db: AsyncSession, feed: CalendarFeed, now: Optional[datetim
             db, scope.venue_ids, show_venue=scope.kind != CalendarKind.venue.value,
             drafts=bool(feed.include_drafts), lead=scope.shift_lead, now=now,
         )
-    return render(f"ShiftBoard: {scope.name}", scope.description, entries)
+    return render(f"ShiftUp: {scope.name}", scope.description, entries)
 
 
 async def feed_text(db: AsyncSession, feed: CalendarFeed) -> Tuple[str, str]:

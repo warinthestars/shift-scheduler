@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ListChecks, Search, CalendarDays, ArrowRightLeft, UserRound } from 'lucide-react';
+import { ListChecks, LayoutGrid, CalendarDays, ArrowRightLeft, UserRound } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { BOARD_NAME } from '../brand';   // Phase 37
 
 const ITEMS = [
   { id: 'schedule', label: 'My shifts', icon: ListChecks },
-  { id: 'find', label: 'Find', icon: Search },
+  { id: 'find', label: BOARD_NAME, icon: LayoutGrid },   // Phase 37: was "Find"
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'transfers', label: 'Hand-offs', icon: ArrowRightLeft },
   { id: 'profile', label: 'Profile', icon: UserRound },
@@ -33,6 +34,7 @@ export default function WorkerTabBar() {
   useEffect(() => {
     const onState = (e) => setState(e.detail);
     window.addEventListener('worker_tab_state', onState);
+    setState(savedState());   // Phase 37: the dashboard may have reported its tab before this listener existed
     return () => window.removeEventListener('worker_tab_state', onState);
   }, []);
 
@@ -62,8 +64,8 @@ export default function WorkerTabBar() {
             return (
               <button key={id} type="button" onClick={() => go(id)} aria-current={on ? 'page' : undefined}
                 className={`relative h-16 flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition ${
-                  on ? 'text-emerald-400' : 'text-slate-400 active:text-white'}`}>
-                {on && <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-emerald-400" />}
+                  on ? 'text-brand-400' : 'text-slate-400 active:text-white'}`}>
+                {on && <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-brand-400" />}
                 <span className="relative">
                   <Icon className="w-5 h-5" />
                   {badge > 0 && (

@@ -111,17 +111,17 @@ export default function VenueProfile() {
             <div className="min-w-0 flex-1">
               <h1 className="text-2xl font-black text-white">{profile.name}</h1>
               <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-slate-400">
-                <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-emerald-400">
+                <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-brand-400">
                   <MapPin className="w-4 h-4" /> {profile.address} <ExternalLink className="w-3 h-3" />
                 </a>
                 {profile.phone && (
-                  <a href={`tel:${profile.phone}`} className="inline-flex items-center gap-1 hover:text-emerald-400">
+                  <a href={`tel:${profile.phone}`} className="inline-flex items-center gap-1 hover:text-brand-400">
                     <Phone className="w-4 h-4" /> {profile.phone}
                   </a>
                 )}
                 {websiteHref(profile.website_url) && (
                   <a href={websiteHref(profile.website_url)} target="_blank" rel="noopener noreferrer nofollow"
-                    className="inline-flex items-center gap-1 hover:text-emerald-400 min-w-0" title="Opens the venue's website">
+                    className="inline-flex items-center gap-1 hover:text-brand-400 min-w-0" title="Opens the venue's website">
                     <Globe className="w-4 h-4 flex-shrink-0" />
                     <span className="truncate max-w-[16rem]">{websiteLabel(profile.website_url)}</span>
                     <ExternalLink className="w-3 h-3 flex-shrink-0" />
@@ -200,7 +200,7 @@ export default function VenueProfile() {
               {profile.positions.map((p) => (
                 <div key={p.name} className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2">
                   <span className="text-sm font-semibold text-white">{p.name}</span>
-                  {p.default_rate != null && <PayLabel rate={p.default_rate} rateMax={p.default_rate_max} className="text-sm text-emerald-400 font-bold" />}
+                  {p.default_rate != null && <PayLabel rate={p.default_rate} rateMax={p.default_rate_max} className="text-sm text-brand-400 font-bold" />}
                   <TipBadge shift={p} />
                 </div>
               ))}
@@ -219,7 +219,7 @@ export default function VenueProfile() {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-emerald-400" /> Shifts
+              <Calendar className="w-5 h-5 text-brand-400" /> Shifts
             </h2>
             <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1 self-start">
               {[
@@ -231,7 +231,7 @@ export default function VenueProfile() {
                   type="button"
                   onClick={() => setScope(s.id)}
                   className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
-                    scope === s.id ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+                    scope === s.id ? 'bg-brand-500 text-slate-950' : 'text-slate-400 hover:text-white'
                   }`}
                 >
                   {s.label}
@@ -271,7 +271,7 @@ export default function VenueProfile() {
                           <button
                             type="button"
                             onClick={() => setOpenEventId(ev.event_id)}
-                            className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold"
+                            className="px-3.5 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold"
                           >
                             {hasMine ? 'View details' : 'View & request'}
                           </button>
@@ -286,7 +286,7 @@ export default function VenueProfile() {
                         <div key={p.shift_id} className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-bold uppercase">{p.role_type}</span>
-                            <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-sm text-emerald-400 font-semibold" hiddenText="Pay shared when booked" />
+                            <PayLabel rate={p.hourly_rate} rateMax={p.hourly_rate_max} className="text-sm text-brand-400 font-semibold" hiddenText="Pay shared when booked" />
                             <TipBadge shift={p} />
                             <span className="text-xs text-slate-400">{p.filled}/{p.capacity} filled</span>
                             {p.role_notes && <span className="w-full text-[11px] text-slate-400">{p.role_notes}</span>}

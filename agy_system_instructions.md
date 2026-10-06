@@ -1,4 +1,4 @@
-# Project Context: "ShiftBoard" Scheduling Platform
+# Project Context: "ShiftUp" Scheduling Platform (called "ShiftBoard" until 0.37.0)
 
 You are an expert full-stack developer and DevOps engineer. Your task is to build a shift-scheduling and community call-board application designed for the service industry (bartenders, servers, dishwashers, AV techs, etc.). 
 
@@ -125,3 +125,9 @@ The project rules that always apply are in README.md → "Working on the code" (
    * A worker's entries keep these tags exactly: `[Confirmed]`, `[REQUESTED]`, `[WAITLIST]`, `[OFFERED]`. Venue, manager, organization and admin calendars have one entry per event.
    * Every text value written to a feed goes through `ics_text()` (it escapes the value and neutralises every kind of line break), and every link through `app_link()`.
    * Feeds are one-way and written by hand as iCalendar text (no new package). Don't add sign-in-with-Google or Microsoft calendar connections unless a phase asks.
+13. **Brand (Phase 37):** the service is **ShiftUp**. **ShiftBoard** is only the board of open shifts (the worker's tab, id `find`, and the heading of the public home page).
+   * New screens import `APP_NAME` and `BOARD_NAME` from `frontend/src/brand.js` and show the logo with `<BrandLogo />` (`frontend/src/components/BrandLogo.jsx`). Never type "ShiftBoard" as the service's name.
+   * **Colour:** gold `brand-*` for main buttons, the active tab or link, links, focus rings and section icons; text on solid gold is `text-slate-950`, never white. Green `emerald-*` only for confirmed / booked / on / verified / done. Amber = waiting. Rose = problem.
+   * **Logo files** are in `frontend/public/brand/` and `frontend/public/icons/`, cut from `assets/main_logo_shift-up.png`. Don't redraw, recolour or regenerate them, and don't add an SVG version.
+   * **Keep these as they are** (people never see them, and renaming breaks things): the database name and user, the Docker network and `shiftboard-demo` stack, demo sign-ins `@shiftboard.com`, browser storage keys starting `shiftboard_`, calendar entry ids ending `@shiftboard`, the time-tracking value `'shiftboard'`, the FCM app name, and the `ShiftBoard.jsx` / `ShiftBoardModal` component names.
+   * A worker's ShiftBoard never lists an event they have requested, are waitlisted for or have been offered: those are on My shifts (`boardListings` in `frontend/src/pages/WorkerDashboard.jsx`).

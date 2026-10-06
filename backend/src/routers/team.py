@@ -233,7 +233,7 @@ async def add_existing_worker(
             raise HTTPException(status_code=400, detail="Enter a valid email address.")
         user = await db.scalar(select(User).where(func.lower(User.email) == email))
         if user is None:
-            raise HTTPException(status_code=404, detail="No ShiftBoard account uses that email. Create an account for them, or send an invite.")
+            raise HTTPException(status_code=404, detail="No ShiftUp account uses that email. Create an account for them, or send an invite.")
     if normalize_role(user.role) != "worker":
         raise HTTPException(status_code=400, detail="That account is a manager or admin account, not a worker.")
     if not user.is_active:
@@ -405,7 +405,7 @@ async def update_member(
     if "time_tracking" in data or "works_through" in data:                          # Phase 35
         bits = []
         if "time_tracking" in data:
-            bits.append({"payroll": "time tracked by the venue's payroll", "shiftboard": "clocks in with ShiftBoard"}
+            bits.append({"payroll": "time tracked by the venue's payroll", "shiftboard": "clocks in with ShiftUp"}
                         .get(row.time_tracking, "time tracking follows the venue setting"))
         if "works_through" in data:
             bits.append(f"works through {row.works_through}" if row.works_through else "no staffing company")

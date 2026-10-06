@@ -1,1 +1,1 @@
-# ShiftBoard Backend Package
+# ShiftUp Backend Package

@@ -22,7 +22,7 @@ function NoteCard({ icon: Icon, label, text, tone = 'default', badge = null }) {
   return (
     <div className={`p-3 rounded-xl border ${toneCls}`}>
       <div className="flex items-center gap-1.5 mb-1">
-        <Icon className={`w-4 h-4 ${tone === 'staff' ? 'text-indigo-300' : 'text-emerald-400'}`} />
+        <Icon className={`w-4 h-4 ${tone === 'staff' ? 'text-indigo-300' : 'text-brand-400'}`} />
         <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">{label}</span>
         {badge}
       </div>
@@ -94,7 +94,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
       </button>
       {item.booked && !off && (
         <button type="button" onClick={addToCalendar} className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5">
-          <CalendarPlus className="w-4 h-4 text-emerald-400" /> Add to calendar
+          <CalendarPlus className="w-4 h-4 text-brand-400" /> Add to calendar
         </button>
       )}
       {item.booked && onOpenBoard && (
@@ -103,7 +103,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
           onClick={() => onOpenBoard({ id: item.shift_id, title: item.title, venue: { name: item.venue?.name } })}
           className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5"
         >
-          <MessageSquare className="w-4 h-4 text-indigo-400" /> Board
+          <MessageSquare className="w-4 h-4 text-indigo-400" /> Shift chat
         </button>
       )}
       {mustRead && (
@@ -123,7 +123,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
     <ModalShell
       title={`${item.role_type} · ${item.title}`}
       subtitle={item.venue?.name}
-      icon={<Briefcase className="w-5 h-5 text-emerald-400" />}
+      icon={<Briefcase className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-4xl"
       footer={footer}
@@ -135,7 +135,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
             <div className={`text-2xl sm:text-3xl font-black ${off ? 'text-slate-500 line-through' : 'text-white'}`}>
               {fmtLongDate(item.start_time, tz)}
             </div>
-            <div className={`text-xl sm:text-2xl font-bold mt-1 flex items-center gap-2 ${off ? 'text-slate-500' : 'text-emerald-300'}`}>
+            <div className={`text-xl sm:text-2xl font-bold mt-1 flex items-center gap-2 ${off ? 'text-slate-500' : 'text-brand-300'}`}>
               <Clock className="w-6 h-6" /> {fmtTimeRange(item.start_time, item.end_time, tz)}
             </div>
             <div className="text-sm text-slate-400 mt-1">{hoursText(item.hours)}</div>
@@ -183,7 +183,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
         <div className="md:col-span-2 space-y-4">
           <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
             <div className="flex gap-2.5">
-              <MapPin className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+              <MapPin className="w-4 h-4 text-brand-400 mt-0.5 flex-shrink-0" />
               <div className="min-w-0">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Where</div>
                 {/* Phase 27: event location (caterer / off-site) if set, otherwise the venue */}
@@ -196,7 +196,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
               <div className="pl-6 text-[11px] text-slate-400 space-y-0.5">
                 {item.time_tracking === 'payroll' ? (
                   // Phase 35: the venue's own payroll tracks this shift
-                  <div className="text-violet-200">{item.venue?.name || 'This venue'} tracks your hours with its own time clock or payroll. Clock in there, not in ShiftBoard.</div>
+                  <div className="text-violet-200">{item.venue?.name || 'This venue'} tracks your hours with its own time clock or payroll. Clock in there, not in ShiftUp.</div>
                 ) : (
                   <>
                     {item.clock_in_opens_at && <div>Clock-in opens at {fmtTime(item.clock_in_opens_at, tz)}.</div>}
@@ -208,16 +208,16 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
             <div className="flex flex-wrap gap-2 pl-6">
               <a href={mapsUrl(whereOf(item))} target="_blank" rel="noreferrer"
                 className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1">
-                <Navigation className="w-3 h-3 text-emerald-400" /> Directions
+                <Navigation className="w-3 h-3 text-brand-400" /> Directions
               </a>
               <Link to={`/venues/${item.venue?.id}`}
                 className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1">
-                <ExternalLink className="w-3 h-3 text-emerald-400" /> Venue profile
+                <ExternalLink className="w-3 h-3 text-brand-400" /> Venue profile
               </Link>
             </div>
             {item.venue?.phone && (
               <div className="flex gap-2.5">
-                <Phone className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                <Phone className="w-4 h-4 text-brand-400 mt-0.5 flex-shrink-0" />
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Venue phone</div>
                   <a href={`tel:${item.venue.phone}`} className="text-sm text-slate-100 underline decoration-slate-600">{item.venue.phone}</a>
@@ -228,12 +228,12 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
 
           <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1">
             <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              <DollarSign className="w-3.5 h-3.5 text-emerald-400" /> Pay
+              <DollarSign className="w-3.5 h-3.5 text-brand-400" /> Pay
             </div>
             {item.pay_rate !== null && item.pay_rate !== undefined ? (
-              <div className="text-lg font-black text-emerald-400">${Number(item.pay_rate).toFixed(2)}/hr <span className="text-xs font-semibold text-slate-400">your rate</span></div>
+              <div className="text-lg font-black text-brand-400">${Number(item.pay_rate).toFixed(2)}/hr <span className="text-xs font-semibold text-slate-400">your rate</span></div>
             ) : (
-              <PayLabel rate={item.hourly_rate} rateMax={item.hourly_rate_max} className="text-lg font-black text-emerald-400" hiddenText="Pay shared when you're confirmed" />
+              <PayLabel rate={item.hourly_rate} rateMax={item.hourly_rate_max} className="text-lg font-black text-brand-400" hiddenText="Pay shared when you're confirmed" />
             )}
             <TipBadge shift={item} />
           </div>
@@ -242,7 +242,7 @@ export default function ShiftDetailsModal({ item, onClose, onAcknowledged, onOpe
         {/* RIGHT: every note, nothing hidden behind a click */}
         <div className="md:col-span-3 space-y-3">
           <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
-            <StickyNote className="w-4 h-4 text-emerald-400" /> Shift notes
+            <StickyNote className="w-4 h-4 text-brand-400" /> Shift notes
           </h4>
           <NoteCard icon={MapPin} label="When you arrive" text={item.venue?.arrival_instructions} />
           <NoteCard icon={MapPin} label="About this location" text={item.location?.notes} />

@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
-  Calendar,
   Shield,
   UserCheck,
   AlertCircle,
@@ -14,6 +13,8 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { getPublicConfig } from '../utils/publicConfig';   // Phase 36
+import BrandLogo from '../components/BrandLogo';   // Phase 37
+import { BOARD_NAME } from '../brand';              // Phase 37
 import {
   getFirebaseStatus,
   PROVIDER_META,
@@ -302,30 +303,25 @@ export default function LoginPage() {
   const showMockButton = mode === 'signin' && fbStatus.mock;
   const showForm = mode === 'signin' || mode === 'reset' || (mode === 'register' && showRegisterForm);
   const inputClass =
-    'w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-emerald-500';
+    'w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-brand-500';
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 text-slate-100">
+    <div className="min-h-screen bg-black flex flex-col justify-center py-12 sm:px-6 lg:px-8 text-slate-100">
       {boardOn && (
         <div className="sm:mx-auto sm:w-full sm:max-w-md px-4 mb-4">
           <Link to="/" className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-400 hover:text-white">
-            <ArrowLeft className="w-4 h-4" /> Open shifts
+            <ArrowLeft className="w-4 h-4" /> {BOARD_NAME}
           </Link>
         </div>
       )}
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        <div className="inline-flex w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 items-center justify-center shadow-xl shadow-emerald-500/20 mb-4">
-          <Calendar className="w-8 h-8 text-slate-950 font-black" />
-        </div>
-        <h2 className="text-3xl font-extrabold tracking-tight text-white">
-          Shift<span className="text-emerald-400">Board</span>
-        </h2>
-        <p className="mt-2 text-sm text-slate-400">Pick up shifts. Fill your staff.</p>
+        <h1><BrandLogo variant="stack" /></h1>
+        <p className="mt-3 text-sm text-slate-400">Pick up shifts. Fill your staff.</p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
         {inviteVenue && (
-          <div className="mb-4 p-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-sm text-emerald-100 text-center">
+          <div className="mb-4 p-3 rounded-xl border border-brand-500/40 bg-brand-500/10 text-sm text-brand-100 text-center">
             {mode === 'register' ? 'Create your account' : 'Sign in'} to join the <strong>{inviteVenue}</strong> team.
           </div>
         )}
@@ -370,7 +366,7 @@ export default function LoginPage() {
           {mode === 'register' && (
             <div className="mb-4 p-3 bg-slate-800/60 border border-slate-700/60 rounded-xl text-slate-300 text-xs flex items-start space-x-2">
               <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-slate-400" />
-              <span>New accounts are for workers. Manager accounts are set up for you by ShiftBoard or your venue.</span>
+              <span>New accounts are for workers. Manager accounts are set up for you by ShiftUp or your venue.</span>
             </div>
           )}
 
@@ -394,7 +390,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={handleVerifiedContinue}
                 disabled={submitting}
-                className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 font-semibold text-slate-950 text-sm shadow-lg shadow-emerald-500/20 transition disabled:opacity-50"
+                className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl bg-brand-500 hover:bg-brand-400 font-semibold text-slate-950 text-sm shadow-lg shadow-brand-500/20 transition disabled:opacity-50"
               >
                 <span>{submitting ? 'Checking…' : "I've verified my email"}</span>
                 <ArrowRight className="w-4 h-4 ml-1.5" />
@@ -410,7 +406,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={handleBackToSignIn}
-                className="w-full text-xs text-slate-400 hover:text-emerald-400 transition underline underline-offset-4"
+                className="w-full text-xs text-slate-400 hover:text-brand-400 transition underline underline-offset-4"
               >
                 Back to sign in
               </button>
@@ -430,8 +426,8 @@ export default function LoginPage() {
                         disabled={submitting}
                         className={
                           isGoogle
-                            ? 'w-full flex items-center justify-center py-2.5 px-4 rounded-xl border border-slate-700 bg-white hover:bg-slate-100 text-sm font-semibold text-slate-900 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-60'
-                            : 'w-full flex items-center justify-center py-2.5 px-4 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-60'
+                            ? 'w-full flex items-center justify-center py-2.5 px-4 rounded-xl border border-slate-700 bg-white hover:bg-slate-100 text-sm font-semibold text-slate-900 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-60'
+                            : 'w-full flex items-center justify-center py-2.5 px-4 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-60'
                         }
                       >
                         {isGoogle ? <GoogleIcon /> : <LogIn className="w-4 h-4 mr-2.5" />}
@@ -447,7 +443,7 @@ export default function LoginPage() {
                   type="button"
                   onClick={handleGoogleDemo}
                   disabled={submitting}
-                  className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-6"
+                  className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-brand-500 mb-6"
                 >
                   <GoogleIcon />
                   <span>Sign in with Google (Demo)</span>
@@ -499,7 +495,7 @@ export default function LoginPage() {
                       <div className="flex items-center justify-between mb-1">
                         <label className="block text-xs font-medium text-slate-300">Password</label>
                         {mode === 'signin' && firebasePassword && (
-                          <button type="button" onClick={() => switchMode('reset')} className="text-xs text-slate-400 hover:text-emerald-400 transition">
+                          <button type="button" onClick={() => switchMode('reset')} className="text-xs text-slate-400 hover:text-brand-400 transition">
                             Forgot password?
                           </button>
                         )}
@@ -519,7 +515,7 @@ export default function LoginPage() {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full mt-2 flex items-center justify-center py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 font-semibold text-slate-950 text-sm shadow-lg shadow-emerald-500/20 transition focus:outline-none disabled:opacity-50"
+                    className="w-full mt-2 flex items-center justify-center py-2.5 px-4 rounded-xl bg-brand-500 hover:bg-brand-400 font-semibold text-slate-950 text-sm shadow-lg shadow-brand-500/20 transition focus:outline-none disabled:opacity-50"
                   >
                     <span>
                       {submitting
@@ -544,7 +540,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => switchMode('register')}
-                    className="text-xs text-slate-400 hover:text-emerald-400 transition underline underline-offset-4"
+                    className="text-xs text-slate-400 hover:text-brand-400 transition underline underline-offset-4"
                   >
                     New here? Create a worker account
                   </button>
@@ -553,7 +549,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => switchMode('signin')}
-                    className="text-xs text-slate-400 hover:text-emerald-400 transition underline underline-offset-4"
+                    className="text-xs text-slate-400 hover:text-brand-400 transition underline underline-offset-4"
                   >
                     Already have an account? Sign in
                   </button>

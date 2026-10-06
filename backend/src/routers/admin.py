@@ -423,7 +423,7 @@ async def admin_reset_password(
     if not user.hashed_password:
         raise HTTPException(
             status_code=400,
-            detail="This person signs in with Firebase, so there's no ShiftBoard password to reset. "
+            detail="This person signs in with Firebase, so there's no ShiftUp password to reset. "
                    "They can use 'Forgot password' on the login page, or you can reset it in the Firebase Console."
         )
 

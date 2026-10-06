@@ -123,7 +123,7 @@ async def get_current_user(
     if settings.USE_MOCK_FIREBASE and (token.startswith("mock-firebase-") or token == "mock-firebase-token-123"):
         user = await get_or_create_mock_firebase_user(db)
         if not user.is_active:
-            raise HTTPException(status_code=403, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
+            raise HTTPException(status_code=403, detail="This account is turned off. Contact your venue or ShiftUp to turn it back on.")
         return user
 
     # --------------------------------------------------------------------------
@@ -165,7 +165,7 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Please sign in again.")
 
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="This account is turned off. Contact your venue or ShiftBoard to turn it back on.")
+        raise HTTPException(status_code=403, detail="This account is turned off. Contact your venue or ShiftUp to turn it back on.")
 
     return user
 

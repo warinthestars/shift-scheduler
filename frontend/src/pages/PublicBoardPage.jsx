@@ -5,6 +5,8 @@ import api from '../api/client';
 import ModalShell from '../components/ModalShell';
 import { fmtLongDate, fmtTimeRange } from '../utils/venueTime';
 import { rememberPublicEvent } from '../utils/publicConfig';
+import BrandLogo from '../components/BrandLogo';   // Phase 37
+import { APP_NAME, BOARD_NAME } from '../brand';    // Phase 37
 
 const REFRESH_MS = 60000;
 
@@ -79,22 +81,15 @@ export default function PublicBoardPage({ config }) {
 
   const totalOpen = shown.reduce((n, e) => n + (e.open_spots || 0), 0);
   const filtered = !!(q.trim() || city || openOnly);
-  const field = 'bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500';
+  const field = 'bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40">
+      <header className="bg-black border-b border-brand-500/25 sticky top-0 z-40">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20 flex-shrink-0">
-              <Calendar className="w-5 h-5 text-slate-950" />
-            </div>
-            <span className="text-xl font-bold tracking-tight text-white truncate">
-              Shift<span className="text-emerald-400">Board</span>
-            </span>
-          </div>
+          <BrandLogo />
           <button type="button" onClick={() => { setPicked(null); navigate('/login'); }}
-            className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap">
+            className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap">
             <LogIn className="w-4 h-4" />
             {canRegister ? (
               <>
@@ -108,9 +103,9 @@ export default function PublicBoardPage({ config }) {
 
       <main className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">Open shifts</h1>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">{BOARD_NAME}</h1>
           <p className="mt-1 text-sm text-slate-400 max-w-2xl">
-            Shifts posted by venues on ShiftBoard.{' '}
+            Open shifts posted by venues on {APP_NAME}.{' '}
             {canRegister
               ? 'Create a free worker account to see the pay and the full details, and to book.'
               : 'Sign in to see the pay and the full details, and to book.'}
@@ -134,7 +129,7 @@ export default function PublicBoardPage({ config }) {
             </label>
           )}
           <label className="inline-flex items-center gap-2 px-3 py-2.5 rounded-xl border border-slate-700 bg-slate-900 text-sm text-slate-300 cursor-pointer select-none">
-            <input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} className="accent-emerald-500" />
+            <input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} className="accent-brand-500" />
             Open spots only
           </label>
         </div>
@@ -161,7 +156,7 @@ export default function PublicBoardPage({ config }) {
             </p>
             {filtered && (
               <button type="button" onClick={() => { setQ(''); setCity(''); setOpenOnly(false); }}
-                className="mt-3 text-xs font-bold text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1">
+                className="mt-3 text-xs font-bold text-brand-400 hover:text-brand-300 inline-flex items-center gap-1">
                 <X className="w-3.5 h-3.5" /> Clear the search
               </button>
             )}
@@ -181,10 +176,10 @@ export default function PublicBoardPage({ config }) {
               {day.events.map((e) => (
                 <li key={e.event_id}>
                   <button type="button" onClick={() => setPicked(e)}
-                    className={`w-full text-left p-4 rounded-2xl border bg-slate-900 hover:border-emerald-500/50 focus:outline-none focus:border-emerald-500 transition flex flex-col sm:flex-row sm:items-center gap-3 ${
+                    className={`w-full text-left p-4 rounded-2xl border bg-slate-900 hover:border-brand-500/50 focus:outline-none focus:border-brand-500 transition flex flex-col sm:flex-row sm:items-center gap-3 ${
                       e.full ? 'border-slate-800 opacity-75' : 'border-slate-700'}`}>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-emerald-300 inline-flex items-center gap-1">
+                      <p className="text-xs font-semibold text-brand-300 inline-flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5" />
                         {fmtTimeRange(e.start_time, e.end_time, e.timezone)}
                       </p>
@@ -199,7 +194,7 @@ export default function PublicBoardPage({ config }) {
                         {e.positions.map((p) => (
                           <span key={p.name}
                             className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
-                              p.open_spots > 0 ? 'bg-emerald-500/10 text-emerald-200 border-emerald-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}`}>
+                              p.open_spots > 0 ? 'bg-brand-500/10 text-brand-200 border-brand-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}`}>
                             {p.name} · {p.open_spots > 0 ? `${p.open_spots} open` : 'full'}
                           </span>
                         ))}
@@ -209,7 +204,7 @@ export default function PublicBoardPage({ config }) {
                       <span className={`text-sm font-bold inline-flex items-center gap-1 ${e.full ? 'text-slate-500' : 'text-amber-300'}`}>
                         <Users className="w-4 h-4" /> {e.full ? 'Full' : `${e.open_spots} open spot${e.open_spots === 1 ? '' : 's'}`}
                       </span>
-                      <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-1">
+                      <span className="text-xs font-bold text-brand-400 inline-flex items-center gap-1">
                         <Lock className="w-3.5 h-3.5" /> {e.full ? 'Sign in to join the waitlist' : 'Sign in to see pay & book'}
                       </span>
                     </div>
@@ -229,7 +224,7 @@ export default function PublicBoardPage({ config }) {
         <ModalShell
           title={picked.title}
           subtitle={`${picked.venue_name}${picked.city ? ` · ${picked.city}` : ''} · ${fmtLongDate(picked.start_time, picked.timezone)}, ${fmtTimeRange(picked.start_time, picked.end_time, picked.timezone)}`}
-          icon={<Lock className="w-5 h-5 text-emerald-400" />}
+          icon={<Lock className="w-5 h-5 text-brand-400" />}
           onClose={() => setPicked(null)}
           maxWidth="max-w-md"
           footer={(
@@ -240,7 +235,7 @@ export default function PublicBoardPage({ config }) {
               </button>
               {canRegister && (
                 <button type="button" onClick={() => goSignIn('register')}
-                  className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-sm font-bold text-slate-950 inline-flex items-center gap-1.5">
+                  className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-sm font-bold text-slate-950 inline-flex items-center gap-1.5">
                   <UserPlus className="w-4 h-4" /> Create a free account
                 </button>
               )}
@@ -256,7 +251,7 @@ export default function PublicBoardPage({ config }) {
             {picked.positions.map((p) => (
               <li key={p.name} className="flex items-center justify-between text-sm">
                 <span className="text-slate-200">{p.name}</span>
-                <span className={p.open_spots > 0 ? 'text-emerald-300 font-semibold' : 'text-slate-500'}>
+                <span className={p.open_spots > 0 ? 'text-brand-300 font-semibold' : 'text-slate-500'}>
                   {p.open_spots > 0 ? `${p.open_spots} open` : 'full'}
                 </span>
               </li>

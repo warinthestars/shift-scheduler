@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     NOTIFICATIONS_WORKER_ENABLED: bool = os.getenv("NOTIFICATIONS_WORKER_ENABLED", "true").lower() in ("true", "1", "yes")
     NOTIFICATIONS_DIGEST_HOUR: int = int(os.getenv("NOTIFICATIONS_DIGEST_HOUR") or "9")   # local hour for daily new-shift emails
     EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "console")   # console | smtp | resend
-    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "ShiftBoard <no-reply@example.com>")
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "ShiftUp <no-reply@example.com>")
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")
     SMTP_PORT: int = int(os.getenv("SMTP_PORT") or "587")
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")

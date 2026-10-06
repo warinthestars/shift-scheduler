@@ -85,7 +85,7 @@ export default function AdminPanel() {
                 <UserPlus className="w-4 h-4" /> New user
               </button>
               <button type="button" onClick={() => setCreateVenue(true)}
-                className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-bold text-slate-950 text-xs inline-flex items-center gap-1.5">
+                className="px-4 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-400 font-bold text-slate-950 text-xs inline-flex items-center gap-1.5">
                 <Plus className="w-4 h-4" /> New venue
               </button>
             </div>

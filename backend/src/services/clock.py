@@ -110,7 +110,7 @@ async def clock_in(db: AsyncSession, user: User, shift_id, body: Optional[ClockB
         raise HTTPException(
             status_code=400,
             detail=f"At {venue.name} your time is tracked by the venue's own payroll system, so you don't clock in "
-                   "in ShiftBoard. Use the venue's time clock.",
+                   "in ShiftUp. Use the venue's time clock.",
         )
 
     open_entry = await db.scalar(

@@ -49,7 +49,7 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
     <>
       <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">Cancel</button>
       <button type="button" onClick={submit} disabled={saving}
-        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+        className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
         {saving ? 'Copying…' : `Create ${dates.length} ${asDraft ? 'draft ' : ''}${dates.length === 1 ? 'copy' : 'copies'}`}
       </button>
     </>
@@ -59,7 +59,7 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
     <ModalShell
       title="Duplicate event"
       subtitle={`${event.title} · ${fmtDate(event.start_time, timeZone)} · ${fmtTimeRange(event.start_time, event.end_time, timeZone)}`}
-      icon={<Copy className="w-5 h-5 text-emerald-400" />}
+      icon={<Copy className="w-5 h-5 text-brand-400" />}
       onClose={onClose}
       maxWidth="max-w-lg"
       footer={footer}
@@ -71,7 +71,7 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
           { id: 'weekly', label: 'Repeat weekly', icon: Repeat },
         ].map(({ id, label, icon: Icon }) => (
           <button key={id} type="button" onClick={() => setMode(id)}
-            className={`px-3 py-2.5 rounded-xl border text-sm font-semibold inline-flex items-center justify-center gap-2 ${mode === id ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>
+            className={`px-3 py-2.5 rounded-xl border text-sm font-semibold inline-flex items-center justify-center gap-2 ${mode === id ? 'border-brand-500 bg-brand-500/10 text-brand-300' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>
             <Icon className="w-4 h-4" /> {label}
           </button>
         ))}
@@ -92,7 +92,7 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
       </div>
       <label className={`mt-3 flex items-start gap-2 text-xs ${sourceDraft ? 'text-slate-500' : 'text-slate-300'}`}>
         <input type="checkbox" checked={asDraft} disabled={sourceDraft} onChange={(e) => setAsDraft(e.target.checked)}
-          className="mt-0.5 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+          className="mt-0.5 w-4 h-4 rounded bg-slate-800 border-slate-700 text-brand-500" />
         <span>
           Create the copies as drafts (workers can't see them until you publish each one)
           {sourceDraft && <span className="block text-[10px]">This event is a draft, so its copies are drafts too.</span>}

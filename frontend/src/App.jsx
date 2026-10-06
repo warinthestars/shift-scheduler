@@ -38,8 +38,8 @@ function HomeRedirect() {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
         <div className="animate-pulse flex items-center space-x-2">
-          <div className="w-3 h-3 bg-emerald-500 rounded-full animate-bounce"></div>
-          <span>Loading ShiftBoard...</span>
+          <div className="w-3 h-3 bg-brand-500 rounded-full animate-bounce"></div>
+          <span>Loading ShiftUp...</span>
         </div>
       </div>
     );
@@ -177,6 +177,9 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+
+            {/* Phase 37: a short address for the ShiftBoard (the worker's list of open shifts) */}
+            <Route path="/shiftboard" element={<Navigate to="/worker?tab=find" replace />} />
 
             {/* Catch-all fallback */}
             <Route path="*" element={<Navigate to="/" replace />} />

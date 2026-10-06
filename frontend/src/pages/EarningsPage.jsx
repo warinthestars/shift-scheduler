@@ -12,7 +12,7 @@ function Tile({ icon: Icon, label, value, sub }) {
   return (
     <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
       <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-        <Icon className="w-3.5 h-3.5 text-emerald-400" /> {label}
+        <Icon className="w-3.5 h-3.5 text-brand-400" /> {label}
       </div>
       <div className="mt-1 text-2xl font-black text-white">{value}</div>
       {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
@@ -78,17 +78,17 @@ export default function EarningsPage() {
             <ChevronLeft className="w-3.5 h-3.5" /> My shifts
           </Link>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Wallet className="w-6 h-6 text-emerald-400" /> Hours & pay</h1>
+            <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Wallet className="w-6 h-6 text-brand-400" /> Hours & pay</h1>
             <button type="button" onClick={download} disabled={downloading || !data}
               className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 inline-flex items-center gap-1.5 disabled:opacity-50">
-              <Download className="w-4 h-4 text-emerald-400" /> {downloading ? 'Downloading…' : 'Download (spreadsheet)'}
+              <Download className="w-4 h-4 text-brand-400" /> {downloading ? 'Downloading…' : 'Download (spreadsheet)'}
             </button>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             {PERIODS.map((p) => (
               <button key={p.id} type="button" onClick={() => setPeriod(p.id)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                  period === p.id ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-600'}`}>
+                  period === p.id ? 'bg-brand-500 text-slate-950' : 'bg-slate-950 text-slate-300 border border-slate-800 hover:border-slate-600'}`}>
                 {p.label}
               </button>
             ))}
@@ -165,7 +165,7 @@ export default function EarningsPage() {
                       <Building2 className="w-4 h-4 text-slate-500 flex-shrink-0" />
                       <span className="flex-1 min-w-0 truncate text-white">{v.name}</span>
                       <span className="text-slate-400">{hoursText(v.hours)}</span>
-                      <span className="w-24 text-right font-bold text-emerald-400">{money(v.pay)}</span>
+                      <span className="w-24 text-right font-bold text-brand-400">{money(v.pay)}</span>
                       {data.total_tips > 0 && <span className="w-20 text-right text-amber-300">{v.tips > 0 ? `+${money(v.tips)}` : ''}</span>}
                     </div>
                   ))}
@@ -202,7 +202,7 @@ export default function EarningsPage() {
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
-                          <div className="text-base font-black text-emerald-400">{s.in_progress ? '—' : money(s.pay)}</div>
+                          <div className="text-base font-black text-brand-400">{s.in_progress ? '—' : money(s.pay)}</div>
                           {s.tips > 0 && <div className="text-xs font-bold text-amber-300">+{money(s.tips)} tips</div>}
                         </div>
                       </div>

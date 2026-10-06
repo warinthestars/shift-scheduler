@@ -50,7 +50,7 @@ export default function TimeOffCard({ venueId, items = [], onOpenWorker, onDone 
       <div className="space-y-2">
         {items.map((t) => (
           <div key={t.id} className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1.5">
-            <button type="button" onClick={() => onOpenWorker?.(t.worker_id)} className="text-sm font-bold text-white hover:text-emerald-300 text-left">
+            <button type="button" onClick={() => onOpenWorker?.(t.worker_id)} className="text-sm font-bold text-white hover:text-brand-300 text-left">
               {t.worker_name}
             </button>
             <p className="text-xs text-slate-200">{fmtDayRange(t.start_date, t.end_date)}</p>
@@ -71,7 +71,7 @@ export default function TimeOffCard({ venueId, items = [], onOpenWorker, onDone 
                 <X className="w-3.5 h-3.5" /> Decline
               </button>
               <button type="button" onClick={() => approve(t)} disabled={busy === t.id}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+                className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
                 <Check className="w-3.5 h-3.5" /> {busy === t.id ? 'Saving…' : 'Approve'}
               </button>
             </div>

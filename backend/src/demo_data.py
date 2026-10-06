@@ -1,5 +1,5 @@
 """
-Phase 35.3: demo data. Fills a ShiftBoard database with a realistic "has been running for a while" example:
+Phase 35.3: demo data. Fills a ShiftUp database with a realistic "has been running for a while" example:
 several venues set up differently, about 70 people, weeks of finished events with clock-ins, tips, ratings and
 pay periods, events happening today, and upcoming events with requests, offers, cover requests and waitlists.
 
@@ -927,7 +927,7 @@ def show(st):
 
 
 async def main(argv=None):
-    ap = argparse.ArgumentParser(prog="python -m src.demo_data", description="Load or remove ShiftBoard demo data.")
+    ap = argparse.ArgumentParser(prog="python -m src.demo_data", description="Load or remove ShiftUp demo data.")
     ap.add_argument("command", choices=["status", "load", "reset", "clear"])
     ap.add_argument("--weeks-back", type=int, default=8)
     ap.add_argument("--weeks-ahead", type=int, default=3)

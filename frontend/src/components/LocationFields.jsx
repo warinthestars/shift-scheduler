@@ -3,7 +3,7 @@ import { Crosshair, ExternalLink, Link2 } from 'lucide-react';
 import { getCurrentPosition, parseMapLink } from '../utils/geo';
 
 const inputCls =
-  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500';
+  'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-brand-500';
 const labelCls = 'block text-xs font-semibold text-slate-300 mb-1';
 
 /** Empty draft for a new location. `name` can be pre-filled with what the manager typed. */
@@ -108,7 +108,7 @@ export default function LocationFields({ value, onChange, venueRadius = 150, com
             type="button"
             onClick={useMyLocation}
             disabled={locating}
-            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-50"
+            className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-50"
           >
             <Crosshair className="w-3 h-3" /> {locating ? 'Locating…' : "I'm there now"}
           </button>
@@ -147,7 +147,7 @@ export default function LocationFields({ value, onChange, venueRadius = 150, com
         <div className="flex flex-wrap items-center gap-3 text-[11px]">
           {pinMsg && <span className="text-slate-400">{pinMsg}</span>}
           {mapUrl && (
-            <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
+            <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-brand-400 hover:text-brand-300">
               Check the pin on Google Maps <ExternalLink className="w-3 h-3" />
             </a>
           )}
