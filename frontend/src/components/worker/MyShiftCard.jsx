@@ -160,14 +160,14 @@ export default function MyShiftCard({
         <button type="button" onClick={onDetails} className={`${btn} bg-amber-500/15 hover:bg-amber-500 text-amber-200 hover:text-slate-950 border border-amber-500/40`}>
           <AlertTriangle className="w-4 h-4" /> {calItem?.info_change ? 'Read the update' : 'Read the notes'}
         </button>
-        <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950`}>
+        <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
           <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
         </button>
       </>
     );
   } else if (isBooked && !ended && !tooEarly) {
     primary = (
-      <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950`}>
+      <button type="button" onClick={onClockIn} disabled={busy === 'clock'} className={`${btn} bg-emerald-600 hover:bg-emerald-500 text-white`}>
         <Timer className="w-4 h-4" /> {busy === 'clock' ? 'Saving…' : calItem?.geofence_on ? 'Clock in (uses location)' : 'Clock in'}
       </button>
     );

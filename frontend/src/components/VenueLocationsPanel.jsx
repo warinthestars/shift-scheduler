@@ -118,7 +118,7 @@ function LocationRow({ venue, loc, onChanged, onError }) {
               <X className="w-3.5 h-3.5" /> Cancel
             </button>
             <button type="button" onClick={save} disabled={busy}
-              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
               <Save className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save location'}
             </button>
           </div>
@@ -207,7 +207,7 @@ export default function VenueLocationsPanel({ venue, onError }) {
             <button type="button" onClick={() => { setAdding(false); setDraft(blankLocationDraft()); }}
               className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-slate-700">Cancel</button>
             <button type="button" onClick={add} disabled={busy}
-              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold disabled:opacity-50">
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50">
               {busy ? 'Saving…' : 'Add location'}
             </button>
           </div>

@@ -629,7 +629,7 @@ export default function WorkerDashboard() {
             return (
               <button key={t.id} type="button" onClick={() => setActiveTab(t.id)}
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold transition inline-flex items-center justify-center gap-1.5 ${
-                  on ? 'bg-brand-500 text-slate-950 shadow-md shadow-brand-500/20' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}>
+                  on ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}>
                 <Icon className="w-3.5 h-3.5" />
                 <span>{t.label}</span>
                 {t.count !== undefined && <span className={on ? 'text-slate-900' : 'text-slate-500'}>{t.count}</span>}
@@ -727,7 +727,7 @@ export default function WorkerDashboard() {
                 <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1 overflow-x-auto">
                   {[{ id: 'all', label: 'All dates' }, { id: 'today', label: 'Today' }, { id: 'tomorrow', label: 'Tomorrow' }, { id: 'week', label: 'Next 7 days' }].map((w) => (
                     <button key={w.id} type="button" onClick={() => setWhenFilter(w.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${whenFilter === w.id ? 'bg-brand-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}>
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition ${whenFilter === w.id ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
                       {w.label}
                     </button>
                   ))}

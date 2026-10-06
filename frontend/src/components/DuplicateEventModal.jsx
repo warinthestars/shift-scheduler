@@ -49,7 +49,7 @@ export default function DuplicateEventModal({ event, timeZone, onClose, onDone }
     <>
       <button type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-sm text-slate-300 hover:bg-slate-700">Cancel</button>
       <button type="button" onClick={submit} disabled={saving}
-        className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
         {saving ? 'Copying…' : `Create ${dates.length} ${asDraft ? 'draft ' : ''}${dates.length === 1 ? 'copy' : 'copies'}`}
       </button>
     </>

@@ -89,7 +89,7 @@ export default function PublicBoardPage({ config }) {
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <BrandLogo />
           <button type="button" onClick={() => { setPicked(null); navigate('/login'); }}
-            className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap">
+            className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap">
             <LogIn className="w-4 h-4" />
             {canRegister ? (
               <>
@@ -235,7 +235,7 @@ export default function PublicBoardPage({ config }) {
               </button>
               {canRegister && (
                 <button type="button" onClick={() => goSignIn('register')}
-                  className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-sm font-bold text-slate-950 inline-flex items-center gap-1.5">
+                  className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-sm font-bold text-slate-950 inline-flex items-center gap-1.5">
                   <UserPlus className="w-4 h-4" /> Create a free account
                 </button>
               )}

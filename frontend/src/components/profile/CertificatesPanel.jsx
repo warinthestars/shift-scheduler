@@ -188,7 +188,7 @@ function CertForm({ type, cert, onCancel, onSaved, onError }) {
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-slate-700">Cancel</button>
         <button type="button" onClick={save} disabled={busy || (type.expires && !expires)}
-          className="px-4 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+          className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
           <Save className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save'}
         </button>
       </div>

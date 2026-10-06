@@ -71,7 +71,7 @@ export default function WaitlistPanel({ entries = [], busyId, onTake, onPass, on
                     <X className="w-4 h-4" /> Pass
                   </button>
                   <button type="button" onClick={() => onTake(e)} disabled={busy || ms <= 0}
-                    className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+                    className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
                     <Check className="w-4 h-4" /> {busy ? '…' : 'Take it'}
                   </button>
                 </div>

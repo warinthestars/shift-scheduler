@@ -236,11 +236,11 @@ export default function WorkerCalendar({ items = [], openListings = [], onSelect
           </button>
           <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5">
             <button type="button" onClick={() => setView('month')}
-              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'month' ? 'bg-brand-500 text-slate-950' : 'text-slate-400'}`}>
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'month' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}>
               <CalendarDays className="w-3.5 h-3.5" /> Month
             </button>
             <button type="button" onClick={() => setView('list')}
-              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'list' ? 'bg-brand-500 text-slate-950' : 'text-slate-400'}`}>
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold inline-flex items-center gap-1 ${view === 'list' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}>
               <ListIcon className="w-3.5 h-3.5" /> List
             </button>
           </div>
@@ -285,7 +285,7 @@ export default function WorkerCalendar({ items = [], openListings = [], onSelect
                     <div className="w-full flex items-center justify-between">
                       <span
                         className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
-                          isToday ? 'bg-brand-500 text-slate-950' : inMonth ? 'text-slate-200' : 'text-slate-600'
+                          isToday ? 'bg-emerald-500 text-slate-950' : inMonth ? 'text-slate-200' : 'text-slate-600'
                         }`}
                       >
                         {d.getDate()}

@@ -281,7 +281,7 @@ function ProfileExtras({ data, venueId, workerId, onReviewed, setConfirm }) {
                     )}
                     {c.status !== 'verified' && (
                       <button type="button" disabled={busy === c.id} onClick={() => review(c, 'verified')}
-                        className="px-2 py-1 rounded-md bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold disabled:opacity-50">
+                        className="px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold disabled:opacity-50">
                         Verify
                       </button>
                     )}

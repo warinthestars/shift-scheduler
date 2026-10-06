@@ -273,7 +273,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
     );
     if (onGoToSchedule) {
       primary = (
-        <button type="button" onClick={onGoToSchedule} className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold">
+        <button type="button" onClick={onGoToSchedule} className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold">
           Go to My shifts
         </button>
       );
@@ -318,7 +318,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
           })))}
           disabled={submitting || !listing.can_request || selected.status !== 'OPEN' || !noteOk}
           title={noteOk ? undefined : 'Tell the manager why you can make it now'}
-          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold shadow-md shadow-brand-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
+          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 inline-flex items-center gap-1.5"
         >
           {selected.booking === 'instant' && !extraDates.length && <Zap className="w-4 h-4" />}
           {submitting ? 'Sending…' : label}
@@ -574,7 +574,7 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                         <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'pass')}
                           className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold disabled:opacity-50">Pass</button>
                         <button type="button" disabled={wlBusy === p.shift_id} onClick={() => waitlist(p, 'take')}
-                          className="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 font-bold disabled:opacity-50">Take it</button>
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold disabled:opacity-50">Take it</button>
                       </div>
                     ) : wl ? (
                       <div className="flex flex-wrap items-center gap-2">

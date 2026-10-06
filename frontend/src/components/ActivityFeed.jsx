@@ -89,7 +89,7 @@ export default function ActivityFeed({ venueId, refreshKey = 0, onOpenEvent, onO
         {FILTERS.map((f) => (
           <button key={f.id || 'all'} type="button" onClick={() => setFilter(f.id)}
             className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border whitespace-nowrap ${
-              filter === f.id ? 'bg-brand-500 text-slate-950 border-brand-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+              filter === f.id ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
             }`}>
             {f.label}
           </button>

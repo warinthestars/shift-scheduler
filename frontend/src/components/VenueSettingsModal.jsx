@@ -225,7 +225,7 @@ function PositionCard({ venueId, position, onChanged, onError }) {
       <div className="flex justify-end">
         {position.is_active && dirty && (
           <button type="button" onClick={save} disabled={saving}
-            className="ml-auto px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+            className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
             <Save className="w-3.5 h-3.5" /> Save
           </button>
         )}
@@ -389,7 +389,7 @@ export default function VenueSettingsModal({
         { id: 'templates', label: 'Event templates' },   // Phase 29.3
       ].map((t) => (
         <button key={t.id} type="button" onClick={() => setTab(t.id)}
-          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-brand-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+          className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.id ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
           {t.label}
         </button>
       ))}
@@ -403,7 +403,7 @@ export default function VenueSettingsModal({
       </button>
       {(tab === 'details' || tab === 'timepay') && (
         <button type="button" onClick={handleSave} disabled={saving}
-          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold disabled:opacity-50">
+          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold disabled:opacity-50">
           {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create venue'}
         </button>
       )}
@@ -460,7 +460,7 @@ export default function VenueSettingsModal({
                   <MapPin className="w-4 h-4 text-brand-400" /> Location for clock-in
                 </div>
                 <button type="button" onClick={useMyLocation} disabled={locating}
-                  className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50">
                   <Crosshair className="w-3.5 h-3.5" /> {locating ? 'Locating…' : 'Use my current location'}
                 </button>
               </div>
@@ -706,7 +706,7 @@ export default function VenueSettingsModal({
                 <EyeOff className="w-3.5 h-3.5" /> Hide pay
               </label>
               <button type="button" onClick={addPosition}
-                className="ml-auto px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1">
+                className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1">
                 <Plus className="w-3.5 h-3.5" /> Add
               </button>
             </div>

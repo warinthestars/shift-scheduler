@@ -68,7 +68,7 @@ def render_email(title: str, body: Optional[str], link: Optional[str], footer_li
     html_body = f"""<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:16px;color:#0f172a">
   <h2 style="margin:0 0 8px;font-size:18px">{html.escape(title)}</h2>
   <p style="margin:0 0 16px;font-size:14px;line-height:1.5;white-space:pre-line">{html.escape(body or '')}</p>
-  <a href="{html.escape(url)}" style="display:inline-block;background:#FDD400;color:#0a0a0a;text-decoration:none;font-weight:700;padding:10px 16px;border-radius:10px;font-size:14px">Open ShiftUp</a>
+  <a href="{html.escape(url)}" style="display:inline-block;background:#10b981;color:#0f172a;text-decoration:none;font-weight:700;padding:10px 16px;border-radius:10px;font-size:14px">Open ShiftUp</a>
   <p style="margin:24px 0 0;font-size:12px;color:#64748b">You're getting this because of your ShiftUp notification settings.
   <a href="{html.escape(settings_url)}" style="color:#64748b">Change what we send you</a>.</p>
 </div>"""

@@ -418,7 +418,7 @@ export default function VenueManagerDashboard() {
             <button
               type="button"
               onClick={() => setEventForm({ mode: 'create' })}
-              className="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-brand-500/20"
+              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
             >
               <Plus className="w-4 h-4" /> Post an event
             </button>

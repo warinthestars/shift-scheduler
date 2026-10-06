@@ -108,7 +108,7 @@ export default function PushDeviceCard({ pushEnabled, onPushEnabled }) {
               </button>
             </>
           ) : (
-            <button type="button" onClick={turnOn} disabled={busy} className={`${btn} bg-brand-500 hover:bg-brand-400 text-slate-950`}>
+            <button type="button" onClick={turnOn} disabled={busy} className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-slate-950`}>
               <BellRing className="w-3.5 h-3.5" /> {busy ? 'Turning on…' : 'Turn on for this device'}
             </button>
           )}

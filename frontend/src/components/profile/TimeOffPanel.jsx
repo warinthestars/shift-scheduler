@@ -201,7 +201,7 @@ function BlockForm({ block = null, onCancel, onSaved, onError }) {
     }
   };
 
-  const seg = (on) => `px-3 py-1.5 rounded-lg text-xs font-bold transition ${on ? 'bg-brand-500 text-slate-950' : 'text-slate-300 hover:bg-slate-800'}`;
+  const seg = (on) => `px-3 py-1.5 rounded-lg text-xs font-bold transition ${on ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`;
 
   return (
     <section className="p-4 rounded-2xl bg-slate-900 border border-brand-500/30 space-y-4">
@@ -298,7 +298,7 @@ function BlockForm({ block = null, onCancel, onSaved, onError }) {
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300 hover:bg-slate-700">Cancel</button>
         <button type="button" onClick={save} disabled={busy || (repeating && !f.weekdays.length)}
-          className="px-4 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+          className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
           <Save className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save time off'}
         </button>
       </div>

@@ -4,6 +4,19 @@ All notable changes to ShiftUp (called ShiftBoard until 0.37.0). The format foll
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.37.1] - 2026-10-06 - Phase 37.1: Green buttons again
+
+### Changed
+- **Buttons and selected tabs are green again**, exactly as they were before 0.37.0. Dark text on a gold button was hard to read.
+  - That covers every main button (Sign In, Save, Request, Approve, Post an event and the rest), the selected tab in each tab row, selected filter pills with a solid fill, today's date in the worker calendar, your own messages in the shift chat, and the manager calendar's selected view.
+  - The button in notification emails and on the offline page is green again too.
+- **Gold is now the accent colour only:** the logo, links, the current link in the top bar, small icons, pay, focus rings, and the outline or tint of a selected option. Nothing has text on solid gold any more.
+- The black header, the logo, the name and the ShiftBoard tab from 0.37.0 are unchanged.
+- The service worker's cache name is `shiftup-shell-v3`, so phones fetch the new offline page.
+
+### Added
+- `scripts/phase371_buttons.py`: the one-off script that made this change in 54 files.
+
 ## [0.37.0] - 2026-10-06 - Phase 37: ShiftUp branding and the ShiftBoard tab
 
 ### Added

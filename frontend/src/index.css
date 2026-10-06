@@ -36,9 +36,9 @@ body {
   color: #ffffff;
 }
 .rbc-toolbar button.rbc-active {
-  background-color: #FDD400;   /* Phase 37: brand gold, dark text */
-  border-color: #FEDE24;
-  color: #0a0a0a;
+  background-color: #059669;   /* 0.37.1: the selected view is a green button again */
+  border-color: #10b981;
+  color: #ffffff;
   box-shadow: none;
 }
 .rbc-header {

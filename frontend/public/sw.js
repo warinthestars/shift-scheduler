@@ -6,7 +6,7 @@
  *   so an update can't get stuck behind a stale cache.
  * Bump CACHE when offline.html or the icons change.
  */
-const CACHE = 'shiftup-shell-v2';
+const CACHE = 'shiftup-shell-v3';
 // Phase 33.0.1: messages arrive either straight from ShiftUp (Web Push) or through Firebase Cloud Messaging.
 const OFFLINE_URL = '/offline.html';
 

@@ -102,7 +102,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
           <p className="text-sm font-semibold text-white">Profile photo</p>
           <p className="text-xs text-slate-400">A clear photo of your face helps the door staff and managers know who you are.</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            <label className={`px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer ${photoBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+            <label className={`px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer ${photoBusy ? 'opacity-50 pointer-events-none' : ''}`}>
               <Camera className="w-3.5 h-3.5" /> {profile.avatar_url ? 'Change photo' : 'Add a photo'}
               <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={pickPhoto} />
             </label>
@@ -156,7 +156,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
                     onClick={() => set('departments', on ? form.departments.filter((k) => k !== d.key) : [...form.departments, d.key])}
                     className={`p-2.5 rounded-xl border text-left transition ${on ? 'border-brand-500/60 bg-brand-500/10' : 'border-slate-700 bg-slate-950 hover:border-slate-500'}`}>
                     <span className="flex items-center gap-2">
-                      <span className={`w-4 h-4 rounded border flex items-center justify-center ${on ? 'bg-brand-500 border-brand-500' : 'border-slate-600'}`}>
+                      <span className={`w-4 h-4 rounded border flex items-center justify-center ${on ? 'bg-emerald-500 border-emerald-500' : 'border-slate-600'}`}>
                         {on && <Check className="w-3 h-3 text-slate-950" />}
                       </span>
                       <span className="text-sm font-semibold text-white">{d.label}</span>
@@ -232,7 +232,7 @@ export default function AboutSection({ profile, onSaved, onError }) {
           <p className="text-sm text-emerald-300 inline-flex items-center gap-1.5"><Check className="w-4 h-4" /> {saveStatus.text}</p>
         ) : null}
         <button type="button" onClick={save} disabled={saving}
-          className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
+          className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-50">
           <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save profile'}
         </button>
       </div>

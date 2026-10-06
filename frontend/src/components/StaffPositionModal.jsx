@@ -125,7 +125,7 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
         onClick={sendOffers}
         disabled={!selected.length || busy !== null || started}
         title={started ? 'This shift has started. Use Assign.' : ''}
-        className="px-5 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-40"
+        className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-40"
       >
         <Send className="w-4 h-4" />
         {busy === 'offer' ? 'Sending…' : selected.length ? `Offer to ${selected.length} selected` : 'Offer to selected'}
@@ -255,7 +255,7 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
                           placeholder="Why are you booking them back?"
                           className="flex-1 min-w-[12rem] px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-brand-500" />
                         <button type="button" onClick={() => assign(c, reason.trim(), true)} disabled={reason.trim().length < 5 || busy !== null}
-                          className="px-2.5 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold disabled:opacity-40">Book back</button>
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40">Book back</button>
                         <button type="button" onClick={() => setReasonFor(null)} className="text-xs text-slate-400 hover:text-white">Cancel</button>
                       </div>
                     )}
@@ -264,7 +264,7 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
                     type="button"
                     onClick={() => assign(c)}
                     disabled={!(c.available || c.requested_this) || busy !== null || spotsLeft === 0}
-                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-brand-500 text-brand-300 hover:text-slate-950 border border-slate-700 text-xs font-bold disabled:opacity-40"
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-slate-700 text-xs font-bold disabled:opacity-40"
                   >
                     {busy === `assign-${c.worker_id}` ? '…' : c.requested_this ? 'Approve' : 'Assign'}
                   </button>

@@ -66,7 +66,7 @@ export default function AdminCreateUserModal({ venues = [], onClose, onCreated, 
         footer={(
           <>
             <button type="button" onClick={() => { finish(); onOpenUser(created.id); }} className={btnGhost}>Open profile</button>
-            <button type="button" onClick={finish} className="px-5 py-2 rounded-xl text-sm font-bold bg-brand-500 hover:bg-brand-400 text-slate-950">Done</button>
+            <button type="button" onClick={finish} className="px-5 py-2 rounded-xl text-sm font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950">Done</button>
           </>
         )}
       >

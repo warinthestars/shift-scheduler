@@ -210,7 +210,7 @@ export default function EventLocationPicker({ venue, value, onChange }) {
               <X className="w-3.5 h-3.5" /> Cancel
             </button>
             <button type="button" onClick={saveEdit} disabled={editBusy}
-              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50">
               <Save className="w-3.5 h-3.5" /> {editBusy ? 'Saving…' : 'Save for all events'}
             </button>
           </div>

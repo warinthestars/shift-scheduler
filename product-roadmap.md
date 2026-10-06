@@ -234,7 +234,7 @@ Each phase is sized for one AGY prompt. Where a phase is large it can be split i
   - **Read a worker's own calendar** (they paste its private link) to warn before they request a shift that clashes with something personal.
 
 ### Phase 37: ShiftUp branding and the ShiftBoard tab (shipped in 0.37.0)
-- ✅ **New name and look:** the service is ShiftUp (shift-up.team), with the gold logo, a black header and gold buttons. Green is kept for "confirmed".
+- ✅ **New name and look:** the service is ShiftUp (shift-up.team), with the gold logo, a black header and gold accents. Buttons are green (gold buttons were tried in 0.37.0 and changed back in 0.37.1: dark text on gold was hard to read).
 - ✅ **Worker view split in two:** **My shifts** (what's theirs) and the **ShiftBoard** (everything else that's up). The app opens whichever fits their week.
 - ⏳ **Later, if wanted:** a light theme; the logo in emails.
 
