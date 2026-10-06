@@ -25,6 +25,8 @@ import EarningsCard from '../components/worker/EarningsCard';   // Phase 33.1
 import CoverDialog from '../components/worker/CoverDialog';     // Phase 34
 import CoverBoard from '../components/worker/CoverBoard';       // Phase 34
 import WaitlistPanel from '../components/worker/WaitlistPanel'; // Phase 34
+import LeadBanner from '../components/lead/LeadBanner';         // Phase 36
+import { takePublicEvent } from '../utils/publicConfig';        // Phase 36
 import { PENDING_INVITE_KEY } from './JoinPage';
 import {
   dayGroupLabel, isOnDay, downloadIcs, mapsUrl, whereOf,
@@ -335,6 +337,16 @@ export default function WorkerDashboard() {
     else if (req.shift?.event_id) setOpenListing({ eventId: req.shift.event_id, initial: null });
   };
 
+  // Phase 36: they tapped a shift on the public board, then signed in or signed up: open that shift
+  useEffect(() => {
+    if (String(user?.role || '').toLowerCase() !== 'worker') return;
+    const eventId = takePublicEvent();
+    if (!eventId) return;
+    setActiveTab('find');
+    setOpenListing({ eventId, initial: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Deep links from notifications (?tab=, ?request=, ?event=)
   const [pendingDeepLink, setPendingDeepLink] = useState(null);
   useEffect(() => {
@@ -539,6 +551,7 @@ export default function WorkerDashboard() {
 
       <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 mt-6">
         {isWorker && <ProfileNudge />}
+        {isWorker && <LeadBanner />}
         <AppNudge />
         {notification && (
           <div className={`mb-5 p-3.5 rounded-xl border flex items-start justify-between gap-3 ${

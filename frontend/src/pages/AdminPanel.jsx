@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Shield, LayoutDashboard, Building2, Users, History, Server, UserPlus, Plus } from 'lucide-react';
+import { Shield, LayoutDashboard, Building2, Users, History, Server, UserPlus, Plus, Network } from 'lucide-react';
 import api from '../api/client';
 import { APP_VERSION } from '../utils/version';   // Phase 34.5
 import VenueSettingsModal from '../components/VenueSettingsModal';
@@ -11,11 +11,13 @@ import AdminUserDrawer from '../components/admin/AdminUserDrawer';
 import AdminCreateUserModal from '../components/admin/AdminCreateUserModal';
 import AdminActivity from '../components/admin/AdminActivity';
 import AdminSystem from '../components/admin/AdminSystem';
+import AdminOrganizations from '../components/admin/AdminOrganizations';   // Phase 36
 import { Flash, venuesChanged } from '../components/admin/adminUi';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'venues', label: 'Venues', icon: Building2 },
+  { id: 'organizations', label: 'Organizations', icon: Network },   // Phase 36
   { id: 'users', label: 'People', icon: Users },
   { id: 'activity', label: 'Activity', icon: History },
   { id: 'system', label: 'System', icon: Server },
@@ -23,7 +25,7 @@ const TABS = [
 
 /**
  * Phase 29.2: Platform admin console.
- * Tabs (kept in ?tab=): Overview · Venues · People · Activity · System.
+ * Tabs (kept in ?tab=): Overview · Venues · Organizations (Phase 36) · People · Activity · System.
  * Venue and person details open in right-hand drawers from any tab.
  */
 export default function AdminPanel() {
@@ -112,6 +114,9 @@ export default function AdminPanel() {
         )}
         {tab === 'venues' && (
           <AdminVenues refreshKey={refreshKey} onOpenVenue={setVenueDrawer} onCreate={() => setCreateVenue(true)} />
+        )}
+        {tab === 'organizations' && (
+          <AdminOrganizations refreshKey={refreshKey} venues={venues} onFlash={setFlash} onChanged={() => window.dispatchEvent(new CustomEvent('admin_venues_changed'))} />
         )}
         {tab === 'users' && (
           <AdminUsers refreshKey={refreshKey} venues={venues} onOpenUser={setUserDrawer} onCreate={() => setCreateUser(true)} />

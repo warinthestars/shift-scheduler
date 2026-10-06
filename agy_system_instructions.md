@@ -57,6 +57,8 @@ You must structure the project as follows. **CRITICAL:** Create a `.env.template
 *   **Platform Admin:** Manages system, adds new venues.
 *   **Venue Manager:** Posts shifts, manages venue profile, reviews applicants, rates workers, manages whitelist.
 *   **Worker:** Subscribes to shift types/locations, applies for shifts, checks in/out (geolocation), manages personal profile.
+*   **Owner (Phase 36):** a manager account that owns an organization (a group of venues). Manages every venue in it. Not a `users.role` value: a row in `organization_members`.
+*   **Shift lead (Phase 36):** a worker marked shift lead on a venue's team (`venue_whitelists.is_lead`). Runs the floor (clock-ins, no-shows, clock times, shift chat, open spots). Never sees pay. Not a `users.role` value.
 
 ### 2. Worker Profiles & Ratings
 *   Workers have profiles showcasing their total shifts worked, past venues, and an aggregate 5-star rating.
@@ -107,3 +109,12 @@ The project rules that always apply are in README.md → "Working on the code" (
    * Never rename a service, the network or a volume: the database volume is found by `<stack name>_postgres_data`.
    * Refer to a container as `docker compose exec <service>`, never by a container name.
    * Never run `docker compose` yourself on this computer: a command in the wrong folder acts on the wrong stack.
+10. **Roles and access (Phase 36):** `users.role` has exactly three values: `platform_admin`, `venue_manager`, `worker`. Never add a fourth. Owner and shift lead are memberships, not roles.
+   * **Owners:** `organization_members` (role `owner`). An owner manages every venue in the organization through ordinary `venue_managers` rows with `via_org = TRUE`. Only `services/organizations.sync_managers()` creates or deletes those rows. Call it, before the commit, whenever an owner or a venue is added to or removed from an organization, an organization is deleted, or a user's role changes. Never write `via_org` rows by hand anywhere else (the demo loader is the one exception, and its rows must match what the sync would make).
+   * **Shift leads:** `venue_whitelists.is_lead`. Use `services/access.floor_access()` for "manager or shift lead"; use the existing manager checks for everything else. A new endpoint is manager-only unless the phase says leads may use it.
+   * **Shift leads never see pay.** Nothing a lead can call may return a pay rate, tip, cost or earnings. What a lead reads lives in `routers/lead.py`, with response models that have no pay fields. Never return a manager schema (`EventTimesheet`, `EventDetail`, `ShiftRosterResponse`, ...) from an endpoint a lead can call, and never open a manager read endpoint to leads.
+   * There is no venue sign-up: only platform admins create organizations and put venues in them.
+11. **The public board (Phase 36):** `PUBLIC_EVENT_BOARD=true` makes the home page a public board for people who aren't signed in. `routers/public.py` is the ONLY place for endpoints that need no sign-in (besides sign-in itself, invites and avatars).
+   * `GET /api/public/board` returns only: event id, title, start and end, time zone, venue name, city, and positions with open spots. Never add pay, addresses, coordinates, notes, location names, requirements, logos, venue ids or anyone's name to it.
+   * Every other endpoint must depend on `get_current_user` (directly or through a `require_...` dependency). A new endpoint with no sign-in needs the user's explicit OK.
+   * The frontend learns the setting from `GET /api/public/config` (`utils/publicConfig.js`). No `VITE_` variable.

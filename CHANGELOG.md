@@ -4,6 +4,35 @@ All notable changes to ShiftBoard. The format follows [Keep a Changelog](https:/
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.36.0] - 2026-10-06 - Phase 36: Organizations, owners, shift leads and the public board
+
+### Added
+- **Organizations.** A group of venues with one or more owners. A venue belongs to at most one.
+  - Platform admins create them, choose their venues and add owners in **Admin → Organizations**. There is no venue sign-up yet.
+  - Tables `organizations` and `organization_members`; column `venues.organization_id`.
+- **Owner role.** A manager account that owns an organization manages every venue in it, with every manager screen.
+  - New **Organization** page (`/org`): every venue side by side (today and the next seven days), everyone across the venues' teams, and owners and settings.
+  - Owners can add a person to another venue's team or move them (positions and staffing company come along where they fit), add co-owners, and rename the organization.
+  - Owners get a venue's manager alerts only if they turn on "Send me each venue's manager alerts", or when the venue has no other manager.
+  - A venue's Managers list shows owners with an Owner badge; they are removed on the Organization page, not there.
+- **Shift lead role.** A manager marks a team member "shift lead" on the Team page (`venue_whitelists.is_lead`).
+  - New **Lead** page (`/lead`): the Today board, clock someone in, mark a no-show, fix clock times, message a shift, and fill open spots from the team.
+  - A shift lead never sees pay, tips, pay periods, exports, settings or the team list, and can't approve requests or post events. They can't change their own clock times.
+  - They stay a worker: they still find, book and work shifts.
+- **Public event board.** With `PUBLIC_EVENT_BOARD=true` the home page (`/`) shows every posted, upcoming event to people who aren't signed in, with a **Sign in / Sign up** button in the corner.
+  - It shows the event name, date and time, venue name, city, positions and open spots. Never pay, addresses or notes.
+  - Tapping an event asks the visitor to sign in or create a worker account, then opens that event with its full details.
+  - Each venue can stay off the board and can set the city shown (Venue settings → `public_board`, `city`).
+  - With `PUBLIC_EVENT_BOARD=false` (the default) the home page is the sign-in page, as before.
+- **"Also send it to everyone booked on this shift"** on the shift chat, for managers and shift leads (notification kind `shift_message`).
+- The demo data has one organization (Whitaker Hospitality Group, owned by `regional.manager@demo.example.com`) and one shift lead per venue (`lead.<venue>@demo.example.com`).
+
+### Changed
+- `GET /api/venues`, `GET /api/venues/{id}` and `GET /api/venues/{id}/shifts` now need a sign-in. They returned addresses, settings and pay to anyone.
+- Marking a no-show, adding, changing or deleting a clock time, the candidate list, assign, offer and withdrawing an offer accept the venue's shift leads as well as its managers.
+- Signing out goes to the home page (the public board, or the sign-in page when the board is off).
+- Database: new columns `venues.public_board`, `venues.city`, `venue_managers.via_org`, `venue_whitelists.is_lead`.
+
 ## [0.35.6] - 2026-10-04 - Phase 35.4: Dev and prod stacks on one computer
 
 ### Changed

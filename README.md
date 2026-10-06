@@ -54,6 +54,17 @@ Every account has exactly one role, stored as plain text in `users.role`.
 
 Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_current_user`, `require_role(...)` and its shortcuts `require_admin`, `require_manager_or_admin`, `require_worker`, plus `verify_venue_access`. Admins pass every role check). In the browser, `<ProtectedRoute allowedRoles={[...]}>` does the same. Emails listed in `ALWAYS_ADMIN_EMAILS` are always promoted to admin, so you can't get locked out.
 
+**Two more roles sit on top of those three (since 0.36.0).** They are not values of `users.role`:
+
+| Role | What it is in the data | Home page | What they do |
+| :--- | :--- | :--- | :--- |
+| **Owner** | A manager account with a row in `organization_members` (role `owner`). | `/org` (and `/venue`) | Manages **every venue in their organization**, exactly as a manager would, and gets the Organization page: every venue side by side, everyone across the venues' teams (add a person to another venue, or move them), and the list of owners. |
+| **Shift lead** | A worker account whose team row at a venue has `is_lead = TRUE`. | `/lead` (and `/worker`) | Runs the floor at that venue: the Today board, clocking people in and out, no-shows, fixing clock times, the shift chat (with "send to everyone booked"), and filling open spots from the team. **Never sees pay**, tips, pay periods, exports, settings or the team list, and can't approve requests or post events. Still books and works shifts like any worker. |
+
+* An **organization** (`organizations`) is a group of venues. A venue belongs to at most one (`venues.organization_id`). There is no venue sign-up yet: platform admins create organizations, choose their venues and name the first owner in **Admin → Organizations**. Owners can add co-owners.
+* Owners manage their venues through ordinary `venue_managers` rows marked `via_org`. `services/organizations.sync_managers()` is the only code that creates or deletes those rows, so every existing manager check covers owners with no change.
+* "May this person run the floor here?" is `services/access.floor_access()` (manager or shift lead). What a lead reads comes from `routers/lead.py`, whose response models have no pay fields.
+
 ---
 
 ## 3. What it does
@@ -66,6 +77,17 @@ Access is enforced on the server by dependencies in `backend/src/auth.py` (`get_
   3. otherwise it creates a **worker** account on the spot. This needs a verified email and `ALLOW_SELF_REGISTRATION=true`. Emails in `ALWAYS_ADMIN_EMAILS` become admins.
 * Mock Firebase mode (`USE_MOCK_FIREBASE=true`) for local testing without Google.
 * Invites: managers invite people by email, link or QR code. Joining through an invite adds them to the venue team.
+
+### Home page and the public board
+* **`PUBLIC_EVENT_BOARD=false` (the default):** the home page (`/`) sends people who aren't signed in to the sign-in page.
+* **`PUBLIC_EVENT_BOARD=true`:** the home page is a **public board** of every posted, upcoming event, with a **Sign in / Sign up** button in the corner.
+  * It shows only: event name, date and time, venue name, city, positions and open spots (`GET /api/public/board`, no sign-in needed).
+  * It never shows pay, the street address, map pin, location name, notes, requirements or venue ids. Those need a worker account.
+  * Tapping an event asks the visitor to sign in or create a worker account, then opens that same event with its full details.
+  * A venue can keep its shifts off the board, and can type the city that is shown (Venue settings). With no city typed, it is worked out from the address; if that isn't clear, no city is shown.
+  * Drafts, cancelled and past events are never listed. Full events are listed as "Full".
+* Signed-in people never see the board: `/` takes them to their own home page, as before.
+* Apart from signing in, invites and the board, **every API endpoint needs a sign-in** (since 0.36.0 that includes `GET /api/venues`, `GET /api/venues/{id}` and `GET /api/venues/{id}/shifts`).
 
 ### For workers
 * **Find shifts**: upcoming events, grouped by day, with filters:
@@ -214,10 +236,13 @@ backend/src/
   models.py          SQLAlchemy models             (every table is also in database/init.sql)
   schemas.py         Pydantic request / response models
   routers/           one file per area (auth, venues, events, shifts, listings, transfers, cover, team, ...)
+                     public.py = no sign-in (config + public board) · organizations.py = owners · lead.py = shift leads
   services/          the logic (booking, auto_confirm, clock, cover, waitlist, reliability, notify*, ...)
+                     access.py = manager / shift-lead checks · organizations.py = owners' venue rows · public_board.py
 frontend/src/
   pages/             WorkerDashboard, VenueManagerDashboard, AdminPanel, EarningsPage, ProfilePage, ...
-  components/        shared UI; admin/, manager/, worker/, profile/ sub-folders
+                     PublicBoardPage (home page when the board is on), LeadPage (/lead), OrganizationPage (/org)
+  components/        shared UI; admin/, manager/, worker/, profile/, lead/, org/ sub-folders
   context/AuthContext.jsx, api/client.js   (locked: change only when asked)
   utils/             formatting, time zones, errors, push, version
 database/init.sql    the whole schema (runs on an empty database)
@@ -329,6 +354,7 @@ The main settings:
 | Stack name and ports | `COMPOSE_PROJECT_NAME` (only for a second stack on one computer), `POSTGRES_PORT`, `REDIS_PORT`, `PORT_BACKEND`, `PORT_FRONTEND`, `PORT_FRONTEND_VITE` (read by Docker Compose, not by the app) |
 | Database / Redis | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD` |
 | Sign-in | `SECRET_KEY` (signs every login; must be set; in `stack.env`), `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `ALWAYS_ADMIN_EMAILS`, `ALLOW_SELF_REGISTRATION`, `SHOW_DEMO_LOGINS`, `SEED_DEMO_ACCOUNTS` (`false` = clean install, no starter demo accounts) |
+| Home page | `PUBLIC_EVENT_BOARD` (`true` = the home page is the public board of posted shifts; `false` = the sign-in page) |
 | Firebase | `USE_MOCK_FIREBASE`, `FIREBASE_CREDENTIALS_PATH` (`.secrets/firebase_service_account.json`), `FIREBASE_WEB_CONFIG_PATH` (`.secrets/firebase-web-config.js`), `FIREBASE_AUTH_PROVIDERS`, `FIREBASE_VAPID_KEY` (push through FCM) |
 | Links | `APP_BASE_URL`: the public address used in emails, texts and invites |
 | Email | `EMAIL_PROVIDER` (`console` \| `smtp` \| `resend`), `EMAIL_FROM`, `SMTP_*`, `RESEND_API_KEY` |

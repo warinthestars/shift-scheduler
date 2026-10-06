@@ -50,6 +50,8 @@ function emptyForm(venue) {
     approval_policy: venue?.approval_policy || 'team_auto',
     show_rates_publicly: venue?.show_rates_publicly ?? true,
     allow_public_cover: venue?.allow_public_cover ?? true,                        // Phase 34
+    public_board: venue?.public_board ?? true,                                    // Phase 36
+    city: venue?.city || '',                                                      // Phase 36
     auto_approve_rating_threshold:
       venue?.auto_approve_rating_threshold != null ? String(venue.auto_approve_rating_threshold) : '',
     arrival_instructions: venue?.arrival_instructions || '',
@@ -305,6 +307,8 @@ export default function VenueSettingsModal({
       approval_policy: form.approval_policy,
       show_rates_publicly: !!form.show_rates_publicly,
       allow_public_cover: !!form.allow_public_cover,                              // Phase 34
+      public_board: !!form.public_board,                                          // Phase 36
+      city: form.city.trim(),                                                     // Phase 36: "" = work it out from the address
       auto_approve_rating_threshold: form.auto_approve_rating_threshold === '' ? null : parseFloat(form.auto_approve_rating_threshold),
       arrival_instructions: form.arrival_instructions,
       dress_code: form.dress_code,
@@ -591,6 +595,27 @@ export default function VenueSettingsModal({
                   <span className="block text-xs text-slate-400">Positions marked "Hide pay" stay hidden either way.</span>
                 </span>
               </label>
+            </div>
+
+            {/* Phase 36: the public event board (people who aren't signed in) */}
+            <div className={cardCls}>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={!!form.public_board}
+                  onChange={(e) => setForm({ ...form, public_board: e.target.checked })}
+                  className="mt-1 w-4 h-4 rounded bg-slate-800 border-slate-700 text-emerald-500" />
+                <span>
+                  <span className="block text-sm font-semibold text-white">List our shifts on the public board</span>
+                  <span className="block text-xs text-slate-400">
+                    If ShiftBoard's public board is switched on, people who aren't signed in can see your event names, dates,
+                    positions and open spots. Never pay, your address or your notes. They need a worker account to see more or to book.
+                  </span>
+                </span>
+              </label>
+              <div className="mt-3">
+                <label className={labelCls} htmlFor="venue-city">City shown on the public board</label>
+                <input id="venue-city" type="text" value={form.city} onChange={set('city')} className={inputCls} maxLength={120}
+                  placeholder="Leave blank to use the city in your address, e.g. Denver, CO" />
+              </div>
             </div>
 
             <div className={cardCls}>

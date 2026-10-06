@@ -72,6 +72,7 @@ KINDS = {
     "cover_manager": ("manager", True),      # Phase 34: managers: cover asked / covered / still uncovered
     "waitlist_offer": ("booking", True),     # Phase 34: a spot opened and you're next (short time to take it)
     "waitlist_update": ("booking", False),   # Phase 34: booked / request sent / offer ran out / waitlist closed
+    "shift_message": ("booking", True),      # Phase 36: a manager or shift lead sent an update to everyone booked on the shift
     "test": ("test", True),
 }
 NEW_SHIFT_MODES = ("off", "instant", "daily")

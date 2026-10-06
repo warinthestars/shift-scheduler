@@ -53,7 +53,7 @@ export default function WeekAtGlance({ week = [], timeZone, onOpenEvent }) {
             <ul className="mt-2 space-y-1.5">
               {d.events.map((e) => (
                 <li key={e.event_key}>
-                  <button type="button" disabled={!e.event_id} onClick={() => e.event_id && onOpenEvent?.(e.event_id)}
+                  <button type="button" disabled={!e.event_id || !onOpenEvent} onClick={() => e.event_id && onOpenEvent?.(e.event_id)}
                     className={`w-full text-left px-2 py-1.5 rounded-lg border bg-slate-950/50 hover:bg-slate-800/80 transition ${fillTone(e)}`}>
                     <p className="text-[10px] text-slate-400">{fmtTime(e.start_time, timeZone)}</p>
                     <p className="text-xs font-semibold truncate">{e.title}</p>

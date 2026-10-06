@@ -27,6 +27,9 @@ from src.routers.profile import router as profile_router   # Phase 31 + 32
 from src.routers.cover import router as cover_router       # Phase 34
 from src.routers.pay_periods import router as pay_periods_router   # Phase 35
 from src.routers.tips import router as tips_router                 # Phase 35.2
+from src.routers.public import router as public_router             # Phase 36
+from src.routers.organizations import router as organizations_router   # Phase 36
+from src.routers.lead import router as lead_router                 # Phase 36
 from src.services.notification_worker import notification_worker_loop
 from src.version import APP_VERSION                          # Phase 34.5
 from src.json_guard import RejectNonFiniteJSON                # Phase 34.5
@@ -147,6 +150,9 @@ app.include_router(profile_router)   # Phase 31 + 32
 app.include_router(cover_router)     # Phase 34
 app.include_router(pay_periods_router)   # Phase 35
 app.include_router(tips_router)          # Phase 35.2
+app.include_router(public_router)        # Phase 36: no sign-in needed
+app.include_router(organizations_router) # Phase 36
+app.include_router(lead_router)          # Phase 36
 
 
 @app.get("/healthz", tags=["System"])

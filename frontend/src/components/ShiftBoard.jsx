@@ -5,7 +5,11 @@ import {
   MessageSquare, Send, Trash2, X, Clock, User, AlertCircle, RefreshCw
 } from 'lucide-react';
 
-export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClose }) {
+/**
+ * The shift chat. Phase 36: managers, admins and shift leads (canNotify) get a tick box,
+ * "Also send it to everyone booked on this shift", which sends the message as a notification too.
+ */
+export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClose, canNotify = null }) {
   const { user } = useAuth();
   const effectiveRole = currentUserRole || user?.role;
   const [messages, setMessages] = useState([]);
@@ -16,6 +20,8 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
   const messagesEndRef = useRef(null);
 
   const isManagerOrAdmin = ['venue_manager', 'platform_admin', 'super_admin'].includes(effectiveRole);
+  const mayNotify = canNotify === null ? isManagerOrAdmin : !!canNotify;    // Phase 36
+  const [notifyAll, setNotifyAll] = useState(false);
 
   const fetchMessages = async () => {
     if (!shiftId) return;
@@ -49,9 +55,11 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
       setError(null);
       const res = await api.post(`/shifts/${shiftId}/messages`, {
         content: newMessage.trim(),
+        notify: mayNotify && notifyAll,          // Phase 36
       });
       setMessages((prev) => [...prev, res.data]);
       setNewMessage('');
+      setNotifyAll(false);
     } catch (err) {
       console.error('Error sending message:', err);
       setError(err.response?.data?.detail || "Couldn't send your message. Try again.");
@@ -193,10 +201,18 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Phase 36: managers and shift leads can push the message to everyone booked */}
+      {mayNotify && (
+        <label className="px-4 pt-2.5 bg-slate-950 border-t border-slate-800 flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer select-none">
+          <input type="checkbox" checked={notifyAll} onChange={(e) => setNotifyAll(e.target.checked)} className="accent-indigo-500" />
+          Also send it to everyone booked on this shift
+        </label>
+      )}
+
       {/* Compose Form */}
       <form
         onSubmit={handleSendMessage}
-        className="p-3 border-t border-slate-800 bg-slate-950 flex items-center space-x-2"
+        className={`p-3 bg-slate-950 flex items-center space-x-2 ${mayNotify ? '' : 'border-t border-slate-800'}`}
       >
         <input
           type="text"
@@ -211,7 +227,7 @@ export default function ShiftBoard({ shiftId, currentUserRole, shiftTitle, onClo
           className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition disabled:opacity-40 flex items-center space-x-1 shadow-md shadow-indigo-600/20"
         >
           <Send className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">{sending ? 'Posting...' : 'Post'}</span>
+          <span className="hidden sm:inline">{sending ? 'Posting...' : (mayNotify && notifyAll ? 'Post & send' : 'Post')}</span>
         </button>
       </form>
     </div>

@@ -32,6 +32,7 @@ from src.database import get_db
 from src.models import (
     User, Venue, VenueManager, VenueWhitelist, Shift, ShiftRequest, ShiftOffer, Rating,
     VenueInvite, ShiftEvent, TimeEntry,
+    Organization,                                               # Phase 36
 )
 from src.schemas import (
     TeamMember, TeamMemberUpdate, TeamMemberUpdateResult, TeamAddExisting, TeamCreateWorker,
@@ -45,6 +46,7 @@ from src.services.team import set_membership, TEAM_STATUSES
 from src.services.reliability import compute_reliability
 from src.services.invites import valid_email, invite_status
 from src.services import activity, notify_events
+from src.services.organizations import owner_org_of_venue      # Phase 36
 
 logger = logging.getLogger("shiftboard.team")
 
@@ -185,6 +187,7 @@ async def build_team(
             time_tracking=row.time_tracking if row is not None else None,              # Phase 35
             effective_time_tracking=resolve(venue_mode, row),
             works_through=row.works_through if row is not None else None,
+            is_lead=bool(row is not None and row.is_lead and (row.status or "active") == "active"),   # Phase 36
         ))
     out.sort(key=lambda m: ((m.first_name or "").lower(), (m.last_name or "").lower()))
     return out
@@ -357,6 +360,16 @@ async def update_member(
         if "works_through" in data:
             from src.services.time_tracking import clean_company
             row.works_through = clean_company(data["works_through"])
+        # Phase 36: shift lead (active team members only; removing or blocking someone ends it)
+        was_lead = bool(row.is_lead)
+        if (row.status or "active") != "active":
+            if data.get("is_lead"):
+                raise HTTPException(status_code=400, detail="Only people on the team can be shift leads. Put them back on the team first.")
+            row.is_lead = False
+        elif data.get("is_lead") is not None:
+            row.is_lead = bool(data["is_lead"])
+        lead_changed = bool(row.is_lead) != was_lead
+        now_lead = bool(row.is_lead)
 
         if new_status == "blocked":
             # Waiting requests at this venue are declined; open offers are withdrawn.
@@ -398,6 +411,16 @@ async def update_member(
             bits.append(f"works through {row.works_through}" if row.works_through else "no staffing company")
         await activity.for_worker("team_tracking", venue_id, worker_id, current_user.id,
                                   "{name}: " + ", ".join(bits).replace("{", "{{").replace("}", "}}"))
+    if lead_changed:                                                                # Phase 36
+        await activity.for_worker(
+            "team_lead", venue_id, worker_id, current_user.id,
+            "Made {name} a shift lead" if now_lead else "{name} is no longer a shift lead",
+        )
+        if now_lead:
+            await notify_events.made_shift_lead(venue_id, worker_id)
+        if new_status is None and "is_lead" in data:
+            message = ("They're a shift lead now. They'll find Lead in their menu." if now_lead
+                       else "They're no longer a shift lead.")
     if new_status is not None:
         await activity.for_worker(
             "team_status", venue_id, worker_id, current_user.id,
@@ -427,10 +450,15 @@ async def _managers(db: AsyncSession, venue_id: UUID, me: User) -> List[VenueMan
         .where(VenueManager.venue_id == venue_id)
         .order_by(VenueManager.is_primary.desc(), User.first_name.asc())
     )).all()
+    # Phase 36: owners of the venue's organization are listed as "Owner" and can't be removed here
+    org_name = await db.scalar(
+        select(Organization.name).join(Venue, Venue.organization_id == Organization.id).where(Venue.id == venue_id)
+    )
     return [
         VenueManagerItem(
             user_id=u.id, first_name=u.first_name or "", last_name=u.last_name or "", email=u.email,
             phone=u.phone, is_primary=bool(vm.is_primary), is_you=u.id == me.id,
+            via_org=bool(vm.via_org), organization_name=org_name if vm.via_org else None,
         )
         for vm, u in rows
     ]
@@ -532,6 +560,12 @@ async def remove_manager(
     row = await db.scalar(select(VenueManager).where(VenueManager.venue_id == venue_id, VenueManager.user_id == user_id))
     if row is None:
         raise HTTPException(status_code=404, detail="They don't manage this venue.")
+    owned = await owner_org_of_venue(db, user_id, venue_id)                          # Phase 36
+    if owned is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"They own {owned.name}, so they manage every venue in it. An owner or a platform admin can remove them as an owner on the Organization page.",
+        )
     if count <= 1:
         raise HTTPException(status_code=400, detail="A venue needs at least one manager.")
     try:

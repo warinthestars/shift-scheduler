@@ -1,6 +1,10 @@
 """
 Phase 26: Manager actions on a single person's booking and their time entries.
 Every change is audited in time_entry_edits.
+
+Phase 36: shift leads (services/access.py) may mark a no-show and add, change or delete clock
+times. Removing someone from a shift and setting pay stay manager-only. None of the four
+lead-allowed endpoints returns pay. A lead can't change their own booking or times.
 """
 from datetime import datetime, timezone
 from uuid import UUID
@@ -12,8 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.models import User, Shift, ShiftRequest, TimeEntry, TimeEntryEdit
 from src.schemas import ReasonBody, TimeEntryInput, PayRateInput, NoShowResult
-from src.auth import require_manager_or_admin
+from src.auth import require_manager_or_admin, get_current_user
 from src.services.venue_public import can_manage_venue
+from src.services.access import floor_access, LEAD                 # Phase 36
 from src.services import notify_events
 from src.services import activity
 from src.services.timesheets import (
@@ -36,19 +41,31 @@ async def _no_show_released_spot(db: AsyncSession, request_id) -> bool:
     return last is not None and last.new_value == NO_SHOW_RELEASED
 
 
-async def _load_request(db: AsyncSession, request_id: UUID, user: User):
+OWN_TIMES = "You can't change your own booking or clock times. Ask a manager."
+
+
+async def _check_access(db: AsyncSession, user: User, shift: Shift, worker_id, floor: bool) -> None:
+    """floor=False: managers only. floor=True (Phase 36): managers and the venue's shift leads."""
+    if not floor:
+        if not await can_manage_venue(db, user, shift.venue_id):
+            raise HTTPException(status_code=403, detail="You don't manage this venue.")
+        return
+    if await floor_access(db, user, shift.venue_id) == LEAD and worker_id == user.id:
+        raise HTTPException(status_code=403, detail=OWN_TIMES)
+
+
+async def _load_request(db: AsyncSession, request_id: UUID, user: User, floor: bool = False):
     req = await db.scalar(select(ShiftRequest).where(ShiftRequest.id == request_id))
     if not req:
         raise HTTPException(status_code=404, detail="Booking not found.")
     shift = await db.scalar(select(Shift).where(Shift.id == req.shift_id))
     if not shift:
         raise HTTPException(status_code=404, detail="Shift not found.")
-    if not await can_manage_venue(db, user, shift.venue_id):
-        raise HTTPException(status_code=403, detail="You don't manage this venue.")
+    await _check_access(db, user, shift, req.worker_id, floor)
     return req, shift
 
 
-async def _load_entry(db: AsyncSession, entry_id: UUID, user: User):
+async def _load_entry(db: AsyncSession, entry_id: UUID, user: User, floor: bool = False):
     entry = await db.scalar(select(TimeEntry).where(TimeEntry.id == entry_id))
     if not entry:
         raise HTTPException(status_code=404, detail="Time entry not found.")
@@ -58,8 +75,7 @@ async def _load_entry(db: AsyncSession, entry_id: UUID, user: User):
     shift = await db.scalar(select(Shift).where(Shift.id == entry.shift_id))
     if not req or not shift:
         raise HTTPException(status_code=404, detail="Booking not found for this entry.")
-    if not await can_manage_venue(db, user, shift.venue_id):
-        raise HTTPException(status_code=403, detail="You don't manage this venue.")
+    await _check_access(db, user, shift, entry.worker_id, floor)
     return entry, req, shift
 
 
@@ -108,7 +124,7 @@ async def remove_person(
 async def mark_no_show(
     request_id: UUID,
     body: ReasonBody,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),          # Phase 36: managers and shift leads (checked in _load_request)
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -116,7 +132,7 @@ async def mark_no_show(
     still running) so the manager can find cover straight away. The audit row's new_value is
     NO_SHOW_RELEASED so undoing it (adding time) gives the spot back.
     """
-    req, shift = await _load_request(db, request_id, current_user)
+    req, shift = await _load_request(db, request_id, current_user, floor=True)
     st = (req.status or "").lower()
     now = datetime.now(timezone.utc)
     if as_utc(shift.start_time) > now:
@@ -180,10 +196,10 @@ async def set_pay_rate(
 async def add_time_entry(
     request_id: UUID,
     body: TimeEntryInput,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),          # Phase 36: managers and shift leads
     db: AsyncSession = Depends(get_db)
 ):
-    req, shift = await _load_request(db, request_id, current_user)
+    req, shift = await _load_request(db, request_id, current_user, floor=True)
     reason = require_reason(body.reason)
     st = (req.status or "").lower()
     if st not in ASSIGNED_STATUSES + ("no_show",):
@@ -227,10 +243,10 @@ async def add_time_entry(
 async def edit_time_entry(
     entry_id: UUID,
     body: TimeEntryInput,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),          # Phase 36: managers and shift leads
     db: AsyncSession = Depends(get_db)
 ):
-    entry, req, shift = await _load_entry(db, entry_id, current_user)
+    entry, req, shift = await _load_entry(db, entry_id, current_user, floor=True)
     reason = require_reason(body.reason)
     cin, cout = validate_times(body.clock_in_time, body.clock_out_time)
     await _locked_check(db, shift, entry.clock_in_time, cin)              # Phase 35: old and new day
@@ -259,10 +275,10 @@ async def edit_time_entry(
 async def delete_time_entry(
     entry_id: UUID,
     body: ReasonBody,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),          # Phase 36: managers and shift leads
     db: AsyncSession = Depends(get_db)
 ):
-    entry, req, shift = await _load_entry(db, entry_id, current_user)
+    entry, req, shift = await _load_entry(db, entry_id, current_user, floor=True)
     reason = require_reason(body.reason)
     await _locked_check(db, shift, entry.clock_in_time)                   # Phase 35
     try:

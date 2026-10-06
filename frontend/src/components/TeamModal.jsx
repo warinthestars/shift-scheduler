@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Users, UserPlus, Link2, Copy, Download, RefreshCw, Mail, Phone, Upload, ShieldCheck, Trash2, Ban,
   RotateCcw, Pencil, Search, Check, X, KeyRound, Send, UserCog, ChevronDown, ChevronRight, AlertTriangle, Plus, BadgeCheck,
-  Building2, Timer,
+  Building2, Timer, ClipboardCheck, Crown,
 } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
@@ -243,6 +243,13 @@ function MemberRow({ m, venueId, timeZone, positionOptions, companies = [], open
                 {m.status === 'removed' ? 'Removed' : 'Blocked'}
               </span>
             )}
+            {/* Phase 36 */}
+            {m.is_lead && (
+              <span title="Shift lead: runs the floor (clock-ins, no-shows, open spots). Never sees pay."
+                className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[9px] font-bold inline-flex items-center gap-0.5">
+                <ClipboardCheck className="w-2.5 h-2.5" /> Shift lead
+              </span>
+            )}
             {(m.positions || []).slice(0, 3).map((p) => (
               <span key={p} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[9px] font-bold uppercase">{p}</span>
             ))}
@@ -290,6 +297,13 @@ function MemberRow({ m, venueId, timeZone, positionOptions, companies = [], open
             {!editing && (
               <button type="button" className={btnGhost} onClick={() => setEditing(true)}>
                 <Pencil className="w-3.5 h-3.5" /> Edit
+              </button>
+            )}
+            {/* Phase 36: shift lead */}
+            {m.status === 'active' && (
+              <button type="button" className={btnGhost} disabled={busy} onClick={() => patch({ is_lead: !m.is_lead })}
+                title="A shift lead sees who's on today, clocks people in and out, marks no-shows, fixes clock times, messages shifts and fills open spots from the team. They never see pay.">
+                <ClipboardCheck className={`w-3.5 h-3.5 ${m.is_lead ? 'text-amber-300' : ''}`} /> {m.is_lead ? 'Stop being shift lead' : 'Make shift lead'}
               </button>
             )}
             <span className="flex-1" />
@@ -1033,8 +1047,15 @@ function ManagersTab({ venueId, onMessage }) {
               <span className="font-semibold text-white">{`${m.first_name} ${m.last_name}`.trim() || m.email}</span>
               {m.is_you && <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">You</span>}
               {m.is_primary && <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30">Primary</span>}
+              {/* Phase 36: owners of the venue's organization manage it automatically */}
+              {m.via_org && (
+                <span title={`Owner of ${m.organization_name || 'the organization'}. Owners manage every venue in it and are changed on the Organization page.`}
+                  className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-teal-500/10 text-teal-300 border border-teal-500/30 inline-flex items-center gap-1">
+                  <Crown className="w-3 h-3" /> Owner{m.organization_name ? ` · ${m.organization_name}` : ''}
+                </span>
+              )}
               <span className="text-xs text-slate-400">{m.email}</span>
-              {!m.is_you && (
+              {!m.is_you && !m.via_org && (
                 <span className="ml-auto">
                   {confirmId === m.user_id ? (
                     <span className="inline-flex items-center gap-2 text-xs text-rose-200">

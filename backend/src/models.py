@@ -105,6 +105,33 @@ class User(Base):
     ratings_received = relationship("Rating", back_populates="worker", foreign_keys="Rating.worker_id")
     whitelist_entries = relationship("VenueWhitelist", back_populates="worker", cascade="all, delete-orphan", foreign_keys="VenueWhitelist.worker_id")
 
+class OrgRole(str, Enum):
+    """Phase 36: roles inside an organization. Stored as VARCHAR; checked here (no native PG ENUM)."""
+    owner = "owner"
+
+
+class Organization(Base):
+    """Phase 36: a group of venues with one or more owners. An owner manages every venue in it."""
+    __tablename__ = "organizations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class OrganizationMember(Base):
+    """Phase 36: who owns an organization. services/organizations.py keeps venue_managers in step."""
+    __tablename__ = "organization_members"
+
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    role = Column(String(20), nullable=False, default="owner")               # OrgRole
+    venue_alerts = Column(Boolean, nullable=False, default=False)            # also send this owner each venue's manager alerts
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
 class Venue(Base):
     __tablename__ = "venues"
 
@@ -141,6 +168,9 @@ class Venue(Base):
     tip_pool_split = Column(String(20), nullable=False, default="hours")           # Phase 35.2: hours | equal
     tip_pool_payroll = Column(Boolean, nullable=False, default=True)               # Phase 35.2
     tips_shown_to_workers = Column(Boolean, nullable=False, default=True)          # Phase 35.2
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)  # Phase 36
+    public_board = Column(Boolean, nullable=False, default=True)                   # Phase 36: listed on the public event board
+    city = Column(String(120), nullable=True)                                      # Phase 36: shown on the public board (never the address)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -182,6 +212,7 @@ class VenueManager(Base):
     venue_id = Column(UUID(as_uuid=True), ForeignKey("venues.id", ondelete="CASCADE"), primary_key=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     is_primary = Column(Boolean, nullable=False, default=False)
+    via_org = Column(Boolean, nullable=False, default=False)                 # Phase 36: row exists because they own the venue's organization
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -201,6 +232,7 @@ class VenueWhitelist(Base):
     source = Column(String(20), nullable=False, default="manager")           # Phase 29: manager | invite | import | admin
     time_tracking = Column(String(20), nullable=True)                        # Phase 35: payroll | shiftboard | None = venue setting
     works_through = Column(String(120), nullable=True)                       # Phase 35: staffing company / agency
+    is_lead = Column(Boolean, nullable=False, default=False)                 # Phase 36: shift lead at this venue (runs the floor, never sees pay)
     added_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

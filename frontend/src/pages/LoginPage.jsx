@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   Calendar,
@@ -11,7 +11,9 @@ import {
   LogIn,
   MailCheck,
   Info,
+  ArrowLeft,
 } from 'lucide-react';
+import { getPublicConfig } from '../utils/publicConfig';   // Phase 36
 import {
   getFirebaseStatus,
   PROVIDER_META,
@@ -109,6 +111,18 @@ export default function LoginPage() {
     let active = true;
     getFirebaseStatus().then((s) => {
       if (active) setFbStatus(s);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Phase 36: when the public board is on, offer a way back to it
+  const [boardOn, setBoardOn] = useState(false);
+  useEffect(() => {
+    let active = true;
+    getPublicConfig().then((cfg) => {
+      if (active) setBoardOn(!!cfg.public_board);
     });
     return () => {
       active = false;
@@ -292,6 +306,13 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 text-slate-100">
+      {boardOn && (
+        <div className="sm:mx-auto sm:w-full sm:max-w-md px-4 mb-4">
+          <Link to="/" className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-400 hover:text-white">
+            <ArrowLeft className="w-4 h-4" /> Open shifts
+          </Link>
+        </div>
+      )}
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <div className="inline-flex w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 items-center justify-center shadow-xl shadow-emerald-500/20 mb-4">
           <Calendar className="w-8 h-8 text-slate-950 font-black" />

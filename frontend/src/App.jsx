@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -13,11 +13,28 @@ import VenueProfile from './pages/VenueProfile';
 import JoinPage from './pages/JoinPage';
 import ProfilePage from './pages/ProfilePage';
 import EarningsPage from './pages/EarningsPage';   // Phase 33.1
+import PublicBoardPage from './pages/PublicBoardPage';       // Phase 36: home page when the public board is on
+import LeadPage from './pages/LeadPage';                     // Phase 36: shift leads
+import OrganizationPage from './pages/OrganizationPage';     // Phase 36: organization owners
+import { getPublicConfig } from './utils/publicConfig';      // Phase 36
 
 function HomeRedirect() {
   const { user, isAuthenticated, loading } = useAuth();
+  // Phase 36: null = not asked yet. Only asked when nobody is signed in.
+  const [publicConfig, setPublicConfig] = useState(null);
 
-  if (loading) {
+  useEffect(() => {
+    if (loading || isAuthenticated) return undefined;
+    let active = true;
+    getPublicConfig().then((cfg) => {
+      if (active) setPublicConfig(cfg);
+    });
+    return () => {
+      active = false;
+    };
+  }, [loading, isAuthenticated]);
+
+  if (loading || (!isAuthenticated && publicConfig === null)) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
         <div className="animate-pulse flex items-center space-x-2">
@@ -29,7 +46,8 @@ function HomeRedirect() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    // Phase 36: PUBLIC_EVENT_BOARD on -> the public board is the home page. Off -> the sign-in page, as before.
+    return publicConfig.public_board ? <PublicBoardPage config={publicConfig} /> : <Navigate to="/login" replace />;
   }
 
   const role = (user?.role || '').toLowerCase();
@@ -133,6 +151,29 @@ export default function App() {
                   <Navbar />
                   <ProfilePage />
                   <WorkerTabBar />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Phase 36: shift leads (worker accounts marked "shift lead" on a venue's team) */}
+            <Route
+              path="/lead"
+              element={
+                <ProtectedRoute allowedRoles={['worker']}>
+                  <Navbar />
+                  <LeadPage />
+                  <WorkerTabBar />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Phase 36: organization owners (and platform admins) */}
+            <Route
+              path="/org"
+              element={
+                <ProtectedRoute allowedRoles={['venue_manager', 'platform_admin']}>
+                  <Navbar />
+                  <OrganizationPage />
                 </ProtectedRoute>
               }
             />

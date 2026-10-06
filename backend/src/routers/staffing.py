@@ -1,7 +1,11 @@
 """
 Phase 29: Direct assign and offers.
 
-Manager (venue's manager or platform admin):
+Phase 36: the four manager endpoints also accept the venue's shift leads (services/access.py).
+A lead only sees and picks people who are on the team, and can't assign or offer to themselves.
+Nothing here returns pay.
+
+Manager (venue's manager or platform admin) or shift lead:
   GET    /api/shifts/{shift_id}/candidates?q=     team (+ search) with availability
   POST   /api/shifts/{shift_id}/assign            book one person now
   POST   /api/shifts/{shift_id}/offers            offer to 1-5 people; first to accept is booked
@@ -24,8 +28,8 @@ from src.models import User, Shift, ShiftOffer, ShiftRequest
 from src.schemas import (
     AssignCandidate, AssignRequest, AssignResult, OfferCreate, OfferCreateResult, WorkerOffer, OfferAcceptResult,
 )
-from src.auth import require_manager_or_admin, get_current_user, normalize_role
-from src.routers.venues import verify_venue_manager_access
+from src.auth import get_current_user, normalize_role
+from src.services.access import floor_access, team_ids, LEAD      # Phase 36
 from src.services import staffing
 from src.services import notify_events
 from src.services import activity
@@ -33,33 +37,48 @@ from src.services import activity
 router = APIRouter(tags=["Staffing"])
 
 
-async def _managed_shift(db: AsyncSession, shift_id: UUID, user: User) -> Shift:
+async def _floor_shift(db: AsyncSession, shift_id: UUID, user: User):
+    """Phase 36: the shift, and 'manager' or 'lead'. 403 for anyone else."""
     shift = await db.scalar(select(Shift).where(Shift.id == shift_id))
     if shift is None:
         raise HTTPException(status_code=404, detail="Shift not found.")
-    await verify_venue_manager_access(shift.venue_id, user, db)
-    return shift
+    return shift, await floor_access(db, user, shift.venue_id)
+
+
+async def _lead_may_pick(db: AsyncSession, user: User, shift: Shift, worker_ids) -> None:
+    """Phase 36: a shift lead fills spots from the team only, and never with themselves."""
+    ids = list(dict.fromkeys(worker_ids or []))
+    if user.id in ids:
+        raise HTTPException(status_code=403, detail="You can't put yourself on a shift here. Request it from Find shifts.")
+    on_team = await team_ids(db, shift.venue_id, ids)
+    if any(w not in on_team for w in ids):
+        raise HTTPException(status_code=403, detail="Shift leads can only pick people on the team. Ask a manager to add them first.")
 
 
 @router.get("/api/shifts/{shift_id}/candidates", response_model=List[AssignCandidate])
 async def get_candidates(
     shift_id: UUID,
     q: Optional[str] = Query(None, max_length=100),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),           # Phase 36: managers and shift leads
     db: AsyncSession = Depends(get_db),
 ):
-    shift = await _managed_shift(db, shift_id, current_user)
-    return await staffing.list_candidates(db, shift, q=q)
+    shift, access = await _floor_shift(db, shift_id, current_user)
+    people = await staffing.list_candidates(db, shift, q=q)
+    if access == LEAD:
+        people = [p for p in people if p.on_team and p.worker_id != current_user.id]
+    return people
 
 
 @router.post("/api/shifts/{shift_id}/assign", response_model=AssignResult)
 async def assign(
     shift_id: UUID,
     body: AssignRequest,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),           # Phase 36: managers and shift leads
     db: AsyncSession = Depends(get_db),
 ):
-    await _managed_shift(db, shift_id, current_user)
+    shift, access = await _floor_shift(db, shift_id, current_user)
+    if access == LEAD:
+        await _lead_may_pick(db, current_user, shift, [body.worker_id])
     request_id, message = await staffing.assign_worker(db, current_user, shift_id, body.worker_id, reason=body.reason)
     await notify_events.assigned(request_id)          # after commit; never raises
     # Phase 29.4: flag a rebook after a drop in the activity log
@@ -73,10 +92,12 @@ async def assign(
 async def offer(
     shift_id: UUID,
     body: OfferCreate,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),           # Phase 36: managers and shift leads
     db: AsyncSession = Depends(get_db),
 ):
-    await _managed_shift(db, shift_id, current_user)
+    shift, access = await _floor_shift(db, shift_id, current_user)
+    if access == LEAD:
+        await _lead_may_pick(db, current_user, shift, body.worker_ids)
     result, offer_ids = await staffing.create_offers(db, current_user, shift_id, body.worker_ids, body.message)
     if offer_ids:
         await notify_events.offers_sent(offer_ids)    # after commit; never raises
@@ -88,13 +109,13 @@ async def offer(
 @router.delete("/api/offers/{offer_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def withdraw_offer(
     offer_id: UUID,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),           # Phase 36: managers and shift leads
     db: AsyncSession = Depends(get_db),
 ):
     o = await db.scalar(select(ShiftOffer).where(ShiftOffer.id == offer_id))
     if o is None:
         raise HTTPException(status_code=404, detail="Offer not found.")
-    await verify_venue_manager_access(o.venue_id, current_user, db)
+    await floor_access(db, current_user, o.venue_id)
     await staffing.cancel_offer(db, o)
     return None
 

@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # Phase 35.3: true = create the starter demo venue, manager and workers at startup (as before).
     # false = a clean install: only the super admin (and ALWAYS_ADMIN_EMAILS) is set up.
     SEED_DEMO_ACCOUNTS: bool = os.getenv("SEED_DEMO_ACCOUNTS", "true").lower() in ("true", "1", "yes")
+    # Phase 36: true = the home page (/) is a public board of posted shifts for people who aren't signed in,
+    # with a Sign in / Sign up button. false = the home page is the sign-in page, as before.
+    PUBLIC_EVENT_BOARD: bool = os.getenv("PUBLIC_EVENT_BOARD", "false").lower() in ("true", "1", "yes")
     # Phase 28.1: emails that are always platform admins (comma-separated)
     ALWAYS_ADMIN_EMAILS: str = os.getenv("ALWAYS_ADMIN_EMAILS", "")
 

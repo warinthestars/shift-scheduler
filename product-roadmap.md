@@ -220,10 +220,11 @@ Each phase is sized for one AGY prompt. Where a phase is large it can be split i
 - **Worker type:** employee (W-2) or contractor (1099), on the export.
 - **Export presets:** generic, Gusto, ADP column layouts.
 
-### Phase 36: Self-serve venues & multi-location owners ⚠️
-- **Venue sign-up:** a manager creates a venue, and an admin approves or verifies it.
-- **Organizations:** one owner has several venues, a combined dashboard and shared team, and moves workers between venues.
-- **Roles:** owner, manager, shift lead (can clock people in and out and mark no-shows, no pay access).
+### Phase 36: Multi-location owners, shift leads & the public board ⚠️ (shipped in 0.36.0)
+- ✅ **Organizations:** one owner has several venues, a combined dashboard, and adds or moves workers between the venues' teams. Platform admins set organizations up.
+- ✅ **Roles:** owner, manager, shift lead (clocks people in and out, marks no-shows, fixes clock times, messages shifts and fills open spots; no pay access).
+- ✅ **Public event board:** with `PUBLIC_EVENT_BOARD=true` the home page lists posted shifts with minimal details; a worker account is needed to see the rest or to book.
+- ⏳ **Venue sign-up** (a manager creates a venue, and an admin approves or verifies it): not built yet, on purpose. Next when wanted.
 
 ### Later / nice to have
 - **Admin "needs attention" dashboard:**

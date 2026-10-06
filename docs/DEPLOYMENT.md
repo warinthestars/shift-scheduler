@@ -130,7 +130,8 @@ It prints the logins when it finishes:
 | Manager | `manager.copperline@demo.example.com` | Copperline Taproom |
 | Manager | `manager.juniper@demo.example.com` | Juniper Rooftop |
 | Manager | `manager.riverside@demo.example.com` | Riverside Convention Center |
-| Manager | `regional.manager@demo.example.com` | Harbor House + Copperline |
+| Owner | `regional.manager@demo.example.com` | Whitaker Hospitality Group: Harbor House + Copperline, and the Organization page |
+| Shift lead | `lead.marlowe@demo.example.com` (also `lead.harbor`, `lead.copperline`, `lead.juniper`, `lead.riverside`) | their own shifts, plus the Lead view for that venue |
 | Workers | any address ending `@demo.example.com` (Admin → People, or a venue's Team list) | their own shifts |
 | Your admins | their normal login | every demo venue, in the venue picker |
 

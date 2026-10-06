@@ -3,7 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import NotificationBell from './NotificationBell';
-import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound, Wallet } from 'lucide-react';
+import { Calendar, Shield, LogOut, Star, Building2, Briefcase, Menu, X, MapPin, UserRound, Wallet, ClipboardCheck, Network } from 'lucide-react';
 import { Avatar } from './WorkerProfilePanel';
 import { syncPush, disablePush } from '../utils/push';   // Phase 33
 
@@ -29,13 +29,32 @@ export default function Navbar() {
     setMobileOpen(false);
     await disablePush();          // Phase 33: this device stops getting this account's notifications
     logout();
-    navigate('/login');
+    navigate('/');                // Phase 36: the home page is the public board, or the sign-in page when the board is off
   };
 
   // Phase 33: if this device already allowed notifications, make sure the server still has it
   useEffect(() => {
     if (user?.id) syncPush();
   }, [user?.id]);
+
+  // Phase 36: is this worker a shift lead anywhere / does this manager own an organization?
+  // Asked once per sign-in; the page-level components ask again for the details.
+  const [isLead, setIsLead] = useState(false);
+  const [ownsOrg, setOwnsOrg] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setIsLead(false);
+    setOwnsOrg(false);
+    if (!user?.id) return undefined;
+    if (userRole === 'worker') {
+      api.get('/lead/venues').then((res) => active && setIsLead((res.data || []).length > 0)).catch(() => {});
+    } else if (userRole === 'venue_manager') {
+      api.get('/organizations').then((res) => active && setOwnsOrg((res.data || []).length > 0)).catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [user?.id, userRole]);
 
   // Close the mobile menu whenever the route changes
   useEffect(() => {
@@ -100,11 +119,23 @@ export default function Navbar() {
       icon: Wallet,
       active: 'bg-slate-800 text-emerald-400',
     },
+    isWorker && isLead && {                         // Phase 36: shift leads
+      to: '/lead',
+      label: 'Lead',
+      icon: ClipboardCheck,
+      active: 'bg-slate-800 text-amber-300',
+    },
     (isManagerRole || isPlatformAdmin) && {
       to: '/venue',
       label: isPlatformAdmin ? 'Manager view' : 'My venue',
       icon: Building2,
       active: 'bg-slate-800 text-teal-400',
+    },
+    isManagerRole && ownsOrg && {                   // Phase 36: organization owners (admins use Admin → Organizations)
+      to: '/org',
+      label: 'Organization',
+      icon: Network,
+      active: 'bg-slate-800 text-teal-300',
     },
     isPlatformAdmin && {
       to: '/admin',
@@ -204,7 +235,7 @@ export default function Navbar() {
                   <div className="text-sm font-semibold text-slate-200">{user.first_name} {user.last_name}</div>
                   <div className="text-xs text-slate-400 capitalize flex items-center justify-end space-x-1">
                     <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
-                    <span>{ROLE_TEXT[userRole] || 'Worker'}</span>
+                    <span>{ownsOrg ? 'Owner' : isLead ? 'Shift lead' : (ROLE_TEXT[userRole] || 'Worker')}</span>
                   </div>
                 </div>
                 <Avatar person={user} size="w-8 h-8 text-xs" />
@@ -244,7 +275,7 @@ export default function Navbar() {
               <div className="text-sm font-semibold text-white">{user.first_name} {user.last_name}</div>
               <div className="text-xs text-slate-400 capitalize flex items-center space-x-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${roleDot}`}></span>
-                <span>{ROLE_TEXT[userRole] || 'Worker'}</span>
+                <span>{ownsOrg ? 'Owner' : isLead ? 'Shift lead' : (ROLE_TEXT[userRole] || 'Worker')}</span>
               </div>
             </div>
             {userRole === 'worker' && (

@@ -51,6 +51,29 @@ CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_users_firebase_uid ON users(firebase_uid);
 
 -- ------------------------------------------------------------------------------
+-- 1b. Organizations (Phase 36): a group of venues with one or more owners.
+--     Created before venues because venues.organization_id points here.
+-- ------------------------------------------------------------------------------
+CREATE TABLE organizations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE organization_members (
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL DEFAULT 'owner',               -- owner (checked in the app: models.OrgRole)
+    venue_alerts BOOLEAN NOT NULL DEFAULT FALSE,             -- also send this owner each venue's manager alerts
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (organization_id, user_id)
+);
+
+CREATE INDEX ix_organization_members_user_id ON organization_members(user_id);
+
+-- ------------------------------------------------------------------------------
 -- 2. Venues Table
 -- ------------------------------------------------------------------------------
 CREATE TABLE venues (
@@ -87,11 +110,15 @@ CREATE TABLE venues (
     tip_pool_split VARCHAR(20) NOT NULL DEFAULT 'hours',     -- Phase 35.2: hours | equal (default for new tip pools)
     tip_pool_payroll BOOLEAN NOT NULL DEFAULT TRUE,          -- Phase 35.2: venue-payroll people share pools (scheduled hours)
     tips_shown_to_workers BOOLEAN NOT NULL DEFAULT TRUE,     -- Phase 35.2: workers see their tips in Hours & pay
+    organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,   -- Phase 36: the organization this venue belongs to
+    public_board BOOLEAN NOT NULL DEFAULT TRUE,              -- Phase 36: listed on the public event board (when PUBLIC_EVENT_BOARD is on)
+    city VARCHAR(120),                                       -- Phase 36: shown on the public board; never the street address
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_venues_coordinates ON venues(lat, lng);
+CREATE INDEX ix_venues_organization_id ON venues(organization_id);
 
 -- ------------------------------------------------------------------------------
 -- 3. Venue Managers Junction Table
@@ -100,6 +127,7 @@ CREATE TABLE venue_managers (
     venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+    via_org BOOLEAN NOT NULL DEFAULT FALSE,                  -- Phase 36: the row exists because they own the venue's organization
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (venue_id, user_id)
 );
@@ -120,6 +148,7 @@ CREATE TABLE venue_whitelists (
     source VARCHAR(20) NOT NULL DEFAULT 'manager',         -- Phase 29: manager | invite | import | admin
     time_tracking VARCHAR(20),                             -- Phase 35: payroll | shiftboard (NULL = the venue's setting)
     works_through VARCHAR(120),                            -- Phase 35: staffing company / agency they come through
+    is_lead BOOLEAN NOT NULL DEFAULT FALSE,                -- Phase 36: shift lead at this venue (runs the floor, never sees pay)
     added_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
