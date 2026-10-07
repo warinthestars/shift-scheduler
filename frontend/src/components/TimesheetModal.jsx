@@ -365,7 +365,7 @@ export default function TimesheetModal({ eventId, timeZone, onClose, onChanged }
                 {!formHere && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button type="button"
-                      onClick={() => setForm({ kind: 'add', requestId: p.request_id, cin: utcToZonedLocalInput(data.start_time, tz), cout: utcToZonedLocalInput(data.end_time, tz), reason: '' })}
+                      onClick={() => setForm({ kind: 'add', requestId: p.request_id, cin: utcToZonedLocalInput(p.shift_start || data.start_time, tz), cout: utcToZonedLocalInput(data.end_time, tz), reason: '' })}   // Phase 37.2: their own shift's start
                       className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-brand-300 text-xs inline-flex items-center gap-1">
                       <Plus className="w-3 h-3" /> Add time
                     </button>

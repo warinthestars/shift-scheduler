@@ -121,6 +121,7 @@ async def build_timesheet(db: AsyncSession, event: ShiftEvent, venue: Venue) -> 
             name=f"{worker.first_name or ''} {worker.last_name or ''}".strip() or worker.email,
             shift_id=s.id,
             role_type=s.role_type,
+            shift_start=s.start_time,                                              # Phase 37.2
             status=(req.status or "").lower(),
             status_reason=req.status_reason,
             pay_rate=rate,
@@ -154,7 +155,8 @@ async def build_timesheet(db: AsyncSession, event: ShiftEvent, venue: Venue) -> 
         end_time=event.end_time,
         timezone=venue.timezone or "America/New_York",
         cancelled=event.cancelled_at is not None,
-        started=as_utc(event.start_time) <= datetime.now(timezone.utc),
+        # Phase 37.2: a shift can start before the event does
+        started=min([as_utc(event.start_time)] + [as_utc(s.start_time) for s in shifts]) <= datetime.now(timezone.utc),
         people=people,
         total_hours=round(sum(p.total_hours for p in people), 2),
         total_pay=round(sum(p.est_pay for p in people), 2),

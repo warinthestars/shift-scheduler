@@ -205,7 +205,7 @@ export default function LeadTimesModal({ eventId, timeZone, onClose, onChanged }
                 ) : (
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button type="button"
-                      onClick={() => { setError(''); setForm({ kind: 'add', requestId: p.request_id, entryId: null, cin: utcToZonedLocalInput(data.start_time, tz), cout: '', reason: '' }); }}
+                      onClick={() => { setError(''); setForm({ kind: 'add', requestId: p.request_id, entryId: null, cin: utcToZonedLocalInput(p.shift_start || data.start_time, tz), cout: '', reason: '' }); }}   // Phase 37.2: their own shift's start
                       className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1">
                       <Plus className="w-3 h-3" /> Add a time
                     </button>

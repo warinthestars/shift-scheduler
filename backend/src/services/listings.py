@@ -172,7 +172,22 @@ async def build_listings(
         drops = [as_utc(mine[s.id].dropped_at) for s in ev_shifts if s.id in mine and mine[s.id].dropped_at is not None]
         dropped_here = max(drops) if drops else None
         vtz = tz_of(venue.timezone)
+        # Phase 37.2: is the viewer already booked in this event? (then nothing here "overlaps" for them)
+        booked_in_event = any(
+            s.id in mine and (mine[s.id].status or "").lower() in ASSIGNED_STATUSES for s in ev_shifts
+        )
         for s in ev_shifts:
+            # Phase 37.2: each shift has its own start (call) time; pay estimates and overlap checks use it
+            s_start = as_utc(s.start_time)
+            s_hours = round(max(0.0, (end - s_start).total_seconds() / 3600.0), 2)
+            s_conflict = None
+            if not booked_in_event:
+                for b_event_id, b_title, b_start, b_end, b_venue in bookings:
+                    if b_event_id == ev.id:
+                        continue
+                    if as_utc(b_start) < end and as_utc(b_end) > s_start:
+                        s_conflict = f"{b_venue} · {b_title}"
+                        break
             r = mine.get(s.id)
             my_status = (r.status or "").lower() if r is not None else None
             if r is not None and my_status in ACTIVE_STATUSES:
@@ -202,8 +217,8 @@ async def build_listings(
                 spots_left=left,
                 status="OPEN" if is_open else "FILLED",
                 booking="instant" if decision == RequestStatus.APPROVED and dropped_here is None and dmatch != "outside" else "approval",
-                est_pay_min=round(rate * hours, 2) if rate is not None else None,
-                est_pay_max=round((rate_max or rate) * hours, 2) if rate is not None else None,
+                est_pay_min=round(rate * s_hours, 2) if rate is not None else None,
+                est_pay_max=round((rate_max or rate) * s_hours, 2) if rate is not None else None,
                 my_status=my_status,
                 my_status_reason=r.status_reason if r is not None else None,
                 my_dropped_at=r.dropped_at if r is not None and my_status == "dropped" else None,   # Phase 29.4
@@ -214,32 +229,36 @@ async def build_listings(
                 department_match=dmatch,
                 waitlist_count=wl.count(s.id),                                        # Phase 34
                 my_waitlist=wl.mine(s.id),
+                start_time=s.start_time,                                              # Phase 37.2
+                own_start=s_start != start,
+                hours=s_hours,
+                started=s_start <= now,
+                conflict=s_conflict,
             ))
 
+        first = min([start] + [as_utc(s.start_time) for s in ev_shifts])           # Phase 37.2
         open_positions = [p for p in positions if p.status == "OPEN"]
-        requestable = [p for p in open_positions if not p.missing_certs]      # Phase 32
+        # Phase 32: no missing certificates. Phase 37.2: its own start hasn't passed and it doesn't overlap a booking.
+        requestable = [p for p in open_positions if not p.missing_certs and not p.started and not p.conflict]
         full = bool(positions) and not open_positions                          # Phase 34
         if event_id is None and not positions:
             continue   # list mode: nothing here at all
 
+        # Phase 37.2: the event "overlaps your shift" only when every shift in it does (their starts can differ).
         conflict = None
-        if my_request is None or my_request.status not in ASSIGNED_STATUSES:
-            for b_event_id, b_title, b_start, b_end, b_venue in bookings:
-                if b_event_id == ev.id:
-                    continue
-                if as_utc(b_start) < end and as_utc(b_end) > start:
-                    conflict = f"{b_venue} · {b_title}"
-                    break
+        if positions and all(p.conflict for p in positions):
+            conflict = positions[0].conflict
 
         priced = [p for p in positions if p.hourly_rate is not None]
-        started = start <= now
+        # Phase 37.2: "started" for the viewer = every shift in it has started (a shift can start after the event does)
+        started = all(p.started for p in positions) if positions else start <= now
         cancelled = ev.cancelled_at is not None
         # Phase 34: who can join a full position's waitlist (one place per event)
         in_line = any(p.my_waitlist is not None for p in positions)
         for p in positions:
             p.can_waitlist = (
-                p.status == "FILLED" and not cancelled and not started and not in_line
-                and my_request is None and conflict is None and dropped_here is None
+                p.status == "FILLED" and not cancelled and not started and not p.started and not in_line
+                and my_request is None and p.conflict is None and dropped_here is None
                 and not p.missing_certs and p.shift_id not in removed_here
                 and (ev.status or "published") == "published"
             )
@@ -298,8 +317,9 @@ async def build_listings(
                 my_request is not None and my_request.status in ASSIGNED_STATUSES
             ) else None,
             geofence_on=geofence_on(ev, venue),
-            availability=my_fit.availability(ev.start_time, ev.end_time, vtz),          # Phase 31
-            time_off=my_fit.off(ev.start_time, ev.end_time, vtz),
+            # Phase 31. Phase 37.2: judged from the first shift's start, which can be before the event's
+            availability=my_fit.availability(first, ev.end_time, vtz),
+            time_off=my_fit.off(first, ev.end_time, vtz),
             department_match=_event_match(open_positions or positions),                 # Phase 32.2
             series_id=ev.series_id,                                                     # Phase 32.3
             full=full,                                                                  # Phase 34

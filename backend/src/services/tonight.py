@@ -149,6 +149,7 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
 
     # ---------------------------------------------------------------- today
     today = {}
+    spans = {}       # Phase 37.2: event key -> [first shift start, last shift end]
     order = []
     alerts = []
     for s in shifts:
@@ -168,11 +169,16 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
                 clock_in_opens_at=clock_in_opens_at(s, venue),
             )
             order.append(k)
+            spans[k] = [start, end]
         te = today[k]
-        # an event's positions can differ in time; widen the event window
-        te.start_time = min(te.start_time, start)
-        te.end_time = max(te.end_time, end)
-        te.state = "ended" if now >= te.end_time else ("live" if now >= te.start_time else "upcoming")
+        # Phase 37.2: an event's shifts can start at different times. The card shows the EVENT's own time,
+        # and the event is "live" from its first shift's start to its last shift's end.
+        spans[k] = [min(spans[k][0], start), max(spans[k][1], end)]
+        if ev is not None:
+            te.start_time, te.end_time = as_utc(ev.start_time), as_utc(ev.end_time)
+        else:
+            te.start_time, te.end_time = spans[k]
+        te.state = "ended" if now >= spans[k][1] else ("live" if now >= spans[k][0] else "upcoming")
 
         people = []
         for req, u in reqs[s.id]:
@@ -212,6 +218,8 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
         te.positions.append(TonightPosition(
             shift_id=s.id, role_type=s.role_type or "Worker", capacity=cap, spots_filled=s.spots_filled or 0,
             open_spots=open_spots, pending_requests=pending[s.id], pending_offers=offers[s.id], people=people,
+            start_time=start, own_start=ev is not None and start != as_utc(ev.start_time),      # Phase 37.2
+            clock_in_opens_at=clock_in_opens_at(s, venue),
         ))
         if open_spots and start - now <= OPEN_SPOT_ALERT_WINDOW:
             extra = []
@@ -297,8 +305,11 @@ async def build_tonight(db: AsyncSession, venue: Venue) -> TonightResponse:
         if as_utc(s.end_time) > now:
             we.open_spots += max(0, cap - (s.spots_filled or 0))
         we.unread += sum(1 for r in booked if (r.status or "").lower() in ("approved", "confirmed") and info_seen(r, s) is False)
-        we.start_time = min(we.start_time, start)
-        we.end_time = max(we.end_time, as_utc(s.end_time))
+        if ev is not None:                                   # Phase 37.2: the event's own time, not its earliest shift's
+            we.start_time, we.end_time = as_utc(ev.start_time), as_utc(ev.end_time)
+        else:
+            we.start_time = min(we.start_time, start)
+            we.end_time = max(we.end_time, as_utc(s.end_time))
     # Phase 32.1: who on the team has time off each day ("Sam Taylor" all day, "Sam Taylor (5:00 PM – 11:00 PM)" partial)
     team = {u.id: u for u in await get_venue_team(db, venue.id)}
     if team:

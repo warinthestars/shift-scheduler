@@ -238,6 +238,10 @@ Each phase is sized for one AGY prompt. Where a phase is large it can be split i
 - ✅ **Worker view split in two:** **My shifts** (what's theirs) and the **ShiftBoard** (everything else that's up). The app opens whichever fits their week.
 - ⏳ **Later, if wanted:** a light theme; the logo in emails.
 
+### Phase 37.2: A call time for each shift (shipped in 0.37.2)
+- ✅ **Each shift in an event has its own start (call) time**, filled in from the event's start and changeable per position. It moves with the event, and copies and templates keep it.
+- ⏳ **Later, if wanted:** an end time per shift (today every shift ends when the event ends); a call time shown on the public home page.
+
 ### Later / nice to have
 - **Admin "needs attention" dashboard:**
   - unfilled shifts within 48h

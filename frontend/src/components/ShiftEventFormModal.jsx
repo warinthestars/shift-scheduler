@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock, MapPin, AlertTriangle, LayoutTemplate, Send, Save } from 'lucide-react';
+import { Plus, Trash2, Calendar, Info, EyeOff, FileText, Users, RotateCcw, Lock, MapPin, AlertTriangle, LayoutTemplate, Send, Save, Clock } from 'lucide-react';
 import api from '../api/client';
 import ModalShell from './ModalShell';
 import { payText } from './PayLabel';
@@ -62,6 +62,40 @@ function localMs(localValue) {
   return Date.UTC(y, m - 1, day, hh, mm);
 }
 
+// Phase 37.2: each shift's own start (call) time. A row keeps it as `offset`: minutes after (+) or before (-)
+// the event's start, so it moves with the event. 0 = starts when the event starts.
+const DAY_MIN = 1440;
+function clockMinutes(hhmm) {
+  const [h, m] = String(hhmm || '').split(':').map(Number);
+  return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
+}
+function clockText(totalMinutes) {
+  const m = ((totalMinutes % DAY_MIN) + DAY_MIN) % DAY_MIN;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+/**
+ * A typed clock time as minutes from the event's start (0.37.3).
+ * It is read as a time on the day the event starts, however long the event runs:
+ *   earlier than the event's start -> before it    (event 9:00 AM, typed 8:00 AM  ->  -60)
+ *   later than the event's start   -> after it     (event 9:00 AM, typed 2:00 PM  ->  +300)
+ * One exception keeps overnight events working: a time more than 12 hours before the start is
+ * the next day (event 10:00 PM, typed 1:00 AM -> +180). 12 hours early is the most a shift may be.
+ */
+function offsetFor(typed, eventClock) {
+  const t = clockMinutes(typed);
+  const b = clockMinutes(eventClock);
+  if (t === null || b === null) return 0;
+  const d = t - b;
+  return d < -720 ? d + DAY_MIN : d;
+}
+function gapText(minutes) {
+  const a = Math.abs(minutes);
+  const parts = [];
+  if (Math.floor(a / 60)) parts.push(`${Math.floor(a / 60)} hr`);
+  if (a % 60) parts.push(`${a % 60} min`);
+  return `${parts.join(' ')} ${minutes < 0 ? 'before' : 'after'} the event starts`;
+}
+
 let rowSeq = 0;
 function rowFromPosition(p, withIds = false) {
   rowSeq += 1;
@@ -82,6 +116,7 @@ function rowFromPosition(p, withIds = false) {
     booked: withIds ? p.assigned_count || 0 : 0,
     pending: withIds ? p.pending_count || 0 : 0,
     showNotes: !!(p.role_notes || p.staff_notes),
+    offset: Number(p.start_offset_minutes) || 0,       // Phase 37.2 (templates store it as start_offset_minutes)
   };
 }
 
@@ -100,6 +135,7 @@ function blankRow(pos) {
     booked: 0,
     pending: 0,
     showNotes: false,
+    offset: 0,                                           // Phase 37.2: a new shift starts when the event starts
   };
 }
 
@@ -249,7 +285,8 @@ export default function ShiftEventFormModal({
         const ev = res.data;
         setEventStatus(ev.status || 'published');    // Phase 29.3
         setTitle(ev.title || '');
-        setStart(utcToZonedLocalInput(ev.start_time, tz));
+        const evStartLocal = utcToZonedLocalInput(ev.start_time, tz);
+        setStart(evStartLocal);
         setEnd(utcToZonedLocalInput(ev.end_time, tz));
         setNotes(ev.notes || '');
         setStaffNotes(ev.staff_notes || '');
@@ -275,6 +312,8 @@ export default function ShiftEventFormModal({
             booked: p.assigned_count || 0,
             pending: p.pending_count || 0,
             showNotes: !!(p.role_notes || p.staff_notes),
+            // Phase 37.2: this shift's own start, as minutes from the event's start (venue clock)
+            offset: p.start_time ? Math.round((localMs(utcToZonedLocalInput(p.start_time, tz)) - localMs(evStartLocal)) / 60000) : 0,
           }))
         );
       })
@@ -326,6 +365,9 @@ export default function ShiftEventFormModal({
 
   const anyBooked = rows.some((r) => (r.booked || 0) + (r.pending || 0) > 0);
 
+  // Phase 37.2: the event's start as a clock time ('18:00'); every shift's call time is shown relative to it
+  const eventClock = isTemplate ? tplStart : (start && start.length >= 16 ? start.slice(11, 16) : '');
+
   // Phase 27: effective clock-in location check for this event
   const venueGeoOn = !!venue?.geofence_enabled;
   const geoOn = geofenceMode === 'on' || (geofenceMode === 'venue_default' && venueGeoOn);
@@ -358,6 +400,17 @@ export default function ShiftEventFormModal({
       if (!lo || lo <= 0) return setError(`${name}: pay must be more than $0.`);
       if (hi !== null && (Number.isNaN(hi) || hi < lo)) return setError(`${name}: the top of the pay range can't be lower than the bottom.`);
       if (cap < (r.booked || 0)) return setError(`${name}: ${r.booked} people are already booked, so it needs at least ${r.booked} spots.`);
+      // Phase 37.2: this shift's own start (call) time
+      const offset = Number(r.offset) || 0;
+      let rowStartIso = null;
+      if (offset < -720) return setError(`${name}: its call time can be at most 12 hours before the event starts.`);
+      if (isTemplate) {
+        const length = (((clockMinutes(tplEnd) - clockMinutes(tplStart)) % DAY_MIN) + DAY_MIN) % DAY_MIN;
+        if (offset >= length) return setError(`${name}: its call time must be before the event ends.`);
+      } else {
+        rowStartIso = offset ? zonedLocalToUtcIso(shiftLocal(start, offset * 60000), tz) : startIso;
+        if (new Date(rowStartIso) >= new Date(endIso)) return setError(`${name}: its call time must be before the event ends.`);
+      }
       payloadPositions.push({
         shift_id: r.shift_id || undefined,
         role_type: name,
@@ -370,6 +423,8 @@ export default function ShiftEventFormModal({
         role_notes: (r.role_notes || '').trim() || null,
         staff_notes: (r.staff_notes || '').trim() || null,
         approval_mode: r.approval_mode,
+        start_time: rowStartIso,           // Phase 37.2 (events)
+        offset,                            // Phase 37.2 (templates; taken out of the event's payload below)
       });
     }
 
@@ -396,7 +451,7 @@ export default function ShiftEventFormModal({
       ...locationFields,
       geofence_mode: geofenceMode,
       location_staff_notes: locStaffOn ? locStaffNotes.trim() || null : null,
-      positions: payloadPositions,
+      positions: payloadPositions.map(({ offset: _offset, ...p }) => p),
     };
 
     setSaving(true);
@@ -418,7 +473,7 @@ export default function ShiftEventFormModal({
           location_id: locationId,
           geofence_mode: body.geofence_mode,
           location_staff_notes: body.location_staff_notes,
-          positions: payloadPositions.map(({ shift_id: _omit, ...p }) => p),
+          positions: payloadPositions.map(({ shift_id: _omit, start_time: _start, offset, ...p }) => ({ ...p, start_offset_minutes: offset })),
         };
         const res = template
           ? await api.put(`/venues/${venue.id}/event-templates/${template.id}`, tplBody)
@@ -688,6 +743,9 @@ export default function ShiftEventFormModal({
                 <Plus className="w-3.5 h-3.5" /> Add a shift
               </button>
             </div>
+            <p className="text-[11px] text-slate-500 -mt-1">
+              Each shift's call time is filled in from the event's start. Change it for a position that starts earlier or later.
+            </p>
 
             {!positionsLoading && activePositions.length === 0 && (
               <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5">
@@ -701,6 +759,10 @@ export default function ShiftEventFormModal({
               const inList = !!pos;
               const showSelect = activePositions.length > 0 && !r.custom;
               const def = pos ? defaultsFor(pos) : null;
+              // Phase 37.2: this shift's call time, shown as a clock time next to the event's start
+              const offset = Number(r.offset) || 0;
+              const callClock = eventClock ? clockText(clockMinutes(eventClock) + offset) : '';
+              const callDay = eventClock ? Math.floor((clockMinutes(eventClock) + offset) / DAY_MIN) : 0;
               const differsFromDefault =
                 def &&
                 (Number(def.hourly_rate) !== Number(r.hourly_rate) ||
@@ -754,6 +816,18 @@ export default function ShiftEventFormModal({
                         </div>
                       )}
                     </div>
+                    <div className="w-32">
+                      <label className={labelCls} htmlFor={`call-${r.key}`}>Call time</label>
+                      <input
+                        id={`call-${r.key}`}
+                        type="time"
+                        value={callClock}
+                        disabled={!eventClock}
+                        title={eventClock ? 'When this shift starts. Filled in from the event; change it if this position starts earlier or later.' : "Set the event's start first"}
+                        onChange={(e) => updateRow(r.key, { offset: e.target.value ? offsetFor(e.target.value, eventClock) : 0 })}
+                        className={`${inputCls} ${offset ? 'border-brand-500/60' : ''} disabled:opacity-50`}
+                      />
+                    </div>
                     <div className="w-20">
                       <label className={labelCls}>Spots</label>
                       <input
@@ -774,6 +848,18 @@ export default function ShiftEventFormModal({
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
+
+                  {offset !== 0 && eventClock && (
+                    <p className="text-[11px] text-brand-300 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="w-3 h-3" /> Starts {gapText(offset)}
+                        {callDay < 0 ? ' (the day before)' : callDay > 0 ? ' (the next day)' : ''}.
+                      </span>
+                      <button type="button" onClick={() => updateRow(r.key, { offset: 0 })} className="inline-flex items-center gap-1 text-brand-400 hover:text-brand-300 underline underline-offset-2">
+                        <RotateCcw className="w-3 h-3" /> Same as the event
+                      </button>
+                    </p>
+                  )}
 
                   {pos && (
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">

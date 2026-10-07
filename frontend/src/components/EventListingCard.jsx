@@ -1,7 +1,7 @@
 import React from 'react';
 import { Clock, MapPin, Zap, ShieldCheck, Users, ChevronRight, AlertTriangle, Star, Lock, CalendarOff, Repeat } from 'lucide-react';
 import PayLabel from './PayLabel';
-import { fmtTimeRange } from '../utils/venueTime';
+import { fmtTime, fmtTimeRange } from '../utils/venueTime';
 import {
   hoursText, listingPayText, estPayText, statusLabel, PENDING_STATUSES, BOOKED_STATUSES, whereOf,
 } from '../utils/listingFormat';
@@ -139,6 +139,9 @@ export default function EventListingCard({ listing, onOpen }) {
                   <ShieldCheck className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Needs approval" />
                 )}
                 <span className="text-xs font-bold text-slate-100 truncate">{p.role_type}</span>
+                {p.own_start && p.start_time && (
+                  <span className="text-[10px] font-semibold text-brand-300 whitespace-nowrap" title="This shift's own start time">starts {fmtTime(p.start_time, tz)}</span>
+                )}
                 {!full && p.missing_certs?.length > 0 && (
                   <span className="text-[10px] text-slate-400 inline-flex items-center gap-0.5 whitespace-nowrap" title={`Needs ${p.missing_certs.join(', ')}`}>
                     <Lock className="w-3 h-3" /> needs a certificate
