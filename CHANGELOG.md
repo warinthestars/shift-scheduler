@@ -4,6 +4,36 @@ All notable changes to ShiftUp (called ShiftBoard until 0.37.0). The format foll
 
 The newest version goes at the top. Each entry uses a `## [x.y.z] - YYYY-MM-DD - Phase N: title` heading, followed by bullets under **Added / Changed / Fixed / Removed**.
 
+## [0.37.3] - 2026-10-07 - Phase 37.2.1: Call times read on the event's start day
+
+### Fixed
+- **A call time typed earlier than the event's start is now before it, whatever the event's length.** For an event starting at 9:00 AM, typing 8:00 AM gives "1 hr before the event starts". Before this fix, an event longer than a day turned it into 8:00 AM the next morning ("23 hr after").
+  - A typed time is read as a time on the day the event starts: earlier = before the start, later = after it.
+  - Overnight events still work: a time more than 12 hours before the start is taken as the next day (1:00 AM for a 10:00 PM event).
+- Only the event form changed (`frontend/src/components/ShiftEventFormModal.jsx`). Nothing saved is changed by this version: a shift that was saved on the wrong day stays there until its call time is set again.
+
+## [0.37.2] - 2026-10-07 - Phase 37.2: A call time for each shift
+
+### Added
+- **Each shift in an event has its own start (call) time.** Bar can be called for 5 PM while buffet servers arrive at 6 PM.
+  - In the event form every shift row has a **Call time** box, filled in from the event's start. Change it for a position that starts earlier or later; **Same as the event** puts it back.
+  - It can be up to 12 hours before the event starts and must be before the event ends. Every shift still ends when the event ends.
+  - **It moves with the event.** Change the event's time, copy it to other dates or save it as a template, and each shift keeps its gap from the event's start.
+- **Workers see their own start:** a "Starts 5:00 PM" tag on the ShiftBoard and in the event's details when it differs from the event's; My shifts, reminders, the clock-in window, lateness, the 24-hour drop rule and calendar sync already used each shift's own time.
+- **Managers see it** on the roster, on the Today board (with each shift's own "clock-in opens" time) and in venue calendars ("Bartender, starts 5:00 PM").
+- **Booked people are told** when their start changes ("Start time changed: 5:00 PM → 5:30 PM"), and when the event moves but their shift was kept where it was ("Start time is still 5:00 PM").
+
+### Changed
+- **Pay estimates** on a listing run from the shift's own start to the event's end.
+- **"Overlaps your shift" and "already started" are judged per shift.** A booking that ends at 5:30 PM blocks the 5 PM bar call but not the 6 PM server shift. An event is blocked only when every shift in it is.
+- An event counts as started (for cancelling it whole, publishing a draft and opening its time sheet) once its first shift has started.
+- The manager's event list and the Today board show the event's own time, not its earliest shift's.
+- "Add time" on a time sheet starts from that person's own shift start. "Offer" on a position follows that shift's start.
+- API: `positions[].start_time` on `POST /api/events` and `PUT /api/events/{id}` (optional; left out = a new shift starts with the event, an existing one keeps its gap). `start_time` is returned on every position; listings add `own_start`, `hours`, `started` and `conflict`. Template positions have `start_offset_minutes`.
+
+### Not changed
+- No database change: `shifts.start_time` was already there and was a copy of the event's start. Existing events keep working as they are.
+
 ## [0.37.1] - 2026-10-06 - Phase 37.1: Green buttons again
 
 ### Changed

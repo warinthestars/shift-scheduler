@@ -83,7 +83,7 @@ async def lead_event_times(
     people = [
         LeadTimesPerson(
             request_id=p.request_id, worker_id=p.worker_id, name=p.name, shift_id=p.shift_id,
-            role_type=p.role_type, status=p.status, status_reason=p.status_reason, entries=p.entries,
+            role_type=p.role_type, shift_start=p.shift_start, status=p.status, status_reason=p.status_reason, entries=p.entries,
             total_hours=p.total_hours, time_tracking=p.time_tracking, is_you=p.worker_id == current_user.id,
         )
         for p in sheet.people

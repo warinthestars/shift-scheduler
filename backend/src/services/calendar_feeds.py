@@ -682,10 +682,13 @@ async def venue_entries(
                 newest[req.shift_id] = _latest(newest.get(req.shift_id), req.updated_at)
     locations = await load_locations(db, [e.location_id for e in events])
 
-    def staffing(group: List[Shift]) -> Tuple[int, int, int, List[str]]:
+    def staffing(group: List[Shift], event_start: datetime, tz_name: Optional[str]) -> Tuple[int, int, int, List[str]]:
         by_role = {}
         for s in sorted(group, key=lambda x: (as_utc(x.start_time), (x.role_type or "").lower())):
             role = _clean(s.role_type) or "Shift"
+            # Phase 37.2: a shift that starts at a different time than its event says so ("Bartender, starts 5:00 PM")
+            if as_utc(s.start_time) != as_utc(event_start):
+                role = f"{role}, starts {_clock(as_utc(s.start_time).astimezone(_zone(tz_name)))}"
             r = by_role.setdefault(role, {"cap": 0, "names": []})
             r["cap"] += s.capacity if s.capacity is not None else 1
             r["names"] += booked.get(s.id, [])
@@ -697,7 +700,7 @@ async def venue_entries(
         return cap, filled, asks, lines
 
     def make(uid, title, start, end, venue, location, group, draft, link, notes, stamps) -> Entry:
-        cap, filled, asks, role_lines = staffing(group)
+        cap, filled, asks, role_lines = staffing(group, start, venue.timezone)
         count = f"({filled}/{cap} filled)" if cap else "(no positions yet)"
         summary = " ".join(x for x in (TAG_DRAFT if draft else "", f"{venue.name}:" if show_venue else "", title, count) if x)
         body = [venue.name, f"{when_text(start, end, venue.timezone)} (venue time)"]

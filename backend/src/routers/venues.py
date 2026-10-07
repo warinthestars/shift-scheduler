@@ -1165,8 +1165,9 @@ async def get_venue_events(
                 "event_id": s.event_id,
                 "status": (event_objs[s.event_id].status or "published") if s.event_id in event_objs else "published",   # Phase 29.3
                 "title": s.title or "Shift",
-                "start_time": s.start_time,
-                "end_time": s.end_time,
+                # Phase 37.2: the event's own time (its shifts can start at different times)
+                "start_time": event_objs[s.event_id].start_time if s.event_id in event_objs else s.start_time,
+                "end_time": event_objs[s.event_id].end_time if s.event_id in event_objs else s.end_time,
                 "description": event_notes.get(s.event_id) if s.event_id else None,
                 "staff_notes": event_objs[s.event_id].staff_notes if s.event_id in event_objs else None,
                 "location_name": (
@@ -1193,6 +1194,8 @@ async def get_venue_events(
             capacity=s.capacity if s.capacity is not None else 1,
             spots_filled=s.spots_filled if s.spots_filled is not None else 0,
             status=s.status or "OPEN",
+            start_time=s.start_time,                                                                        # Phase 37.2
+            own_start=s.event_id in event_objs and s.start_time != event_objs[s.event_id].start_time,
             assigned=assigned_by_shift[s.id],
             requested=requested_by_shift[s.id],
             offers=offers_by_shift[s.id],

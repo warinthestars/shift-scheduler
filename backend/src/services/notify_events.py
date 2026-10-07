@@ -210,9 +210,9 @@ async def _event_updated(db: AsyncSession, event_id, since: datetime) -> None:
             func.lower(ShiftRequest.status).in_(BOOKED),
         )
     )).scalars().all()
-    urgent = is_soon(event.start_time)
     for r in reqs:
         s = by_id[r.shift_id]
+        urgent = is_soon(s.start_time)          # Phase 37.2: their own shift's start, which can differ from the event's
         parts = []
         if event_changed and event.info_change:
             parts.append(event.info_change)
@@ -221,7 +221,7 @@ async def _event_updated(db: AsyncSession, event_id, since: datetime) -> None:
         await notify_in(
             db, [r.worker_id], "shift_updated",
             f"Updated: {s.role_type} · {event.title}",
-            f"{when_text(event.start_time, venue)}\n" + "\n".join(parts or ["Shift details changed."]) +
+            f"{when_text(s.start_time, venue)}\n" + "\n".join(parts or ["Shift details changed."]) +
             "\nOpen it and tap “Got it” so your manager knows you've seen it.",
             worker_shift_link(r.id), venue_id=event.venue_id, event_id=event.id, request_id=r.id, urgent=urgent,
         )

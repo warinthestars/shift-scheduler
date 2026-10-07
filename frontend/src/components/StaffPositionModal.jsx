@@ -24,7 +24,7 @@ export default function StaffPositionModal({ event, position, onClose, onDone })
   const [skipped, setSkipped] = useState([]);
 
   const spotsLeft = Math.max(0, (position.capacity || 1) - (position.assigned?.length || 0));
-  const started = new Date(event.start_time).getTime() <= Date.now();
+  const started = new Date(position.start_time || event.start_time).getTime() <= Date.now();   // Phase 37.2: this shift's own start
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);

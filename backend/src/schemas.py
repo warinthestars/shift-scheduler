@@ -546,6 +546,8 @@ class EventPosition(BaseModel):
     capacity: int
     spots_filled: int
     status: str
+    start_time: Optional[datetime] = None    # Phase 37.2: when this shift starts
+    own_start: bool = False                  # Phase 37.2: it starts at a different time than the event
     assigned: List[RosterPerson] = []
     requested: List[RosterPerson] = []
     offers: List[PositionOffer] = []         # Phase 29: pending + recently answered offers
@@ -778,6 +780,10 @@ class EventPositionInput(BaseModel):
     role_notes: Optional[str] = None
     staff_notes: Optional[str] = None        # Phase 26.2: only shown to people booked on this position
     approval_mode: str = "venue_default"     # venue_default | auto | manual
+    # Phase 37.2: when this shift starts (its call time). It may differ from the event's start.
+    # None = "don't change it": a new shift starts when the event starts, and an existing shift keeps
+    # its gap from the event's start (so it moves with the event).
+    start_time: Optional[datetime] = None
 
 
 class EventCreate(BaseModel):
@@ -824,6 +830,7 @@ class EventDetailPosition(BaseModel):
     staff_notes: Optional[str] = None        # Phase 26.2
     approval_mode: str = "venue_default"
     status: str
+    start_time: Optional[datetime] = None    # Phase 37.2: when this shift starts (the event's start unless it was changed)
 
 
 class EventDetail(BaseModel):
@@ -906,6 +913,7 @@ class TimesheetPerson(BaseModel):
     name: str
     shift_id: UUID
     role_type: str
+    shift_start: Optional[datetime] = None   # Phase 37.2: when THEIR shift starts (it can differ from the event's)
     status: str
     status_reason: Optional[str] = None
     pay_rate: float
@@ -986,6 +994,11 @@ class ListingPosition(BaseModel):
     waitlist_count: int = 0                    # Phase 34: people waiting for this position (live entries)
     my_waitlist: Optional[ListingWaitlist] = None   # Phase 34: the viewer's place in line
     can_waitlist: bool = False                 # Phase 34: full, and the viewer could join the waitlist
+    start_time: Optional[datetime] = None      # Phase 37.2: when THIS shift starts
+    own_start: bool = False                    # Phase 37.2: it starts at a different time than the event
+    hours: Optional[float] = None              # Phase 37.2: from its own start to the event's end (est_pay uses this)
+    started: bool = False                      # Phase 37.2: its own start has passed (can't be requested)
+    conflict: Optional[str] = None             # Phase 37.2: "Venue · Title" of the viewer's booking THIS shift overlaps
 
 
 class ListingMyRequest(BaseModel):
@@ -1740,6 +1753,7 @@ class EventTemplatePosition(BaseModel):
     role_notes: Optional[str] = None
     staff_notes: Optional[str] = None
     approval_mode: str = "venue_default"
+    start_offset_minutes: int = 0            # Phase 37.2: minutes after (+) or before (-) the event's start that this shift starts
 
 
 class EventTemplateInput(BaseModel):
@@ -1814,6 +1828,9 @@ class TonightPosition(BaseModel):
     pending_requests: int = 0
     pending_offers: int = 0
     people: List[TonightPerson] = []
+    start_time: Optional[datetime] = None        # Phase 37.2: when this shift starts
+    own_start: bool = False                      # Phase 37.2: it starts at a different time than the event
+    clock_in_opens_at: Optional[datetime] = None # Phase 37.2: for THIS shift (the event's one is its first shift's)
 
 
 class TonightEvent(BaseModel):
@@ -2448,6 +2465,7 @@ class LeadTimesPerson(BaseModel):
     name: str
     shift_id: UUID
     role_type: str
+    shift_start: Optional[datetime] = None   # Phase 37.2: when THEIR shift starts
     status: str
     status_reason: Optional[str] = None
     entries: List[TimeEntryRow] = []

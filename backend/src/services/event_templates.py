@@ -16,12 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import EventTemplate, ShiftEvent, Shift, Venue, User, VenueLocation
 from src.schemas import EventTemplateInput, EventTemplatePosition, EventTemplateResponse, EventPositionInput
-from src.services.shift_events import _validate_position, _clean
+from src.services.shift_events import _validate_position, _clean, start_gap
 from src.services.locations import (
     validate_geofence_mode, check_geofence_possible, usage_counts, to_response as location_response,
 )
 
 MAX_TEMPLATES_PER_VENUE = 50
+MAX_EARLY_MINUTES = 12 * 60          # Phase 37.2: same limit as shift_events.EARLY_START_LIMIT
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -40,12 +41,24 @@ def _norm_time(value: str, label: str) -> str:
     return v
 
 
-def _position_dicts(positions: List[EventTemplatePosition]) -> List[dict]:
+def _minutes(hhmm: str) -> int:
+    return int(hhmm[:2]) * 60 + int(hhmm[3:])
+
+
+def _position_dicts(positions: List[EventTemplatePosition], length_minutes: int) -> List[dict]:
+    """length_minutes = how long the template's event runs (Phase 37.2: a shift must start before it ends)."""
     if not positions:
         raise HTTPException(status_code=400, detail="Add at least one shift.")
     out = []
     for p in positions:
-        _validate_position(EventPositionInput(**p.model_dump()))
+        _validate_position(EventPositionInput(**p.model_dump(exclude={"start_offset_minutes"})))
+        # Phase 37.2: this shift's own start, as minutes from the event's start (negative = earlier)
+        offset = int(p.start_offset_minutes or 0)
+        role = p.role_type.strip()
+        if offset >= length_minutes:
+            raise HTTPException(status_code=400, detail=f"{role}: its start time must be before the event ends.")
+        if offset < -MAX_EARLY_MINUTES:
+            raise HTTPException(status_code=400, detail=f"{role}: its start time can be at most 12 hours before the event starts.")
         rate = round(float(p.hourly_rate), 2)
         rate_max = round(float(p.hourly_rate_max), 2) if p.hourly_rate_max is not None and p.hourly_rate_max > p.hourly_rate else None
         out.append({
@@ -59,6 +72,7 @@ def _position_dicts(positions: List[EventTemplatePosition]) -> List[dict]:
             "role_notes": _clean(p.role_notes),
             "staff_notes": _clean(p.staff_notes),
             "approval_mode": (p.approval_mode or "venue_default").lower(),
+            "start_offset_minutes": offset,
         })
     return out
 
@@ -104,7 +118,7 @@ def _apply(tpl: EventTemplate, data: EventTemplateInput, name: str, location: Op
     tpl.location_id = location.id if location is not None else None
     tpl.geofence_mode = mode
     tpl.location_staff_notes = _clean(data.location_staff_notes)
-    tpl.positions = _position_dicts(data.positions)
+    tpl.positions = _position_dicts(data.positions, (_minutes(end) - _minutes(start)) % (24 * 60))
 
 
 async def to_responses(db: AsyncSession, templates: List[EventTemplate]) -> List[EventTemplateResponse]:
@@ -213,6 +227,7 @@ async def template_from_event(db: AsyncSession, event: ShiftEvent, venue: Venue,
                 hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
                 hide_rate=bool(s.hide_rate), tips_eligible=bool(s.tips_eligible), tip_pool=bool(s.tip_pool),
                 role_notes=s.description, staff_notes=s.staff_notes, approval_mode=s.approval_mode or "venue_default",
+                start_offset_minutes=int(start_gap(s.start_time, event.start_time, venue.timezone).total_seconds() // 60),   # Phase 37.2
             )
             for s in shifts
         ],

@@ -9,7 +9,7 @@ import ModalShell from './ModalShell';
 import { DeptChip } from '../utils/departments';
 import PayLabel from './PayLabel';
 import TipBadge from './TipBadge';
-import { fmtLongDate, fmtTimeRange, fmtDate } from '../utils/venueTime';
+import { fmtLongDate, fmtTimeRange, fmtDate, fmtTime } from '../utils/venueTime';
 import {
   hoursText, estPayText, mapsUrl, downloadIcs, statusLabel, PENDING_STATUSES, whereOf,
 } from '../utils/listingFormat';
@@ -22,7 +22,8 @@ function pickDefault(listing, prev) {
   if (!listing) return null;
   if (prev && listing.positions.some((p) => p.shift_id === prev)) return prev;
   if (listing.my_request) return listing.my_request.shift_id;
-  const open = listing.positions.filter((p) => p.status === 'OPEN' && !(p.missing_certs || []).length);   // Phase 32
+  // Phase 32: no missing certificates. Phase 37.2: its own start hasn't passed and it doesn't overlap a booking.
+  const open = listing.positions.filter((p) => p.status === 'OPEN' && !(p.missing_certs || []).length && !p.conflict && !p.started);
   return open.length === 1 ? open[0].shift_id : null;
 }
 
@@ -41,7 +42,8 @@ function seriesRow(ev, roleType) {
   } else if (!pos) reason = `No ${roleType} spot on this date`;
   else if (pos.status !== 'OPEN') reason = 'Full';
   else if ((pos.missing_certs || []).length) reason = `You need: ${pos.missing_certs.join(', ')}`;
-  else if (ev.conflict) reason = `Overlaps your shift (${ev.conflict})`;
+  else if (ev.conflict || pos.conflict) reason = `Overlaps your shift (${ev.conflict || pos.conflict})`;   // Phase 37.2: judged per shift
+  else if (pos.started) reason = 'Already started';
   else if (ev.dropped_here) reason = 'You dropped a shift here. Open that date to ask back.';
   else if (!ev.can_request) reason = "Can't be requested";
   const pickable = !reason;
@@ -244,7 +246,8 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
     downloadIcs({
       uid: `${listing.event_id}@shiftboard`,
       title: `${listing.title} — ${mine?.role_type || 'Shift'} (${listing.venue?.name || ''})`,
-      start: listing.start_time,
+      // Phase 37.2: their own shift's start, which can differ from the event's
+      start: (listing.positions.find((p) => p.shift_id === mine?.shift_id) || {}).start_time || listing.start_time,
       end: listing.end_time,
       location: whereOf(listing).address,
       description: [
@@ -502,7 +505,10 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
               const isMine = mine && mine.shift_id === p.shift_id;
               const locked = LOCKED_POSITION_STATUSES.includes(ps);
               const needsCerts = !isMine && !full && (p.missing_certs || []).length > 0;          // Phase 32
-              const disabled = !isMine && (full || locked || needsCerts || isBooked || listing.cancelled || listing.started);
+              // Phase 37.2: a shift has its own start, so "already started" and "overlaps your shift" are per shift
+              const overlaps = !isMine && !full && !!p.conflict && !listing.conflict;
+              const tooLate = !isMine && !full && !!p.started && !listing.started;
+              const disabled = !isMine && (full || locked || needsCerts || overlaps || tooLate || isBooked || listing.cancelled || listing.started);
               const active = selectedId === p.shift_id;
               const est = estPayText(p);
               const wl = p.my_waitlist;                                                           // Phase 34
@@ -526,6 +532,12 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${active ? 'border-brand-400 bg-brand-400' : 'border-slate-600'}`} />
                         <span className="text-sm font-bold text-white">{p.role_type}</span>
+                        {p.own_start && p.start_time && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-brand-500/10 text-brand-200 border border-brand-500/30"
+                            title="This shift starts at a different time than the event">
+                            <Clock className="w-2.5 h-2.5" /> Starts {fmtTime(p.start_time, tz)}
+                          </span>
+                        )}
                         <TipBadge shift={p} />
                         {p.booking === 'instant' ? (
                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
@@ -550,6 +562,8 @@ export default function EventListingModal({ eventId, initial = null, onClose, on
                           {needsCerts ? `You need: ${p.missing_certs.join(', ')}` : `Requires: ${p.required_certs.join(', ')}`}
                         </p>
                       )}
+                      {overlaps && <p className="text-[11px] mt-1.5 font-semibold text-amber-300">Overlaps your shift ({p.conflict})</p>}
+                      {tooLate && <p className="text-[11px] mt-1.5 font-semibold text-slate-400">This shift has already started</p>}
                       {ps && (
                         <p className={`text-[11px] mt-1.5 font-semibold ${isMine ? 'text-amber-300' : 'text-slate-400'}`}>
                           {ps === 'dropped' ? 'You dropped this' : `You: ${statusLabel(ps)}`}

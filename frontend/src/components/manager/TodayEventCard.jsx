@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Phone, MessageSquare, LogIn, UserX, UserPlus, ClipboardList, Users, MapPin, MapPinOff, EyeOff, ChevronDown, ChevronUp, Radio,
+  Phone, MessageSquare, LogIn, UserX, UserPlus, ClipboardList, Users, MapPin, MapPinOff, EyeOff, ChevronDown, ChevronUp, Radio, Clock,
 } from 'lucide-react';
 import ReliabilityBadge from '../ReliabilityBadge';
 import { fmtTime, fmtTimeRange } from '../../utils/venueTime';
@@ -114,6 +114,11 @@ export default function TodayEventCard({
             <section key={pos.shift_id} className="px-4 py-3">
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 <h4 className="text-xs font-bold uppercase tracking-wide text-slate-300">{pos.role_type}</h4>
+                {pos.own_start && pos.start_time && (
+                  <span className="text-[11px] font-semibold text-brand-300 inline-flex items-center gap-1" title="This shift's own start (call) time">
+                    <Clock className="w-3 h-3" /> Starts {fmtTime(pos.start_time, timeZone)}
+                  </span>
+                )}
                 <span className="text-[11px] text-slate-500">
                   {pos.people.filter((p) => p.clock_state !== 'no_show').length}/{pos.capacity} booked
                 </span>
@@ -130,7 +135,7 @@ export default function TodayEventCard({
                 {pos.people.map((p) => {
                   const st = STATE[p.clock_state] || STATE.upcoming;
                   let sub = '';
-                  if (p.clock_state === 'upcoming') sub = `Clock-in opens ${fmtTime(event.clock_in_opens_at, timeZone)}`;
+                  if (p.clock_state === 'upcoming') sub = `Clock-in opens ${fmtTime(pos.clock_in_opens_at || event.clock_in_opens_at, timeZone)}`;   // Phase 37.2: this shift's own
                   if (p.clock_state === 'due') sub = 'Clock-in is open';
                   if (p.clock_state === 'late') sub = `${minutesText(p.late_minutes)} past the start`;
                   if (p.clock_state === 'in') sub = `Since ${fmtTime(p.clock_in_time, timeZone)}${p.late_minutes ? ` · ${p.late_minutes} min late` : ''}`;

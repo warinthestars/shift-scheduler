@@ -38,6 +38,7 @@ These are the words in the app. Use them in code comments, docs and every new sc
 | **Cover request** | A booked worker asks their team (or the public board) to take their shift. | | `CoverRequest` / `cover_requests` |
 | **Waitlist** | A line for a full shift. | | `WaitlistEntry` / `waitlist_entries` |
 | **Offer** | A manager offers a shift to one or more people; the first to accept gets it. | | `ShiftOffer` / `shift_offers` |
+| **Call time** | When one shift's people start. It is the event's start unless the manager changed it for that shift. Every shift ends when the event ends. | *Bartender call 5 PM for a 6 PM event* | `shifts.start_time` (sent as `positions[].start_time`) |
 | **ShiftBoard** | The board of open shifts. For a worker: every shift that's up and isn't theirs yet. For a visitor: the public home page. | | `BOARD_NAME` in `frontend/src/brand.js`; the worker tab's id is still `find` |
 
 Many API fields still say `positions` for an event's shifts (for example `EventListing.positions[]`). That's a historical name: the UI says **shifts**.
@@ -168,6 +169,12 @@ Everyone can see their ShiftUp calendar in **Google Calendar, Apple Calendar, Ou
   * one-tap actions (assign, offer, message)
 * **Posting events**:
   * one event with several shifts, each with its own pay (hourly or a range), tips / tip pool, notes, staff-only notes and approval setting
+  * each shift has its own **call time** (since 0.37.2):
+    * the box is filled in from the event's start; change it for a position that starts earlier or later (bar at 5 PM, servers at 6 PM)
+    * it can be up to 12 hours before the event starts, and must be before the event ends
+    * it moves with the event: change the event's time or copy it to another date, and each shift keeps its gap; templates keep it too
+    * workers see their own start everywhere (ShiftBoard, My shifts, reminders, clock-in, calendar); booked people are told when it changes
+    * pay estimates run from the shift's own start to the event's end
   * drafts, templates, copies to other dates (series)
   * saved locations (off-site events)
 * **Requests to review** and **Hand-offs to approve**. Cover takes that need approval appear in the hand-off list with a **Cover** tag.

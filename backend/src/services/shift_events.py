@@ -2,7 +2,7 @@
 Phase 25.2: Create / update / describe events (one posting with 1+ positions).
 Each position is a row in `shifts` linked by shifts.event_id.
 """
-from datetime import timezone, datetime, date
+from datetime import timezone, datetime, date, timedelta
 from typing import Dict, Tuple, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -27,6 +27,9 @@ ACTIVE_REQUEST_STATUSES = PENDING_STATUSES + ("approved", "confirmed")
 # only looks at OPEN positions (listings, directory, offers, new-shift alerts) skips them.
 DRAFT = "draft"
 PUBLISHED = "published"
+# Phase 37.2: each shift of an event has its own start (call) time. It must be before the event ends
+# and at most this long before the event starts. Every shift still ends when the event ends.
+EARLY_START_LIMIT = timedelta(hours=12)
 
 
 def _as_utc(dt):
@@ -55,6 +58,63 @@ def _fmt_range(start, end, tz_name: str) -> str:
     return f"{s_local.strftime('%a %b %-d, %-I:%M %p')} – {e_local.strftime('%-I:%M %p')}"
 
 
+def _zone(tz_name: Optional[str]) -> ZoneInfo:
+    try:
+        return ZoneInfo(tz_name or "America/New_York")
+    except Exception:
+        return ZoneInfo("America/New_York")
+
+
+def _fmt_start(at, tz_name: Optional[str], with_day: bool = False) -> str:
+    """Phase 37.2: '5:00 PM' (or 'Fri Oct 3, 5:00 PM') in the venue's timezone."""
+    local = _as_utc(at).astimezone(_zone(tz_name))
+    return local.strftime("%a %b %-d, %-I:%M %p" if with_day else "%-I:%M %p")
+
+
+def start_gap(shift_start, event_start, tz_name: Optional[str]) -> timedelta:
+    """
+    Phase 37.2: how long after (+) or before (-) its event's start a shift starts, measured on the
+    venue's clock. A bar call at 5:00 PM for a 6:00 PM event is -1 hour, also on the night the clocks change.
+    """
+    tz = _zone(tz_name)
+    a = _as_utc(shift_start).astimezone(tz).replace(tzinfo=None)
+    b = _as_utc(event_start).astimezone(tz).replace(tzinfo=None)
+    return a - b
+
+
+def start_from_gap(event_start, gap: Optional[timedelta], tz_name: Optional[str]) -> datetime:
+    """Phase 37.2: the event's start moved by `gap` on the venue's clock, as a UTC datetime."""
+    if not gap:
+        return _as_utc(event_start)
+    tz = _zone(tz_name)
+    local = _as_utc(event_start).astimezone(tz).replace(tzinfo=None) + gap
+    return local.replace(tzinfo=tz).astimezone(timezone.utc)
+
+
+def role_start(p: EventPositionInput, event_start, event_end, tz_name: Optional[str], gap: Optional[timedelta] = None) -> datetime:
+    """
+    Phase 37.2: when this shift starts, checked against its event.
+      p.start_time given -> that time
+      otherwise          -> the event's start moved by `gap` (an existing shift's gap; None for a new shift)
+    """
+    ev_start, ev_end = _as_utc(event_start), _as_utc(event_end)
+    start = _as_utc(p.start_time) if p.start_time is not None else start_from_gap(ev_start, gap, tz_name)
+    name = (p.role_type or "").strip() or "This shift"
+    if start >= ev_end:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name}: its start time ({_fmt_start(start, tz_name)}) must be before the event ends ({_fmt_start(ev_end, tz_name)}).",
+        )
+    if start < ev_start - EARLY_START_LIMIT:
+        raise HTTPException(status_code=400, detail=f"{name}: its start time can be at most 12 hours before the event starts.")
+    return start
+
+
+def first_start(event: ShiftEvent, shifts) -> datetime:
+    """Phase 37.2: the earliest moment anyone is due at this event (a shift can start before the event does)."""
+    return min([_as_utc(event.start_time)] + [_as_utc(s.start_time) for s in shifts])
+
+
 def _validate_basics(data) -> None:
     if not (data.title or "").strip():
         raise HTTPException(status_code=400, detail="Give the event a name.")
@@ -79,10 +139,15 @@ def _validate_position(p: EventPositionInput) -> None:
         raise HTTPException(status_code=400, detail=f"{name}: choose how requests are approved.")
 
 
-def _apply_position(shift: Shift, p: EventPositionInput, event: ShiftEvent, track_changes: bool = False) -> None:
+def _apply_position(
+    shift: Shift, p: EventPositionInput, event: ShiftEvent, track_changes: bool = False,
+    start: Optional[datetime] = None, start_note: Optional[str] = None,
+) -> None:
     """
     Copy form values onto a Shift row. track_changes=True (existing positions being edited)
     records what changed in shift.info_change / info_updated_at so booked workers are told (Phase 26.2).
+    Phase 37.2: `start` is this shift's own start (already checked by role_start; None = the event's start).
+    `start_note` is the line to tell booked workers when their start time changed.
     """
     mode = (p.approval_mode or "venue_default").lower()
     new_role = p.role_type.strip()[:100]
@@ -100,9 +165,11 @@ def _apply_position(shift: Shift, p: EventPositionInput, event: ShiftEvent, trac
             changes.append("Position notes updated")
         if _clean(shift.staff_notes) != new_staff:
             changes.append("Staff-only notes updated")
+        if start_note:
+            changes.insert(0, start_note)
 
     shift.title = event.title
-    shift.start_time = event.start_time
+    shift.start_time = start if start is not None else event.start_time     # Phase 37.2
     shift.end_time = event.end_time
     shift.role_type = new_role
     shift.capacity = int(p.capacity)
@@ -149,6 +216,8 @@ async def create_event_with_positions(
         _validate_position(p)
     mode = validate_geofence_mode(data.geofence_mode)
     is_draft = not getattr(data, "publish", True)          # Phase 29.3
+    # Phase 37.2: each shift's own start time (checked before anything is saved)
+    starts = [role_start(p, data.start_time, data.end_time, venue.timezone) for p in data.positions]
     try:
         # Phase 27: where is it? (a typed-in new location is saved to the venue's list here)
         location = await resolve_event_location(
@@ -172,10 +241,10 @@ async def create_event_with_positions(
         )
         db.add(event)
         await db.flush()
-        for p in data.positions:
+        for p, start in zip(data.positions, starts):
             s = Shift(venue_id=venue.id, event_id=event.id, created_by_user_id=user.id, spots_filled=0,
                       status="DRAFT" if is_draft else "OPEN")
-            _apply_position(s, p, event)
+            _apply_position(s, p, event, start=start)
             db.add(s)
         await db.commit()
         await db.refresh(event)
@@ -231,6 +300,9 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
         tz_name = venue.timezone or "America/New_York"
         new_title = data.title.strip()[:255]
         new_start, new_end = _as_utc(data.start_time), _as_utc(data.end_time)
+        # Phase 37.2: each existing shift's gap from the event's start, before the event moves
+        old_gaps = {s.id: start_gap(s.start_time, event.start_time, tz_name) for s in existing}
+        event_start_moved = _as_utc(event.start_time) != new_start
         changes = []
         if _as_utc(event.start_time) != new_start or _as_utc(event.end_time) != new_end:
             changes.append(
@@ -282,7 +354,21 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
         for p in data.positions:
             if p.shift_id:
                 s = by_id[p.shift_id]
-                _apply_position(s, p, event, track_changes=not is_draft)
+                # Phase 37.2: its own start. Not sent = it keeps its gap, so it moves with the event.
+                old_gap = old_gaps[s.id]
+                old_shift_start = _as_utc(s.start_time)
+                start = role_start(p, new_start, new_end, tz_name, old_gap)
+                start_note = None
+                # A shift that simply follows the event is covered by the event's own "Time changed" line.
+                if start != old_shift_start and (old_gap or start != new_start):
+                    with_day = (old_shift_start.astimezone(_zone(tz_name)).date() != start.astimezone(_zone(tz_name)).date())
+                    start_note = (f"Start time changed: {_fmt_start(old_shift_start, tz_name, with_day)} → "
+                                  f"{_fmt_start(start, tz_name, with_day)}")
+                elif event_start_moved and start == old_shift_start and start != new_start:
+                    # The event moved but this shift was kept where it was: say so, or its people would
+                    # read the event's "Time changed" line as their own new start.
+                    start_note = f"Start time is still {_fmt_start(start, tz_name)}"
+                _apply_position(s, p, event, track_changes=not is_draft, start=start, start_note=start_note)
                 if (s.status or "OPEN").upper() in ("OPEN", "FILLED"):
                     s.status = "FILLED" if (s.spots_filled or 0) >= s.capacity else "OPEN"
             else:
@@ -291,7 +377,7 @@ async def update_event(db: AsyncSession, event: ShiftEvent, data: EventUpdate) -
                     created_by_user_id=event.created_by_user_id, spots_filled=0,
                     status="DRAFT" if is_draft else "OPEN",
                 )
-                _apply_position(s, p, event)
+                _apply_position(s, p, event, start=role_start(p, new_start, new_end, tz_name))
                 db.add(s)
 
         await db.commit()
@@ -346,6 +432,7 @@ async def build_event_detail(db: AsyncSession, event: ShiftEvent) -> EventDetail
                 staff_notes=s.staff_notes,
                 approval_mode=s.approval_mode or "venue_default",
                 status=s.status or "OPEN",
+                start_time=s.start_time,                       # Phase 37.2
             )
             for s in shifts
         ],
@@ -392,11 +479,6 @@ async def cancel_shifts(db: AsyncSession, event: ShiftEvent, shift_ids: Optional
         raise HTTPException(status_code=400, detail="Please give a reason. Staff will see it.")
     if event.cancelled_at is not None:
         raise HTTPException(status_code=400, detail="This event is already cancelled.")
-    if _as_utc(event.start_time) <= now:
-        raise HTTPException(
-            status_code=400,
-            detail="This event has already started. Remove individual people or fix the time sheet instead."
-        )
 
     q = select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
     if shift_ids is not None:
@@ -404,6 +486,12 @@ async def cancel_shifts(db: AsyncSession, event: ShiftEvent, shift_ids: Optional
     shifts = (await db.execute(q)).scalars().all()
     if shift_ids is not None and not shifts:
         raise HTTPException(status_code=404, detail="Shift not found or already cancelled.")
+    # Phase 37.2: "started" = the first of these shifts has started (a shift can start before the event does)
+    if first_start(event, shifts) <= now:
+        raise HTTPException(
+            status_code=400,
+            detail="This event has already started. Remove individual people or fix the time sheet instead."
+        )
 
     try:
         ids = [s.id for s in shifts]
@@ -466,26 +554,31 @@ async def duplicate_event(
     if not shifts:
         raise HTTPException(status_code=400, detail="Nothing to copy: every shift is cancelled.")
 
-    positions = [
-        EventPositionInput(
-            role_type=s.role_type,
-            capacity=s.capacity,
-            hourly_rate=float(s.hourly_rate),
-            hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
-            hide_rate=bool(s.hide_rate),
-            tips_eligible=bool(s.tips_eligible),
-            tip_pool=bool(s.tip_pool),
-            role_notes=s.description,
-            staff_notes=s.staff_notes,
-            approval_mode=s.approval_mode or "venue_default",
-        )
-        for s in shifts
-    ]
+    def positions_for(new_start) -> List[EventPositionInput]:
+        # Phase 37.2: each copy keeps every shift's own start time (the same gap from the event's start)
+        return [
+            EventPositionInput(
+                role_type=s.role_type,
+                capacity=s.capacity,
+                hourly_rate=float(s.hourly_rate),
+                hourly_rate_max=float(s.hourly_rate_max) if s.hourly_rate_max is not None else None,
+                hide_rate=bool(s.hide_rate),
+                tips_eligible=bool(s.tips_eligible),
+                tip_pool=bool(s.tip_pool),
+                role_notes=s.description,
+                staff_notes=s.staff_notes,
+                approval_mode=s.approval_mode or "venue_default",
+                start_time=start_from_gap(new_start, start_gap(s.start_time, event.start_time, venue.timezone), venue.timezone),
+            )
+            for s in shifts
+        ]
 
+    # Phase 37.2: a shift can start before its event, so the first shift's start is what must be in the future
+    earliest_gap = min([timedelta(0)] + [start_gap(s.start_time, event.start_time, venue.timezone) for s in shifts])
     starts = []
     for d in unique_dates:
         new_start = datetime.combine(d, start_local.time().replace(tzinfo=None), tzinfo=tz).astimezone(timezone.utc)
-        if new_start <= now:
+        if start_from_gap(new_start, earliest_gap, venue.timezone) <= now:
             raise HTTPException(status_code=400, detail=f"{d.isoformat()} is in the past.")
         starts.append(new_start)
 
@@ -501,7 +594,7 @@ async def duplicate_event(
             location_id=event.location_id,
             geofence_mode=event.geofence_mode or "venue_default",
             location_staff_notes=event.location_staff_notes,
-            positions=positions,
+            positions=positions_for(new_start),
             publish=not as_draft,
         ), allow_archived_location=True)
         created.append(ev)
@@ -529,11 +622,11 @@ async def publish_event(db: AsyncSession, event: ShiftEvent) -> None:
     if (event.status or PUBLISHED) != DRAFT:
         raise HTTPException(status_code=400, detail="This event is already published.")
     now = datetime.now(timezone.utc)
-    if _as_utc(event.start_time) <= now:
-        raise HTTPException(status_code=400, detail="This draft's start time has passed. Change the date, then publish.")
     shifts = (await db.execute(
         select(Shift).where(Shift.event_id == event.id, func.upper(Shift.status) != "CANCELLED")
     )).scalars().all()
+    if first_start(event, shifts) <= now:                  # Phase 37.2: a shift can start before the event does
+        raise HTTPException(status_code=400, detail="This draft's start time has passed. Change the date, then publish.")
     if not shifts:
         raise HTTPException(status_code=400, detail="Add at least one shift before publishing.")
     try:
